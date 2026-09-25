@@ -1,14 +1,14 @@
 <?php
 
-// Il file usa i namespace con le graffe perche' lo stub di `getWpmlLanguages()` deve
+// Il file usa i namespace con le graffe perche' lo stub di `onpage_get_wpml_languages()` deve
 // stare nel namespace globale: `MultiLang` lo chiama senza qualificarlo, e senza
 // WordPress intorno non esiste nessuno che lo definisca.
 
 namespace {
 
-    if (!function_exists('getWpmlLanguages')) {
+    if (!function_exists('onpage_get_wpml_languages')) {
         /** Le lingue che un sito WPML it/en esporrebbe. */
-        function getWpmlLanguages(): array
+        function onpage_get_wpml_languages(): array
         {
             return ['it', 'en'];
         }

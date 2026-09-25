@@ -29,7 +29,7 @@ class Attribute
             !\function_exists('wc_update_attribute') ||
             !\function_exists('wc_delete_attribute')
         ) {
-            throw httpException(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
         }
     }
 
@@ -60,7 +60,7 @@ class Attribute
         }
 
         if (!is_scalar($params[$key])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be a string", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be a string", 400, 'invalid_param');
         }
 
         return trim((string) $params[$key]);
@@ -213,7 +213,7 @@ class Attribute
                 continue;
             }
 
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Duplicate local_key '$local_key' already used by attribute $existing_attribute_id",
                 409,
                 'duplicate_local_key'
@@ -270,7 +270,7 @@ class Attribute
     {
         $attribute = self::findAttributeById($attribute_id);
         if (!$attribute) {
-            throw httpException(self::ERROR_PREFIX . " :: Attribute $attribute_id not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Attribute $attribute_id not found", 404, 'not_found');
         }
 
         return $attribute;
@@ -336,11 +336,11 @@ class Attribute
         } elseif (($slug = Input::stringOrNull($value)) !== null) {
             $attribute = self::findAttributeBySlug($slug);
         } else {
-            throw httpException($error_prefix . " :: Attribute ID or slug is required", 400, 'invalid_param');
+            throw onpage_http_exception($error_prefix . " :: Attribute ID or slug is required", 400, 'invalid_param');
         }
 
         if (!$attribute) {
-            throw httpException($error_prefix . " :: Attribute '$value' not found", 404, 'not_found');
+            throw onpage_http_exception($error_prefix . " :: Attribute '$value' not found", 404, 'not_found');
         }
 
         $attribute_slug = (string) ($attribute->attribute_name ?? '');
@@ -351,7 +351,7 @@ class Attribute
         self::ensureAttributeTaxonomyRegistered($attribute, $taxonomy);
 
         if ($taxonomy === '' || !\taxonomy_exists($taxonomy)) {
-            throw httpException($error_prefix . " :: Attribute taxonomy '$taxonomy' not found", 404, 'not_found');
+            throw onpage_http_exception($error_prefix . " :: Attribute taxonomy '$taxonomy' not found", 404, 'not_found');
         }
 
         return $taxonomy;
@@ -389,7 +389,7 @@ class Attribute
             $status = 500;
         }
 
-        throw httpException(
+        throw onpage_http_exception(
             self::ERROR_PREFIX . " :: Element $element_index :: " . $error->get_error_message(),
             $status,
             $error->get_error_code() ?: 'request_failed'
@@ -404,12 +404,12 @@ class Attribute
         $name = self::optionalStringParam($params, 'name', $element_index);
         if ($name !== null) {
             if ($name === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
             }
 
             $args['name'] = $name;
         } elseif ($creating) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
         }
 
         $slug = self::optionalStringParam($params, 'slug', $element_index);
@@ -528,29 +528,24 @@ class Attribute
      * Deletes unused terms under `$taxonomy` and busts its term-query cache
      * before the attribute itself goes away.
      *
-     * `wc_delete_attribute()` only removes the attribute's row from
-     * `wp_woocommerce_attribute_taxonomies` and unregisters the taxonomy for
-     * this request — it deliberately leaves existing `wp_terms` /
-     * `wp_term_taxonomy` rows in place, so products still assigned one of
-     * these terms keep that association. Recreating the same attribute later
-     * (same slug, e.g. after a connector re-sync) re-registers that taxonomy
+     * Note on `wc_delete_attribute()`: when the attribute's taxonomy is
+     * registered (WooCommerce registers every `pa_*` taxonomy on `init`, so
+     * it normally is), it deletes the attribute's row from
+     * `wp_woocommerce_attribute_taxonomies` *and* calls `wp_delete_term()` on
+     * every term of the taxonomy, used or not. Only when the taxonomy is not
+     * registered are the `wp_terms` / `wp_term_taxonomy` rows left behind; a
+     * later attribute with the same slug then re-registers that taxonomy
      * name, and a term save keyed by the same `local_key` finds and reuses
-     * the existing row instead of inserting a fresh one.
+     * the leftover row.
      *
-     * For a term nobody uses (`count === 0`, e.g. one left behind by an
-     * environment reset that never attached it to a product) that reuse is
-     * pure downside: it just resurrects a stale row, and
-     * `unregister_taxonomy()`/`register_taxonomy()` don't reliably bust
-     * `get_terms()`'s term-query cache for it, so the reused term can stay
-     * invisible to plain taxonomy listings indefinitely even though it's
-     * still resolvable directly by id or local_key. Those are deleted
-     * outright. Terms still attached to a product are left in place — their
-     * historical association is exactly what WooCommerce's own
-     * "don't delete terms on attribute delete" behavior protects — and are
-     * instead recovered via cache invalidation: `clean_taxonomy_cache()`
-     * bumps the shared `terms` cache group's `last_changed` key, which
-     * `get_terms()` mixes into its query cache key, so any cached listing
-     * for this taxonomy is invalidated immediately rather than left stale.
+     * This pre-pass removes the terms nothing is attached to, and never a
+     * term still related to an object. "Unused" is checked on the term
+     * relationships themselves (`get_objects_in_term()`, any post status):
+     * the cached `count` only includes published objects, so it is 0 for a
+     * term used only by drafts, private products or variations.
+     * `clean_taxonomy_cache()` then bumps the shared `terms` cache group's
+     * `last_changed` key, which `get_terms()` mixes into its query cache key,
+     * so any cached listing for this taxonomy is invalidated immediately.
      *
      * Doing this while the taxonomy is still registered (i.e. before
      * `wc_delete_attribute()`) is required — `get_terms()` on an
@@ -563,7 +558,8 @@ class Attribute
         $terms = \get_terms(['taxonomy' => $taxonomy, 'hide_empty' => false]);
         if (!\is_wp_error($terms)) {
             foreach ($terms as $term) {
-                if ((int) $term->count === 0) {
+                $object_ids = \get_objects_in_term((int) $term->term_id, $taxonomy);
+                if (is_array($object_ids) && $object_ids === []) {
                     \wp_delete_term((int) $term->term_id, $taxonomy);
                 }
             }
@@ -581,14 +577,14 @@ class Attribute
 
         $local_key = Input::localKey($value);
         if ($local_key === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
         }
 
         $attribute_ids = self::findExistingAttributeIdsByLocalKey($local_key);
         if ($attribute_ids === []) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute with local_key '$value' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute with local_key '$value' not found", 404, 'not_found');
         }
 
         foreach ($attribute_ids as $resolved_attribute_id) {
@@ -603,7 +599,7 @@ class Attribute
             }
 
             if (!\wc_delete_attribute($resolved_attribute_id)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Unable to delete attribute with local_key '$value'", 500, 'delete_failed');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Unable to delete attribute with local_key '$value'", 500, 'delete_failed');
             }
 
             self::deleteLocalKeyForAttribute($resolved_attribute_id);

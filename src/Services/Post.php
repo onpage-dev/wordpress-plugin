@@ -29,22 +29,27 @@ class Post
     {
         $post = \get_post($id);
         if (!$post instanceof \WP_Post) {
-            throw httpException("Post $id not found", 404, 'no_post');
+            throw onpage_http_exception("Post $id not found", 404, 'no_post');
         }
 
         return $post;
     }
 
-    /** Returns the post object by local_key or throws when missing. */
+    /**
+     * Returns the post object by local_key or throws when missing.
+     *
+     * Trashed posts are left out (a trashed post is not live content), matching the default
+     * `GET /posts?local_key=` listing; upserts and deletes by local_key still see the bin.
+     */
     public static function requirePostByLocalKey(string $local_key, ?string $post_type = null): \WP_Post
     {
-        $posts = PostRepository::findPostsByLocalKey($local_key, $post_type ?? 'any');
+        $posts = PostRepository::findPostsByLocalKey($local_key, $post_type ?? 'any', false);
         if ($posts === []) {
-            throw httpException("Post with local_key '$local_key' not found", 404, 'no_post');
+            throw onpage_http_exception("Post with local_key '$local_key' not found", 404, 'no_post');
         }
 
         if ($post_type === null && count(array_unique(array_map(fn(\WP_Post $post): string => $post->post_type, $posts))) > 1) {
-            throw httpException(self::ERROR_PREFIX . " :: local_key '$local_key' matches multiple post types; pass a type to resolve safely", 409, 'ambiguous_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key '$local_key' matches multiple post types; pass a type to resolve safely", 409, 'ambiguous_local_key');
         }
 
         return self::requirePostById((int) self::pickCanonicalPost($posts)->ID);
@@ -59,11 +64,11 @@ class Post
      */
     private static function pickCanonicalPost(array $posts): \WP_Post
     {
-        if (count($posts) === 1 || !isWpmlActive()) {
+        if (count($posts) === 1 || !onpage_is_wpml_active()) {
             return $posts[0];
         }
 
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         if ($default_language !== null) {
             foreach ($posts as $post) {
                 $language_details = self::getPostLanguageDetails((int) $post->ID, $post->post_type);
@@ -103,7 +108,7 @@ class Post
     /** Builds a WPML `language_code => post_id` map for a post (empty when WPML is inactive). */
     public static function buildTranslationsMap(int $post_id, string $wp_post_type): array
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return [];
         }
 
@@ -172,7 +177,7 @@ class Post
         $updated_after = Input::requestString($request, 'updated_after');
         if ($updated_after !== null) {
             if (\strtotime($updated_after) === false) {
-                throw httpException(self::ERROR_PREFIX . " :: Parameter 'updated_after' must be a valid date/time", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Parameter 'updated_after' must be a valid date/time", 400, 'invalid_param');
             }
 
             $args['date_query'] = [[
@@ -185,7 +190,7 @@ class Post
         // WP_Query (rather than get_posts()) so `found_posts` is available for X-WP-Total/X-WP-TotalPages.
         $query = new \WP_Query($args);
         if (!is_array($query->posts)) {
-            throw httpException(self::ERROR_PREFIX . ' :: Failed to list posts', 500, 'request_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: Failed to list posts', 500, 'request_failed');
         }
 
         return [
@@ -220,7 +225,7 @@ class Post
     {
         $post_type = trim($post_type);
         if ($post_type === '' || !\post_type_exists($post_type)) {
-            throw httpException(self::ERROR_PREFIX . " :: Post type '$post_type' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Post type '$post_type' not found", 404, 'not_found');
         }
 
         return $post_type;
@@ -246,7 +251,7 @@ class Post
     /** Prefers the default-language member of a translation group as the representative post. */
     private static function pickGroupRepresentative(int $post_id, array $translations): int
     {
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         if ($default_language !== null && !empty($translations[$default_language])) {
             return (int) $translations[$default_language];
         }
@@ -309,12 +314,14 @@ class Post
     /** Deletes one post by numeric ID, optionally tolerating missing posts. */
     public static function deleteById(int $id, bool $ignore_missing): void
     {
-        if (!$ignore_missing && !\get_post($id)) {
-            throw httpException("Post :: ID $id not found", 404, 'not_found');
+        if (!\get_post($id)) {
+            if ($ignore_missing) return;
+
+            throw onpage_http_exception("Post :: ID $id not found", 404, 'not_found');
         }
 
         if (!\wp_delete_post($id, true)) {
-            throw httpException("Post :: Failed to delete post $id", 500, 'request_failed');
+            throw onpage_http_exception("Post :: Failed to delete post $id", 500, 'request_failed');
         }
     }
 
@@ -322,18 +329,18 @@ class Post
     public static function deleteByLocalKey(string $local_key, bool $ignore_missing, ?string $post_type = null): void
     {
         if (Input::localKey($local_key) === null) {
-            throw httpException(self::ERROR_PREFIX . " :: local_key is required", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key is required", 400, 'invalid_param');
         }
 
         $posts = PostRepository::findPostsByLocalKey($local_key, $post_type ?? 'any');
         if ($posts === []) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . " :: local_key '$local_key' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key '$local_key' not found", 404, 'not_found');
         }
 
         if ($post_type === null && count(array_unique(array_map(fn(\WP_Post $post): string => $post->post_type, $posts))) > 1) {
-            throw httpException(self::ERROR_PREFIX . " :: local_key '$local_key' matches multiple post types; pass a type to delete safely", 409, 'ambiguous_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key '$local_key' matches multiple post types; pass a type to delete safely", 409, 'ambiguous_local_key');
         }
 
         foreach ($posts as $post) {
@@ -341,22 +348,30 @@ class Post
         }
     }
 
-    /** Deletes all posts for a post type slug, optionally tolerating missing post types. */
+    /**
+     * Deletes all posts for a post type slug, optionally tolerating missing post types.
+     *
+     * The post type must be registered even with `ignore`: an unknown slug is then skipped
+     * with nothing deleted, instead of wiping every post whose `post_type` column happens to
+     * hold that string.
+     */
     public static function deleteByPostType(string $post_type, bool $ignore_missing): void
     {
         $wp_post_type = $post_type;
-        if (!$ignore_missing && !\post_type_exists($wp_post_type)) {
-            throw httpException("Post :: PostType '$post_type' not found", 404, 'not_found');
+        if (!\post_type_exists($wp_post_type)) {
+            if ($ignore_missing) return;
+
+            throw onpage_http_exception("Post :: PostType '$post_type' not found", 404, 'not_found');
         }
 
         $post_ids = self::listIdsByPostType($wp_post_type);
         if ($post_ids === null) {
-            throw httpException("Failed to load posts for PostType '$post_type'", 500, 'request_failed');
+            throw onpage_http_exception("Failed to load posts for PostType '$post_type'", 500, 'request_failed');
         }
 
         foreach ($post_ids as $post_id) {
             if (!\wp_delete_post($post_id, true)) {
-                throw httpException("Post :: Failed to delete post $post_id for PostType '$post_type'", 500, 'request_failed');
+                throw onpage_http_exception("Post :: Failed to delete post $post_id for PostType '$post_type'", 500, 'request_failed');
             }
         }
     }
@@ -370,7 +385,8 @@ class Post
         // The post must exist; local_key is then written on it and its WPML translations.
         $requested_id = Input::positiveInt($params['id'] ?? null);
         if ($requested_id !== null) {
-            self::requirePostById($requested_id);
+            $requested_post = self::requirePostById($requested_id);
+            self::requireLocalKeyNotHeldElsewhere($requested_post, $params, $element_index);
             $params['id'] = $requested_id;
 
             return self::updateFromParams($params, $element_index);
@@ -384,6 +400,65 @@ class Post
         }
 
         return self::insertFromParams($params, $element_index);
+    }
+
+    /**
+     * Rejects an id-first update whose local_key already belongs to another post group.
+     *
+     * Writing the key on the requested post would leave two On Page® elements sharing one
+     * local_key, and every later upsert by that key would pick one of them at random. Posts
+     * of the same WPML translation group legitimately share the key and are not a conflict.
+     * Mirrors the `duplicate_local_key` check of Term::validateParsedPayload().
+     */
+    private static function requireLocalKeyNotHeldElsewhere(\WP_Post $post, array $params, int $element_index): void
+    {
+        $local_key = Input::localKey($params['local_key'] ?? null);
+        if ($local_key === null) return;
+
+        foreach (PostRepository::findPostsByLocalKey($local_key, $post->post_type) as $holder) {
+            if (self::areSameTranslationGroup((int) $holder->ID, (int) $post->ID, $post->post_type)) continue;
+
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists for PostType '{$post->post_type}'", 409, 'duplicate_local_key');
+        }
+    }
+
+    /**
+     * Restores the trashed posts of the group being updated.
+     *
+     * Local_key lookups include the bin, so re-importing a trashed element updates it instead
+     * of creating a second post with the same key. The post (and its translations holding the
+     * key) is taken out of the trash first, so the payload `status` applies to a live post;
+     * without a `status` it keeps the status WordPress restores it to (`draft`).
+     *
+     * @return bool Whether any post was restored (the caller must then reload its copy).
+     */
+    private static function restoreTrashedPosts(\WP_Post $post, string $local_key): bool
+    {
+        $restored = false;
+
+        $posts = [$post];
+        foreach (PostRepository::findPostsByLocalKey($local_key, $post->post_type) as $holder) {
+            // Only the post's own translations: a trashed post of another group that holds
+            // the same key stays in the bin.
+            if ((int) $holder->ID !== (int) $post->ID
+                && self::areSameTranslationGroup((int) $holder->ID, (int) $post->ID, $post->post_type)) {
+                $posts[] = $holder;
+            }
+        }
+
+        foreach ($posts as $candidate) {
+            // Read live: restoring one member may already have restored the others (WPML
+            // syncs trash state across a group), and wp_untrash_post() fails on a live post.
+            if (\get_post_status((int) $candidate->ID) !== 'trash') continue;
+
+            if (!\wp_untrash_post((int) $candidate->ID)) {
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to restore trashed Post {$candidate->ID}", 500, 'request_failed');
+            }
+
+            $restored = true;
+        }
+
+        return $restored;
     }
 
     /** Checks every post payload field that supports language maps. */
@@ -415,7 +490,7 @@ class Post
         return self::update(
             id: $params['id'],
             local_key: $local_key,
-            type: isset($params['type']) ? $params['type'] : null,
+            type: isset($params['type']) ? Input::requireStringParam($params, 'type', self::ERROR_PREFIX, $element_index) : null,
             title: isset($params['title']) ? $params['title'] : null,
             content: isset($params['content']) ? $params['content'] : null,
             description: isset($params['description']) ? $params['description'] : null,
@@ -430,10 +505,19 @@ class Post
     /** Adapts one raw controller payload item to the insert service signature. */
     private static function insertFromParams(array $params, int $element_index): int
     {
+        $local_key = Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index);
+        $type = Input::requireStringParam($params, 'type', self::ERROR_PREFIX, $element_index);
+
+        // A new post needs a title: a non-empty string, or a language map of them.
+        $title = $params['title'] ?? null;
+        if (!(is_array($title) && $title !== []) && Input::stringOrNull($title) === null) {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'title' is required", 400, 'invalid_param');
+        }
+
         return self::insert(
-            local_key: Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index),
-            type: $params['type'],
-            title: $params['title'],
+            local_key: $local_key,
+            type: $type,
+            title: is_array($title) ? $title : (string) $title,
             content: $params['content'] ?? '',
             description: $params['description'] ?? '',
             acf_fields: $params['acf_fields'] ?? [],
@@ -455,7 +539,7 @@ class Post
         array $files
     ): array
     {
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
 
         $translated_languages = array_values(array_unique(array_merge(
             MultiLang::getLanguages($title),
@@ -499,11 +583,11 @@ class Post
         MultiLang::requireWpmlForDetectedLanguages($translated_languages, self::ERROR_PREFIX, $element_index);
 
         if (PostRepository::findDuplicateByTitle($wp_post_type, $original_post_title, $local_key)) {
-            throw httpException(self::ERROR_PREFIX . " :: Title '$original_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$original_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
         }
 
         if (PostRepository::findByLocalKey($local_key, $wp_post_type)) {
-            throw httpException(self::ERROR_PREFIX . " :: local_key '{$local_key}' already exists for PostType '{$post_type}'", 409, 'duplicate_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key '{$local_key}' already exists for PostType '{$post_type}'", 409, 'duplicate_local_key');
         }
     }
 
@@ -647,7 +731,7 @@ class Post
         foreach ($files as $field_key => $value) {
             if (is_int($value)) {
                 if (!RemoteMedia::isAttachmentId($value)) {
-                    throw httpException(self::ERROR_PREFIX . " :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'input_invalid');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'input_invalid');
                 }
 
                 RemoteMedia::linkMediaToPost($value, $post_id);
@@ -657,7 +741,7 @@ class Post
 
             $url = RemoteMedia::sanitizeUrl($value);
             if ($url === null) {
-                throw httpException(self::ERROR_PREFIX . " :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'input_invalid');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'input_invalid');
             }
 
             $import_result = RemoteMedia::urlToPost($url, $post_id, $field_key);
@@ -698,14 +782,15 @@ class Post
     /** Normalized update context derived from the incoming payload and current post state. */
     private static function buildUpdateContext(
         \WP_Post $post,
-        ?string $type,
         string|array|null $title,
         string|array|null $content,
         string|array|null $description,
         ?array $acf_fields,
         ?array $files
     ): array {
-        $post_type = $type ?? $post->post_type;
+        // The post type never changes on update (see update()), so every lookup, WPML ones
+        // included, runs against the post's real type.
+        $post_type = $post->post_type;
         $wp_post_type = $post_type;
 
         $has_title = $title !== null;
@@ -808,12 +893,12 @@ class Post
         ?string $default_language,
         array $translated_languages,
         ?string $fallback_language,
-        string $local_key
-    ): array
+        string $local_key,
+        array &$created_post_ids
+    ): void
     {
         $language_details = self::requireInsertedPostLanguageDetails($source_post_id, $wp_post_type);
 
-        $created_translation_ids = [];
         foreach ($translated_languages as $language_code) {
             if ($language_code === $default_language) continue;
 
@@ -824,7 +909,7 @@ class Post
             ) ?? '');
 
             if (self::findDuplicatePostByTitle($wp_post_type, $translated_post_title, $source_post_id, $local_key)) {
-                throw httpException(self::ERROR_PREFIX . " :: Title '$translated_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$translated_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
             }
 
             $result = \wp_insert_post([
@@ -835,7 +920,7 @@ class Post
                 'post_status' => $status,
             ], true);
             if (\is_wp_error($result)) {
-                throw httpException(
+                throw onpage_http_exception(
                     self::ERROR_PREFIX . " :: Failed to insert translation for language '$language_code' :: " . $result->get_error_message(),
                     500,
                     'request_failed'
@@ -844,7 +929,9 @@ class Post
 
             $translated_post_id = (int) $result;
 
-            $created_translation_ids[] = $translated_post_id;
+            // Recorded in the caller's list right away, so its rollback also removes the
+            // translations created before a later language fails.
+            $created_post_ids[] = $translated_post_id;
 
             // Key the row as soon as it exists, so a failure the rollback cannot catch
             // (PHP timeout, OOM) leaves an adoptable post instead of an unkeyed one that
@@ -859,7 +946,9 @@ class Post
                 (string) $language_details->language_code
             );
 
-            self::resolveAndSavePostAssociations(
+            // Same as the update path: term slugs and ACF values resolve in the
+            // translation's language, not in the request's current one.
+            Wpml::runWithLanguage($language_code, fn() => self::resolveAndSavePostAssociations(
                 $translated_post_id,
                 $acf_fields,
                 $files,
@@ -867,10 +956,8 @@ class Post
                 $language_code,
                 $fallback_language,
                 $wp_post_type
-            );
+            ));
         }
-
-        return $created_translation_ids;
     }
 
     /** Validates integrity for update operations, checking for duplicate titles and local keys across translations. */
@@ -888,7 +975,7 @@ class Post
         int $element_index
     ): void {
         if (!\post_type_exists($wp_post_type)) {
-            throw httpException(self::ERROR_PREFIX . " :: PostType '{$post_type}' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: PostType '{$post_type}' not found", 404, 'not_found');
         }
 
         MultiLang::requireWpmlForDetectedLanguages($translated_languages, self::ERROR_PREFIX, $element_index);
@@ -906,7 +993,7 @@ class Post
                 );
 
                 if (self::findDuplicatePostByTitle($wp_post_type, $translated_title, (int) $translation_id, $local_key)) {
-                    throw httpException(self::ERROR_PREFIX . " :: Title '$translated_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$translated_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
                 }
             }
 
@@ -920,7 +1007,7 @@ class Post
         );
 
         if ($resolved_title !== $post->post_title && self::findDuplicatePostByTitle($wp_post_type, $resolved_title, $post_id, $local_key)) {
-            throw httpException(self::ERROR_PREFIX . " :: Title '$resolved_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$resolved_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
         }
     }
 
@@ -1029,7 +1116,7 @@ class Post
             );
 
             if (\is_wp_error($translated_result)) {
-                throw httpException(
+                throw onpage_http_exception(
                     self::ERROR_PREFIX . " :: Failed to update translation for language '$lang' :: " . $translated_result->get_error_message(),
                     500,
                     'request_failed'
@@ -1051,7 +1138,7 @@ class Post
     /** Drops from the post's WPML group the language slots whose post no longer exists. */
     private static function pruneOrphanPostTranslations(int $post_id, string $wp_post_type): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         $trid = self::getPostTrid($post_id, $wp_post_type);
         if (!$trid) return;
@@ -1088,7 +1175,7 @@ class Post
         // below declare as their source.
         $source_language = $context['current_language'] ?? $context['languages']['default_language'];
 
-        if ($translated_languages === [] || !isWpmlActive() || $source_language === null) {
+        if ($translated_languages === [] || !onpage_is_wpml_active() || $source_language === null) {
             return [];
         }
 
@@ -1113,7 +1200,7 @@ class Post
         }
 
         if (!$trid) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Unable to resolve translation group (trid) for Post $source_post_id",
                 500,
                 'wpml_error'
@@ -1165,7 +1252,7 @@ class Post
 
         if ($translated_title !== ''
             && self::findDuplicatePostByTitle($wp_post_type, $translated_title, $source_post_id, $local_key)) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Title '$translated_title' already exists for PostType '{$context['post_type']}'",
                 409,
                 'duplicate_title'
@@ -1185,7 +1272,7 @@ class Post
         ], true);
 
         if (\is_wp_error($result)) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Failed to insert translation for language '$language_code' :: " . $result->get_error_message(),
                 500,
                 'request_failed'
@@ -1268,7 +1355,7 @@ class Post
         ]);
 
         if (empty($language_details->trid) || empty($language_details->language_code)) {
-            throw httpException(self::ERROR_PREFIX . " :: Failed to initialize WPML language details to Post $post_id", 500, 'request_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to initialize WPML language details to Post $post_id", 500, 'request_failed');
         }
 
         return $language_details;
@@ -1277,7 +1364,7 @@ class Post
     /** WPML language details object for a post. */
     private static function getPostLanguageDetails(int $post_id, string $wp_post_type): mixed
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         return \apply_filters('wpml_element_language_details', null, [
             'element_id' => $post_id,
@@ -1288,7 +1375,7 @@ class Post
     /** Returns WPML translations map for a translation group (trid). */
     private static function getPostTranslations(int $trid, string $wp_post_type): array
     {
-        if (!isWpmlActive()) return [];
+        if (!onpage_is_wpml_active()) return [];
 
         $translations = \apply_filters(
             'wpml_get_element_translations',
@@ -1305,7 +1392,7 @@ class Post
     /** Returns WPML trid for a post, when available. */
     private static function getPostTrid(int $post_id, string $wp_post_type): int|null
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         $trid = \wpml_get_content_trid($wp_post_type, $post_id);
         if ($trid) return (int) $trid;
@@ -1335,7 +1422,7 @@ class Post
         // is not even defined: calling it turned every update of an existing post into a
         // fatal error on a site that has no WPML. The sibling helpers above all open with
         // the same guard, and the duplicates branch below already checks for it.
-        if (!isWpmlActive()) return [];
+        if (!onpage_is_wpml_active()) return [];
 
         $translation_ids = [];
 
@@ -1343,13 +1430,13 @@ class Post
         if (is_array($translations)) {
             foreach ($translations as $lang => $translation) {
                 $translated_post_id = isset($translation->element_id) ? (int) $translation->element_id : 0;
-                if (postExists($translated_post_id)) {
+                if (onpage_post_exists($translated_post_id)) {
                     $translation_ids[(string) $lang] = $translated_post_id;
                 }
             }
         }
 
-        if ((count($translation_ids) <= 1) && isWpmlActive()) {
+        if ((count($translation_ids) <= 1) && onpage_is_wpml_active()) {
             $master_post_id = \apply_filters('wpml_master_post_from_duplicate', $post_id);
             $duplicate_source_id = $master_post_id ? (int) $master_post_id : $post_id;
             $duplicates = \apply_filters('wpml_post_duplicates', $duplicate_source_id);
@@ -1357,7 +1444,7 @@ class Post
             if (is_array($duplicates)) {
                 foreach ($duplicates as $lang => $duplicate_post_id) {
                     $duplicate_post_id = (int) $duplicate_post_id;
-                    if (postExists($duplicate_post_id)) {
+                    if (onpage_post_exists($duplicate_post_id)) {
                         $translation_ids[(string) $lang] = $duplicate_post_id;
                     }
                 }
@@ -1369,7 +1456,7 @@ class Post
                     ? (string) $master_language_details->language_code
                     : $current_language;
 
-                if ($master_language_code && postExists((int) $master_post_id)) {
+                if ($master_language_code && onpage_post_exists((int) $master_post_id)) {
                     $translation_ids[$master_language_code] = (int) $master_post_id;
                 }
             } elseif ($current_language) {
@@ -1380,7 +1467,7 @@ class Post
         if ($trid) {
             foreach (self::getPostTranslations($trid, $wp_post_type) as $lang => $translation) {
                 $translated_post_id = isset($translation->element_id) ? (int) $translation->element_id : 0;
-                if (postExists($translated_post_id)) {
+                if (onpage_post_exists($translated_post_id)) {
                     $translation_ids[(string) $lang] = $translated_post_id;
                 }
             }
@@ -1396,7 +1483,7 @@ class Post
     /** Sets WPML element language details for a post. */
     private static function setPostLanguage(int $post_id, string $wp_post_type, string $lang, int|false $trid = false, ?string $source_lang = null): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         \do_action('wpml_set_element_language_details', [
             'element_id' => $post_id,
@@ -1417,7 +1504,7 @@ class Post
     private static function areSameTranslationGroup(int $left_post_id, int $right_post_id, string $wp_post_type): bool
     {
         if ($left_post_id === $right_post_id) return true;
-        if (!isWpmlActive()) return false;
+        if (!onpage_is_wpml_active()) return false;
 
         $left_trid = self::getPostTrid($left_post_id, $wp_post_type);
         $right_trid = self::getPostTrid($right_post_id, $wp_post_type);
@@ -1441,7 +1528,15 @@ class Post
         }
 
         if ($post_type === 'any' && count(array_unique(array_map(fn(\WP_Post $post): string => $post->post_type, $posts))) > 1) {
-            throw httpException(self::ERROR_PREFIX . " :: local_key '$local_key' matches multiple post types; pass a type to upsert safely", 409, 'ambiguous_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key '$local_key' matches multiple post types; pass a type to upsert safely", 409, 'ambiguous_local_key');
+        }
+
+        // A live holder wins over a trashed one: restoring a trashed duplicate would leave the
+        // live post stale and the key held by two live posts. The bin is used only when no
+        // live post holds the key.
+        $live_posts = array_values(array_filter($posts, fn(\WP_Post $post): bool => $post->post_status !== 'trash'));
+        if ($live_posts !== []) {
+            $posts = $live_posts;
         }
 
         // The update path treats the resolved post as the source language of the group, so
@@ -1457,15 +1552,27 @@ class Post
             ? Term::findIdByLocalKey($local_key, $taxonomy_key, $language_code)
             : null;
         if ($term_id === null) {
-            $term = \get_term_by('slug', $reference, $taxonomy_key);
-            if (!$term || \is_wp_error($term)) {
+            // get_term_by() is filtered to the current WPML language, so the same slug would
+            // resolve differently depending on which language the request runs in. The
+            // repository lookup is language-neutral; prefer the candidate already in the
+            // target language and let the translation step below map the others.
+            $term_ids = TermRepository::findTermIdsBySlug($reference, $taxonomy_key);
+            if ($term_ids === []) {
                 return null;
             }
 
-            $term_id = (int) $term->term_id;
+            $term_id = $term_ids[0];
+            if (onpage_is_wpml_active() && $language_code) {
+                foreach ($term_ids as $candidate_id) {
+                    if ((int) \apply_filters('wpml_object_id', $candidate_id, $taxonomy_key, false, $language_code) === $candidate_id) {
+                        $term_id = $candidate_id;
+                        break;
+                    }
+                }
+            }
         }
 
-        if (isWpmlActive() && $language_code) {
+        if (onpage_is_wpml_active() && $language_code) {
             $translated_term_id = \apply_filters('wpml_object_id', $term_id, $taxonomy_key, true, $language_code);
             if ($translated_term_id) {
                 $term_id = (int) $translated_term_id;
@@ -1488,7 +1595,7 @@ class Post
             foreach (self::getTermsForLanguage($terms, $language_code, $fallback_language) as $term_reference) {
                 $term_id = self::resolveTermReferenceId((string) $term_reference, $taxonomy_key, $language_code);
                 if ($term_id === null) {
-                    throw httpException(self::ERROR_PREFIX . " :: Term reference '$term_reference' not found in taxonomy '$taxonomy_key'", 404, 'input_invalid');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Term reference '$term_reference' not found in taxonomy '$taxonomy_key'", 404, 'input_invalid');
                 }
 
                 $ids[] = $term_id;
@@ -1496,7 +1603,7 @@ class Post
 
             $result = \wp_set_object_terms($post_id, $ids, $taxonomy_key, false);
             if (\is_wp_error($result)) {
-                throw httpException(
+                throw onpage_http_exception(
                     self::ERROR_PREFIX . " :: Failed to assign terms of taxonomy '$taxonomy_key' to post $post_id :: " . $result->get_error_message(),
                     500,
                     'request_failed'
@@ -1587,7 +1694,7 @@ class Post
     /** Normalizes a taxonomy payload to the slug list for the requested language. */
     private static function getTermsForLanguage(mixed $terms, ?string $language_code, ?string $fallback_language = null): array
     {
-        $languages = getWpmlLanguages();
+        $languages = onpage_get_wpml_languages();
         $resolved_terms = self::resolveMultilingualTerms($terms, $languages, $language_code, $fallback_language);
 
         if (!is_array($resolved_terms)) {
@@ -1615,17 +1722,26 @@ class Post
     ): int {
         $post = \get_post($id);
         if (!$post instanceof \WP_Post) {
-            throw httpException(self::ERROR_PREFIX . " :: ID $id not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: ID $id not found", 404, 'not_found');
+        }
+
+        // `type` identifies the post, it does not retype it: silently switching the type
+        // would detach the post from its WPML group and its ACF field groups.
+        if ($type !== null && $type !== $post->post_type) {
+            throw onpage_http_exception(
+                self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'type' ('$type') does not match the type of Post $id ('{$post->post_type}'); the post type cannot be changed",
+                400,
+                'invalid_param'
+            );
         }
 
         // A language slot still listed by the WPML group but whose post is gone would be
         // written like a live translation ("Invalid post ID.") and would keep the language
         // from being recreated; clearing it first lets the backfill below adopt it.
-        self::pruneOrphanPostTranslations($id, $type ?? $post->post_type);
+        self::pruneOrphanPostTranslations($id, $post->post_type);
 
         $context = self::buildUpdateContext(
             $post,
-            $type,
             $title,
             $content,
             $description,
@@ -1647,9 +1763,14 @@ class Post
             $element_index
         );
 
+        // Only after validation: a rejected update must leave trashed posts in the bin.
+        if (self::restoreTrashedPosts($post, $local_key)) {
+            $post = \get_post($id);
+        }
+
         $result = \wp_update_post(self::buildPrimaryUpdateData($id, $post, $status, $context), true);
         if (\is_wp_error($result)) {
-            throw httpException(self::ERROR_PREFIX . ' :: Failed to update :: ' . $result->get_error_message(), 500, 'request_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: Failed to update :: ' . $result->get_error_message(), 500, 'request_failed');
         }
 
         self::resolveAndSaveUpdatedPostAssociations(
@@ -1718,6 +1839,11 @@ class Post
     {
         $wp_post_type = $type;
 
+        // Same check and error as the update path (validateUpdateIntegrity()).
+        if (!\post_type_exists($wp_post_type)) {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: PostType '{$type}' not found", 404, 'not_found');
+        }
+
         $languages = self::getLanguages($title, $content, $description, $acf_fields, $files);
 
         $source_post_title = (string) (MultiLang::resolve(
@@ -1755,7 +1881,7 @@ class Post
             'post_status' => $status,
         ], true);
         if (\is_wp_error($result)) {
-            throw httpException("Post :: Failed to insert Post with title '$source_post_title' :: " . $result->get_error_message(), 500, 'request_failed');
+            throw onpage_http_exception("Post :: Failed to insert Post with title '$source_post_title' :: " . $result->get_error_message(), 500, 'request_failed');
         }
 
         $post_id = (int) $result;
@@ -1780,26 +1906,24 @@ class Post
                 $wp_post_type
             );
 
-            if (!empty($languages['translated_languages']) && isWpmlActive()) {
+            if (!empty($languages['translated_languages']) && onpage_is_wpml_active()) {
                 // There are multilang fields (title/content/description/acf/files) and WPML is active
-                $created_post_ids = array_merge(
-                    $created_post_ids,
-                    self::insertTranslatedPosts(
-                        source_post_id: $post_id,
-                        title: $title,
-                        content: $content,
-                        description: $description,
-                        acf_fields: $acf_fields,
-                        files: $files,
-                        terms: $terms,
-                        status: $status,
-                        post_type: $type,
-                        wp_post_type: $wp_post_type,
-                        default_language: $languages['default_language'],
-                        translated_languages: $languages['translated_languages'],
-                        fallback_language: $languages['fallback_language'],
-                        local_key: $local_key
-                    )
+                self::insertTranslatedPosts(
+                    source_post_id: $post_id,
+                    title: $title,
+                    content: $content,
+                    description: $description,
+                    acf_fields: $acf_fields,
+                    files: $files,
+                    terms: $terms,
+                    status: $status,
+                    post_type: $type,
+                    wp_post_type: $wp_post_type,
+                    default_language: $languages['default_language'],
+                    translated_languages: $languages['translated_languages'],
+                    fallback_language: $languages['fallback_language'],
+                    local_key: $local_key,
+                    created_post_ids: $created_post_ids
                 );
             }
 

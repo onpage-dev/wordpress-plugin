@@ -6,6 +6,7 @@ namespace OnPage\Controllers;
 
 
 
+use OnPage\Services\Input;
 use OnPage\Services\PostType as PostTypeService;
 
 
@@ -28,11 +29,12 @@ class PostType
     public function save(\WP_REST_Request $request): \WP_REST_Response
     {
         $ids = [];
+        $body = Input::requireJsonList($request, 'PostType');
 
         // Rewrite rules are flushed once for the whole batch instead of per element.
         try {
-            foreach ($request->get_json_params() as $params) {
-                $ids[] = PostTypeService::saveFromParams($params);
+            foreach ($body as $i => $params) {
+                $ids[] = PostTypeService::saveFromParams(Input::requireObjectElement($params, 'PostType', $i), $i);
             }
         } finally {
             \flush_rewrite_rules();
@@ -48,15 +50,18 @@ class PostType
      */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
+        $body = Input::requireJsonList($request, 'PostType');
 
         // Rewrite rules are flushed once for the whole batch instead of per element.
         try {
-            foreach ($request->get_json_params() as $value) {
+            foreach ($body as $i => $value) {
                 if (is_int($value)) {
                     PostTypeService::deleteById($value, $ignore_missing);
                 } elseif (is_string($value)) {
                     PostTypeService::deleteByKey($value, $ignore_missing);
+                } else {
+                    throw onpage_http_exception("PostType :: Element $i :: Invalid delete value; expected post type ID (int) or key (string)", 400, 'input_invalid');
                 }
             }
         } finally {

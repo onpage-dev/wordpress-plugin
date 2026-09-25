@@ -17,7 +17,3 @@ class HttpException extends \Exception
         parent::__construct($message, 0);
     }
 }
-
-
-
-?>

@@ -9,6 +9,11 @@ Each section below starts from what you see or what they report.
 
 ## A red notice says On Page® requires Advanced Custom Fields
 
+The notice is in Italian. It reads: "**On Page®** richiede il plugin **Advanced Custom Fields**.
+Finché ACF non è installato e attivo, le API REST di On Page® restano disattivate." In English:
+On Page® requires the Advanced Custom Fields plugin; until ACF is installed and active, the
+On Page® REST API stays turned off. Only users who can activate plugins see it.
+
 **What it means:** ACF is not installed or not active. Without ACF, the plugin's API is turned
 off. The client receives `404` on every call.
 
@@ -76,12 +81,33 @@ If your server cannot reach the file address, the download fails.
 **How to fix it:**
 
 - Check that your server can make outgoing connections to the internet. Some hosts block them.
+- Check the file type. The plugin imports images, video, audio, PDF files, office documents
+  (Word, Excel, PowerPoint, OpenDocument, Apple iWork), text and CSV files, archives (such as ZIP)
+  and SVG images. Other types, such as web pages, scripts or programs, are refused unless your
+  site already allows them.
 - Ask whoever maintains the client which file failed. They can see the address in the error.
 
-## A file I added by hand does not appear in the Documents section
+## An SVG image looks different from the original
 
-This is expected. The **Documents** section on the product page shows only files sent by the
-client. See [woocommerce.md](woocommerce.md).
+This is expected. Before it stores an SVG image, the plugin removes everything that could run code
+on your site: scripts, styles, links and embedded content. Most icons and logos are not affected.
+An SVG that relies on those parts can look different, or lose parts that point to other elements
+of the same image.
+
+## A product variation became private
+
+This is expected. When a product no longer offers an option, for example a colour removed from the
+product, the variations that use that option are set to **private**. Customers can no longer buy
+them through old links or carts. Nothing is deleted.
+
+When the client sends the variation again with an option the product offers, it gets its previous
+status back. Variations you created by hand in WooCommerce are not changed. See
+[woocommerce.md](woocommerce.md).
+
+## A file I added by hand does not appear in the Documenti section
+
+This is expected. The **Documenti** ("Documents") section on the product page shows only files
+sent by the client. See [woocommerce.md](woocommerce.md).
 
 ## Still stuck?
 

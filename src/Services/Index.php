@@ -45,7 +45,7 @@ class Index
         ));
 
         if ($posts_removed === false) {
-            throw httpException("Indexes :: Failed to remove post meta", 500, 'delete_failed');
+            throw onpage_http_exception("Indexes :: Failed to remove post meta", 500, 'delete_failed');
         }
 
         $terms_removed = $wpdb->query($wpdb->prepare(
@@ -54,7 +54,7 @@ class Index
         ));
 
         if ($terms_removed === false) {
-            throw httpException("Indexes :: Failed to remove term meta", 500, 'delete_failed');
+            throw onpage_http_exception("Indexes :: Failed to remove term meta", 500, 'delete_failed');
         }
 
         // Raw SQL bypasses WP's meta caches; flush so subsequent reads don't see stale keys.

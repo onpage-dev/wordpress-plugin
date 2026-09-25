@@ -10,16 +10,44 @@ Last verified against the code on 2026-09-25.
 
 | # | Item ([§6.1](#61-quick-wins-low-risk-high-return)) | Status |
 | --- | --- | --- |
-| 1 | Memoize the WPML helpers per request | Done. `isWpmlActive()`, `getWpmlDefaultLanguage()` and `getWpmlLanguages()` use a static cache. |
+| 1 | Memoize the WPML helpers per request | Done. `onpage_is_wpml_active()`, `onpage_get_wpml_default_language()` and `onpage_get_wpml_languages()` use a static cache. §2.1 and §4.5, which say the languages are not cached, are out of date. |
 | 2 | Remove redundant `local_key` lookups | Done for products (`insertFromParams` no longer re-checks) and attributes (request-scoped memo). |
-| 3 | Batch-local cache for `findAttachmentBySourceUrl` | Open. |
+| 3 | Batch-local cache for `findAttachmentBySourceUrl` | Open. Each lookup is now one `get_posts` by storage token (On Page® URLs only), then one by source URL. |
 | 4 | Coalesce `WC_Product_Variable::sync` | Done. Parent syncs are queued and run once per parent at the end of the batch (`flushDeferredParentSyncs()`). |
 | 5 | `wp_defer_term_counting` + `wp_suspend_cache_invalidation` | Partial. Term counting is deferred in the `Post` and WooCommerce `Product` controllers. Cache invalidation is not suspended. |
-| 6 | Direct `wpdb` queries for `onpage_local_key` on posts | Open. Products still use `get_posts` with a `meta_query`. |
-| 7 | Remove the second `$product->save()` in `applyImage` | Open. |
+| 6 | Direct `wpdb` queries for `onpage_local_key` on posts | Open. `Product::findProductIdsByLocalKey()`, `VariantProduct::findVariationIdsByLocalKey()` and `PostRepository::findPostsByLocalKey()` all still use `get_posts` with a `meta_query`. |
+| 7 | Remove the second `$product->save()` in `applyImage` | Open. `applyImage()` and `applyGallery()` still save through `saveProductImage()`, and `VariantProduct::applyImage()` still saves the variation again. |
 
-Items 8–16 (§6.2 and §6.3) have not been re-verified. Line references in the file may be out of
-date.
+Items 8–16 (§6.2 and §6.3) have not been re-verified.
+
+### Changes since the analysis
+
+These code changes alter the costs described in §3 and §4:
+
+- **Variation download sync.** `ProductDownloads::applyPayloadsToVariation()` no longer saves a
+  variation whose downloads already match the parent's, and skips variations with their own
+  downloads (fingerprint in `_onpage_inherited_downloads`). The "one `save()` per child variation"
+  in §3.1 and the extra variation save in §3.6 now happen only when the downloads change.
+- **Approved download directories.** Files under the uploads URL are covered by one rule, registered
+  at most once per request, instead of one call per file.
+- **New cost on product saves with `attributes`.** On a variable product,
+  `VariantProduct::disableVariationsWithUnofferedAttributes()` runs one `get_posts` for the
+  plugin-managed variations and loads each one. A variation it disables costs one more save, and
+  the parent is synced at once.
+- **New cost on variation saves with `attributes`.** `assertAttributeCombinationAvailable()` runs
+  one `get_posts` for the siblings and one `update_meta_cache` query.
+- **Term references in translations.** `POST /posts` resolves slug references with
+  `TermRepository::findTermIdsBySlug()` (one direct query) in each translation's language.
+
+### Stale references
+
+The analysis predates several refactors. The line anchors in §1, in §6.1 and the `helpers.php`
+anchor in §2.1 were updated on 2026-09-25. The other anchors in §2 to §5 have not been, and may
+point to the wrong lines. Also:
+
+- `Term::upsertFromParams` (§2.3, §3.3) is now `Term::save()`. `Brand::save` calls it directly.
+- The direct-query note on brands in §3.5 still holds: brand lookups go through
+  `TermRepository::findTermIdsByLocalKey()`.
 
 ---
 
@@ -48,13 +76,13 @@ HTTP POST
        └─ Router::dispatch
             └─ Middleware Auth (Bearer token)
                  └─ Controller::save (per endpoint)
-                      └─ foreach ($request->get_json_params() as $i => $params)
+                      └─ foreach (Input::requireJsonList($request, ...) as $i => $params)
                            └─ Service::save($params, $i)   ←  the real hot loop
 ```
 
 Key points:
 
-- Dispatch is registered in [routes.php:48-95](../../../routes.php#L48-L95).
+- Dispatch is registered in [routes.php:64-90](../../../routes.php#L64-L90).
   Every WooCommerce POST route goes through `AuthMiddleware`, which calls
   `AuthService::check()` once per request.
 - The body is ALWAYS a JSON array. Controllers iterate over the array and process one element at a time.
@@ -67,21 +95,21 @@ Controller → service map:
 
 | Endpoint | Controller | Service entry point |
 |---|---|---|
-| `POST /woocommerce/products` | [Product.php:25-39](../../../src/Controllers/WooCommerce/Product.php#L25-L39) | [Services/WooCommerce/Product::save](../../../src/Services/WooCommerce/Product.php#L709) |
-| `POST /woocommerce/categories` | [Category.php:31-45](../../../src/Controllers/WooCommerce/Category.php#L31-L45) | [Services/WooCommerce/Term::save](../../../src/Services/WooCommerce/Term.php#L231) |
-| `POST /woocommerce/tags` | [Tag.php:31-45](../../../src/Controllers/WooCommerce/Tag.php#L31-L45) | same `Services/WooCommerce/Term::save` |
-| `POST /woocommerce/brands` | [Brand.php:23-37](../../../src/Controllers/WooCommerce/Brand.php#L23-L37) | [Services/WooCommerce/Brand::save](../../../src/Services/WooCommerce/Brand.php#L242) (→ `Term::upsertFromParams`) |
-| `POST /woocommerce/attributes` | [Attribute.php:22-30](../../../src/Controllers/WooCommerce/Attribute.php#L22-L30) | [Services/WooCommerce/Attribute::save](../../../src/Services/WooCommerce/Attribute.php#L445) |
-| `POST /woocommerce/attributes/{attribute}/terms` | [AttributeTerm.php:37-52](../../../src/Controllers/WooCommerce/AttributeTerm.php#L37-L52) | same `Services/WooCommerce/Term::save` |
-| `POST /woocommerce/variant-products` | [VariantProduct.php:22-34](../../../src/Controllers/WooCommerce/VariantProduct.php#L22-L34) | [Services/WooCommerce/VariantProduct::save](../../../src/Services/WooCommerce/VariantProduct.php#L520) |
+| `POST /woocommerce/products` | [Product.php:26-45](../../../src/Controllers/WooCommerce/Product.php#L26-L45) | [Services/WooCommerce/Product::save](../../../src/Services/WooCommerce/Product.php#L796) |
+| `POST /woocommerce/categories` | [Category.php:32-43](../../../src/Controllers/WooCommerce/Category.php#L32-L43) | [Services/WooCommerce/Term::save](../../../src/Services/WooCommerce/Term.php#L238) |
+| `POST /woocommerce/tags` | [Tag.php:32-43](../../../src/Controllers/WooCommerce/Tag.php#L32-L43) | same `Services/WooCommerce/Term::save` |
+| `POST /woocommerce/brands` | [Brand.php:24-34](../../../src/Controllers/WooCommerce/Brand.php#L24-L34) | [Services/WooCommerce/Brand::save](../../../src/Services/WooCommerce/Brand.php#L275) (→ `Term::save`) |
+| `POST /woocommerce/attributes` | [Attribute.php:23-31](../../../src/Controllers/WooCommerce/Attribute.php#L23-L31) | [Services/WooCommerce/Attribute::save](../../../src/Services/WooCommerce/Attribute.php#L474) |
+| `POST /woocommerce/attributes/{attribute}/terms` | [AttributeTerm.php:38-50](../../../src/Controllers/WooCommerce/AttributeTerm.php#L38-L50) | same `Services/WooCommerce/Term::save` |
+| `POST /woocommerce/variant-products` | [VariantProduct.php:23-47](../../../src/Controllers/WooCommerce/VariantProduct.php#L23-L47) | [Services/WooCommerce/VariantProduct::save](../../../src/Services/WooCommerce/VariantProduct.php#L534) |
 
 Cross-cutting traits:
 
 - Before the loop, the controller calls `Acf::loadFieldTypeMap(['post'])` or
   `['term']` ([Acf.php:148](../../../src/Services/Acf.php#L148)).
   The cost is amortized: it runs once per request.
-- All services raise `HttpException` through `httpException()`
-  ([helpers.php:137](../../../src/helpers.php#L137)).
+- All services raise `HttpException` through `onpage_http_exception()`
+  ([helpers.php:142](../../../src/helpers.php#L142)).
   Errors are not aggregated: the first problem in an element is fatal.
 
 ---
@@ -101,10 +129,10 @@ checks spread across the services. The recurring patterns follow.
   `MultiLang::getLanguages`, `isLanguageMapShape`, `requireWpmlForLanguageMap`,
   `requireWpmlForFieldMap`, `requireWpmlForNestedLanguageMaps`.
   - Each one walks the payload again.
-  - Each one calls `getWpmlLanguages()` ([helpers.php:104](../../../src/helpers.php#L104)),
+  - Each one calls `onpage_get_wpml_languages()` ([helpers.php:103](../../../src/helpers.php#L103)),
     which runs `apply_filters('wpml_active_languages', ...)`.
   - **The result is not cached per request.** It is recomputed hundreds of times in a batch.
-- **`httpException()`** produces uniform errors of the form `Service :: Element {i} :: ...`.
+- **`onpage_http_exception()`** produces uniform errors of the form `Service :: Element {i} :: ...`.
 
 ### 2.2 Product validation
 
@@ -130,7 +158,7 @@ runs these steps, in order, for every element:
 
 Validation cost for an average product (about 10 props, 8 attributes, 4 downloads, 3 languages, 20 ACF fields):
 
-- About 60–80 calls to `getWpmlLanguages()`. Each is an `apply_filters` call, and the
+- About 60–80 calls to `onpage_get_wpml_languages()`. Each is an `apply_filters` call, and the
   filters WPML registers internally run SQL queries against `icl_languages`.
 - The full payload is walked at least 3 times: validation, `getLanguageContext`, and application.
 
@@ -390,7 +418,7 @@ A single product with 4 images and 4 downloads can spend more than 30s on I/O al
 runs for every URL, but its result is not memoized across the batch.
 Two products that share an image run 2 identical queries.
 
-### 4.5 `getWpmlLanguages()` is not memoized
+### 4.5 `onpage_get_wpml_languages()` is not memoized
 
 It is called dozens of times per element, directly or through `MultiLang::getLanguages`.
 Each call runs `apply_filters('wpml_active_languages', null, ['skip_missing' => 0])`.
@@ -471,15 +499,15 @@ Grouped by cost/benefit. **Analysis only** — no code has been changed.
 ### 6.1 Quick wins (low risk, high return)
 
 1. **Memoize the WPML helpers per request.**
-   `getWpmlLanguages`, `getWpmlDefaultLanguage`, `getWpmlCurrentLanguage` and `isWpmlActive`
+   `onpage_get_wpml_languages`, `onpage_get_wpml_default_language`, `onpage_get_wpml_current_language` and `onpage_is_wpml_active`
    are called hundreds of times per batch
-   ([helpers.php:72-124](../../../src/helpers.php#L72-L124)). Use a static per-request cache.
+   ([helpers.php:43-129](../../../src/helpers.php#L43-L129)). Use a static per-request cache.
 2. **Remove redundant lookups.** Right after `findCanonicalProductIdByLocalKey`, the
    `findProductIdByLocalKey` check in `insertFromParams`
-   ([Product.php:758](../../../src/Services/WooCommerce/Product.php#L758))
+   ([Product.php:824](../../../src/Services/WooCommerce/Product.php#L824); the check has since been removed)
    repeats the same work. The same applies to attributes (uniqueness assert after findExisting).
 3. **Batch-local cache for `findAttachmentBySourceUrl`** in
-   `RemoteMedia::urlToMediaLibrary` ([RemoteMedia.php:340-376](../../../src/Services/RemoteMedia.php#L340-L376)).
+   `RemoteMedia::urlToMediaLibrary` ([RemoteMedia.php:606-646](../../../src/Services/RemoteMedia.php#L606-L646)).
    A `url → attachment_id` map filled on first lookup saves many `get_posts` calls
    for files shared between products.
 4. **Coalesce `WC_Product_Variable::sync`.** Instead of calling it inside `saveOneFromParams`,
@@ -493,7 +521,8 @@ Grouped by cost/benefit. **Analysis only** — no code has been changed.
    Adding an index on `postmeta(meta_key, meta_value)` does not help, because WordPress already
    indexes `meta_key`. The gain comes from the shorter execution path.
 7. **Remove the second `$product->save()` in `applyImage`**
-   ([Product.php:1334-1341](../../../src/Services/WooCommerce/Product.php#L1334-L1341)).
+   ([Product.php:1661](../../../src/Services/WooCommerce/Product.php#L1661), which saves through
+   `saveProductImage()` at [Product.php:1780](../../../src/Services/WooCommerce/Product.php#L1780)).
    Move `set_image_id` before the first save in `persistProductFromParams`.
    Do the same in `VariantProduct::applyImage`.
 

@@ -6,6 +6,7 @@ namespace OnPage\Controllers\WooCommerce;
 
 
 
+use OnPage\Services\Input;
 use OnPage\Services\WooCommerce\Attribute as WooCommerceAttribute;
 
 
@@ -22,8 +23,8 @@ class Attribute
     public function save(\WP_REST_Request $request): \WP_REST_Response
     {
         $ids = [];
-        foreach ($request->get_json_params() as $i => $params) {
-            $ids[] = WooCommerceAttribute::save($params, $i);
+        foreach (Input::requireJsonList($request, 'WooCommerce Attribute') as $i => $params) {
+            $ids[] = WooCommerceAttribute::save(Input::requireObjectElement($params, 'WooCommerce Attribute', $i), $i);
         }
 
         return new \WP_REST_Response($ids, 200);
@@ -32,9 +33,9 @@ class Attribute
     /** REST: deletes WooCommerce global product attributes by local_key; optional `ignore` query. */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $i => $value) {
+        foreach (Input::requireJsonList($request, 'WooCommerce Attribute') as $i => $value) {
             WooCommerceAttribute::deleteValue($value, $ignore_missing, $i);
         }
 

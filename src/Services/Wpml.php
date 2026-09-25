@@ -11,7 +11,7 @@ class Wpml
     /** Runs a callback while temporarily switching WPML and ACF current language. */
     public static function runWithLanguage(?string $language_code, callable $callback): mixed
     {
-        if (!isWpmlActive() || !$language_code) {
+        if (!onpage_is_wpml_active() || !$language_code) {
             return $callback();
         }
 
@@ -47,7 +47,7 @@ class Wpml
      */
     public static function deleteOrphanPostTranslations(int $trid, string $element_type): void
     {
-        if (!isWpmlActive() || $trid <= 0) return;
+        if (!onpage_is_wpml_active() || $trid <= 0) return;
 
         global $wpdb;
 

@@ -41,11 +41,8 @@ class AttributeTerm
 
         $taxonomy = self::getTaxonomy($request);
         $ids = [];
-        foreach ($request->get_json_params() as $i => $params) {
-            if (!is_array($params) || array_is_list($params)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $i :: Attribute term payload must be an object", 400, 'invalid_param');
-            }
-
+        foreach (Input::requireJsonList($request, self::ERROR_PREFIX) as $i => $params) {
+            $params = Input::requireObjectElement($params, self::ERROR_PREFIX, $i);
             $ids[] = WooCommerceTerm::save($params, $taxonomy, $i, self::ERROR_PREFIX);
         }
 
@@ -56,12 +53,12 @@ class AttributeTerm
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
         $taxonomy = self::getTaxonomy($request);
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $i => $value) {
+        foreach (Input::requireJsonList($request, self::ERROR_PREFIX) as $i => $value) {
             $local_key = Input::localKey($value);
             if ($local_key === null) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
             }
 
             WooCommerceTerm::delete($local_key, $taxonomy, $ignore_missing, $i, self::ERROR_PREFIX);

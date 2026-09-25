@@ -1,0 +1,23 @@
+# Paths left out of `git archive`, and so of the source archives GitHub attaches to a release.
+# Only what the plugin needs at runtime ships, plus the README, LICENSE and the documents the
+# README links to (docs/, CHANGELOG.md, RELEASE.md, CONTRIBUTING.md, SECURITY.md, and AGENTS.md,
+# which CONTRIBUTING.md links to).
+
+# Tests and the test-only `.env` reader
+/src/Tests export-ignore
+/src/Env.php export-ignore
+/bin export-ignore
+/.env.example export-ignore
+
+# Local Docker environment
+/docker export-ignore
+/docker-compose.yml export-ignore
+/Dockerfile export-ignore
+/config export-ignore
+/start export-ignore
+/stop export-ignore
+/restart export-ignore
+
+# Repository tooling
+/.gitignore export-ignore
+/.gitattributes export-ignore

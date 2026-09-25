@@ -61,13 +61,13 @@ class Taxonomy
         }
 
         if (!is_array($params['terms']) || array_is_list($params['terms'])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'terms' must be an object mapping taxonomy slug => term references", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'terms' must be an object mapping taxonomy slug => term references", 400, 'invalid_param');
         }
 
         $result = [];
         foreach ($params['terms'] as $taxonomy_key => $value) {
             if (!is_string($taxonomy_key) || trim($taxonomy_key) === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'terms' has an invalid taxonomy key", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'terms' has an invalid taxonomy key", 400, 'invalid_param');
             }
 
             $result[$taxonomy_key] = self::normalizeTermList(
@@ -97,7 +97,7 @@ class Taxonomy
                     continue;
                 }
 
-                throw httpException(self::ERROR_PREFIX . " :: Taxonomy '$taxonomy_key' not found", 404, 'not_found');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Taxonomy '$taxonomy_key' not found", 404, 'not_found');
             }
 
             if ($term_references === []) {
@@ -108,12 +108,12 @@ class Taxonomy
             foreach ($term_references as $term_reference) {
                 $term = self::findTermForAssignment($term_reference, $taxonomy_key, $language_code, $fallback_language);
                 if (!$term) {
-                    throw httpException(self::ERROR_PREFIX . " :: Term with local_key '$term_reference' not found in taxonomy '$taxonomy_key'", 404, 'input_invalid');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Term with local_key '$term_reference' not found in taxonomy '$taxonomy_key'", 404, 'input_invalid');
                 }
 
                 $term_id = (int) $term->term_id;
 
-                if (isWpmlActive() && $language_code) {
+                if (onpage_is_wpml_active() && $language_code) {
                     $translated_term_id = \apply_filters('wpml_object_id', $term_id, $taxonomy_key, true, $language_code);
                     if ($translated_term_id) {
                         $term_id = (int) $translated_term_id;
@@ -125,7 +125,7 @@ class Taxonomy
 
             $result = \wp_set_object_terms($product_id, $ids, $taxonomy_key, false);
             if (\is_wp_error($result)) {
-                throw httpException(
+                throw onpage_http_exception(
                     self::ERROR_PREFIX . " :: Failed to assign terms of taxonomy '$taxonomy_key' to product $product_id :: " . $result->get_error_message(),
                     500,
                     'request_failed'
@@ -139,7 +139,7 @@ class Taxonomy
     {
         $term_ids = \wp_get_object_terms($product_id, $taxonomy_key, ['fields' => 'ids']);
         if (\is_wp_error($term_ids)) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Failed to read terms of taxonomy '$taxonomy_key' for product $product_id :: " . $term_ids->get_error_message(),
                 500,
                 'request_failed'
@@ -158,7 +158,7 @@ class Taxonomy
 
         $result = \wp_remove_object_terms($product_id, $term_ids, $taxonomy_key);
         if (\is_wp_error($result)) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Failed to clear terms of taxonomy '$taxonomy_key' for product $product_id :: " . $result->get_error_message(),
                 500,
                 'request_failed'
@@ -166,7 +166,7 @@ class Taxonomy
         }
 
         if ($result === false) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Failed to clear terms of taxonomy '$taxonomy_key' for product $product_id",
                 500,
                 'request_failed'
@@ -179,7 +179,7 @@ class Taxonomy
     {
         $local_key = Input::localKey($term);
         if ($local_key === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' must be a positive integer or non-empty string local_key", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' must be a positive integer or non-empty string local_key", 400, 'invalid_param');
         }
 
         return $local_key;
@@ -212,7 +212,7 @@ class Taxonomy
                 continue;
             }
 
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' must be a term reference, list of term references or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' must be a term reference, list of term references or null", 400, 'invalid_param');
         }
 
         return $normalized;
@@ -230,10 +230,10 @@ class Taxonomy
         }
 
         if (!is_array($params[$key])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be a list of term references, WPML language map or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be a list of term references, WPML language map or null", 400, 'invalid_param');
         }
 
-        $languages = getWpmlLanguages();
+        $languages = onpage_get_wpml_languages();
         MultiLang::requireWpmlForLanguageMap($params[$key], self::ERROR_PREFIX, $element_index, $key);
 
         if (self::isMultilingualTaxonomyValue($params[$key], $languages)) {
@@ -241,7 +241,7 @@ class Taxonomy
         }
 
         if (!array_is_list($params[$key])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be a list of term references, WPML language map or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be a list of term references, WPML language map or null", 400, 'invalid_param');
         }
 
         $terms = [];
@@ -272,7 +272,7 @@ class Taxonomy
 
         $local_key = Input::localKey($params['brand']);
         if ($local_key === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'brand' must be a positive integer or non-empty string local_key, or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'brand' must be a positive integer or non-empty string local_key, or null", 400, 'invalid_param');
         }
 
         return [$local_key];
@@ -312,14 +312,14 @@ class Taxonomy
         ?string $language_code,
         ?string $fallback_language
     ): int {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return (int) $term_ids[0];
         }
 
         $languages = array_values(array_unique(array_filter([
             $language_code,
             $fallback_language,
-            getWpmlDefaultLanguage(),
+            onpage_get_wpml_default_language(),
         ], fn(mixed $lang): bool => is_string($lang) && $lang !== '')));
 
         foreach ($languages as $lang) {
@@ -362,7 +362,7 @@ class Taxonomy
     /** WPML element language details for a term. */
     private static function getTermLanguageDetails(int $term_id, string $taxonomy_key): mixed
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return null;
         }
 
@@ -469,7 +469,7 @@ class Taxonomy
     /** Normalizes a taxonomy payload to the reference list for the requested language. */
     private static function getTermsForLanguage(mixed $terms, ?string $language_code, ?string $fallback_language = null): array
     {
-        $languages = getWpmlLanguages();
+        $languages = onpage_get_wpml_languages();
         $resolved_terms = self::resolveMultilingualTerms($terms, $languages, $language_code, $fallback_language);
 
         if (!is_array($resolved_terms)) {

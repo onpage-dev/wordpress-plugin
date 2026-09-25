@@ -11,6 +11,35 @@ class RemoteMedia
     public const SOURCE_URL_META = '_onpage_source_url';
     public const TOKEN_META = '_onpage_file_token';
     private const DEFAULT_DOWNLOAD_TIMEOUT_SECONDS = 45;
+    private const ONPAGE_DOMAIN = 'onpage.it';
+    private const ONPAGE_STORAGE_HOST = 'storage.onpage.it';
+
+    /**
+     * Extensions a remote import may force into the upload allowlist (see withUploadableMime()).
+     *
+     * Media and documents only: anything that a browser could run on the site origin (HTML, JS,
+     * XML, executables...) is deliberately absent. SVG is not listed either: it goes through its
+     * own sanitized path (see sideloadWithUploadRules()).
+     */
+    private const FORCE_ALLOWED_EXTENSIONS = [
+        // Images
+        'jpg', 'jpeg', 'jpe', 'gif', 'png', 'bmp', 'tif', 'tiff', 'webp', 'avif', 'heic', 'heif', 'ico',
+        // Video
+        'mp4', 'm4v', 'mov', 'qt', 'wmv', 'avi', 'mpeg', 'mpg', 'mpe', 'ogv', 'webm', '3gp', '3gpp', '3g2', '3gp2',
+        // Audio
+        'mp3', 'm4a', 'm4b', 'aac', 'wav', 'ogg', 'oga', 'flac', 'wma', 'mka',
+        // PDF and office / OpenDocument documents
+        'pdf', 'rtf',
+        'doc', 'docx', 'docm', 'dot', 'dotx', 'dotm',
+        'xls', 'xlsx', 'xlsm', 'xlsb', 'xlt', 'xltx', 'xltm',
+        'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'ppsm', 'pot', 'potx', 'potm',
+        'odt', 'ods', 'odp', 'odg', 'odc', 'odb', 'odf',
+        'key', 'numbers', 'pages',
+        // Plain text and CSV
+        'txt', 'csv', 'tsv',
+        // Archives
+        'zip', '7z', 'rar', 'tar', 'gz', 'gzip',
+    ];
 
     public const ACTION_CREATED = 'created';
     public const ACTION_LINKED = 'linked';
@@ -124,12 +153,19 @@ class RemoteMedia
      * and is the identity of the content: the trailing name is cosmetic, the same segment with
      * another name (or with no name at all) serves the same bytes.
      *
-     * Only those two shapes are recognized, deliberately. Reading the second-to-last path segment
-     * of *any* URL would index unrelated files under the same value (`/images/2024/photo.jpg`
-     * would give `2024`) and collapse them onto a single attachment.
+     * Only those two shapes, on an On Page® host (`onpage.it` or one of its subdomains), are
+     * recognized, deliberately. Reading a path segment of *any* URL would index unrelated files
+     * under the same value (`storage.googleapis.com/bucket/a.jpg` and `/bucket/b.jpg` would both
+     * give `bucket`) and collapse them onto a single attachment. Other URLs return null, so
+     * deduplication falls back to the exact source URL.
      */
     public static function tokenFromUrl(string $url): string|null
     {
+        $host = \wp_parse_url($url, \PHP_URL_HOST);
+        if (!is_string($host) || !self::isOnPageHost($host)) {
+            return null;
+        }
+
         $path = \wp_parse_url($url, \PHP_URL_PATH);
         if (!is_string($path) || $path === '') {
             return null;
@@ -140,24 +176,24 @@ class RemoteMedia
             static fn(string $segment): bool => $segment !== ''
         ));
 
-        if ($segments === []) {
+        // `storage.onpage.it` serves the segment straight off the path root.
+        if (strtolower($host) === self::ONPAGE_STORAGE_HOST) {
+            $segment = $segments[0] ?? '';
+        } elseif (($segments[0] ?? null) === 'api' && ($segments[1] ?? null) === 'storage') {
+            $segment = $segments[2] ?? '';
+        } else {
             return null;
         }
 
-        $storage_position = array_search('storage', $segments, true);
-        if ($storage_position !== false) {
-            $segment = $segments[$storage_position + 1] ?? '';
+        return $segment !== '' ? \rawurldecode($segment) : null;
+    }
 
-            return $segment !== '' ? \rawurldecode($segment) : null;
-        }
+    /** True when $host is On Page® (`onpage.it` or one of its subdomains). */
+    private static function isOnPageHost(string $host): bool
+    {
+        $host = strtolower(rtrim($host, '.'));
 
-        // A `storage.<domain>` host serves the segment straight off the path root.
-        $host = \wp_parse_url($url, \PHP_URL_HOST);
-        if (is_string($host) && \str_starts_with($host, 'storage.')) {
-            return \rawurldecode($segments[0]);
-        }
-
-        return null;
+        return $host === self::ONPAGE_DOMAIN || \str_ends_with($host, '.' . self::ONPAGE_DOMAIN);
     }
 
     /** True when $attachment_id refers to an existing Media Library attachment. */
@@ -240,7 +276,7 @@ class RemoteMedia
     /** Builds a consistent remote import failure. */
     private static function importFailed(string $field_key, string $message): \Throwable
     {
-        return httpException("Failed to import remote file for field '$field_key' :: $message", 500, 'request_failed');
+        return onpage_http_exception("Failed to import remote file for field '$field_key' :: $message", 500, 'request_failed');
     }
 
     /** Standard response payload for a remote media import or reuse. */
@@ -262,11 +298,17 @@ class RemoteMedia
         }
     }
 
-    /** Standard mime type for a filename extension from WordPress' full type map, or null. */
+    /**
+     * Standard mime type for a filename extension, or null when the extension may not be forced.
+     *
+     * Only extensions in FORCE_ALLOWED_EXTENSIONS are considered; their mime is looked up in
+     * core's full `wp_get_mime_types()` map. That map also contains types that would run on the
+     * site origin (`htm|html`, `js`, `class`...), which is why it is never used unfiltered.
+     */
     private static function standardMimeForFilename(string $filename): ?string
     {
         $ext = strtolower((string) pathinfo($filename, \PATHINFO_EXTENSION));
-        if ($ext === '') {
+        if ($ext === '' || !in_array($ext, self::FORCE_ALLOWED_EXTENSIONS, true)) {
             return null;
         }
 
@@ -290,10 +332,11 @@ class RemoteMedia
      * upload this file type." — and `unfiltered_upload` cannot rescue it because core maps
      * that capability to `do_not_allow` unless `ALLOW_UNFILTERED_UPLOADS` is defined.
      *
-     * Re-adding only the file's standard mime (looked up from core's full `wp_get_mime_types()`
-     * map, which never contains executable types) keeps core's real-byte mime verification
-     * intact while letting trusted imports through. The filter runs last (highest priority
-     * number) so it wins against restrictive `upload_mimes` hooks registered elsewhere.
+     * Only the file's standard mime is re-added, and only for the media and document extensions
+     * in FORCE_ALLOWED_EXTENSIONS: core's real-byte mime verification stays intact. Any other
+     * extension is left to WordPress' normal rules, which usually reject it. The filter runs last
+     * (highest priority number) so it wins against restrictive `upload_mimes` hooks registered
+     * elsewhere.
      */
     private static function withUploadableMime(string $filename, callable $sideload): mixed
     {
@@ -319,15 +362,18 @@ class RemoteMedia
         }
     }
 
-    /** Sideloads a file, temporarily allowing sanitized SVG uploads when needed. */
-    private static function sideloadFile(array $file_array, string $field_key): int|\WP_Error
+    /**
+     * Runs a sideload of a downloaded file under the plugin's upload rules.
+     *
+     * SVG files are sanitized in place first and temporarily allowed; any other file goes
+     * through withUploadableMime(). Used both for new imports and for `refresh` replacements, so
+     * a replaced SVG is never stored unsanitized.
+     */
+    private static function sideloadWithUploadRules(array $file_array, string $field_key, callable $sideload): mixed
     {
         $filename = isset($file_array['name']) && is_scalar($file_array['name']) ? (string) $file_array['name'] : '';
         if (!Svg::isFilename($filename)) {
-            return self::withUploadableMime(
-                $filename,
-                static fn (): int|\WP_Error => \media_handle_sideload($file_array, 0)
-            );
+            return self::withUploadableMime($filename, $sideload);
         }
 
         Svg::sanitizeFile((string) $file_array['tmp_name'], "Failed to import remote file for field '$field_key'");
@@ -354,11 +400,21 @@ class RemoteMedia
         \add_filter('wp_check_filetype_and_ext', $type_filter, 10, 3);
 
         try {
-            return \media_handle_sideload($file_array, 0);
+            return $sideload();
         } finally {
             \remove_filter('wp_check_filetype_and_ext', $type_filter, 10);
             \remove_filter('upload_mimes', $mime_filter);
         }
+    }
+
+    /** Sideloads a file into a new attachment, under the plugin's upload rules. */
+    private static function sideloadFile(array $file_array, string $field_key): int|\WP_Error
+    {
+        return self::sideloadWithUploadRules(
+            $file_array,
+            $field_key,
+            static fn (): int|\WP_Error => \media_handle_sideload($file_array, 0)
+        );
     }
 
     /** Uploads a downloaded file and guarantees temp-file cleanup on failed imports. */
@@ -390,7 +446,7 @@ class RemoteMedia
     {
         $temporary_file = \download_url($url, $timeout_seconds);
         if (\is_wp_error($temporary_file)) {
-            throw httpException(
+            throw onpage_http_exception(
                 "Failed to download remote file for field '$field_key' :: " . $temporary_file->get_error_message(),
                 500,
                 'request_failed'
@@ -408,10 +464,17 @@ class RemoteMedia
             'tmp_name' => $temporary_file,
         ];
 
-        $uploaded_file = self::withUploadableMime(
-            $remote_filename,
-            static fn (): array => \wp_handle_sideload($file_array, ['test_form' => false])
-        );
+        try {
+            $uploaded_file = self::sideloadWithUploadRules(
+                $file_array,
+                $field_key,
+                static fn (): array => \wp_handle_sideload($file_array, ['test_form' => false])
+            );
+        } catch (\Throwable $e) {
+            self::cleanupTemporaryFile($temporary_file);
+            throw $e;
+        }
+
         if (isset($uploaded_file['error'])) {
             self::cleanupTemporaryFile($temporary_file);
 
@@ -511,7 +574,7 @@ class RemoteMedia
         ], true);
 
         if (\is_wp_error($updated_attachment)) {
-            throw httpException("Failed to relink attachment $attachment_id", 500, 'request_failed');
+            throw onpage_http_exception("Failed to relink attachment $attachment_id", 500, 'request_failed');
         }
     }
 

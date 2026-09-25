@@ -48,6 +48,12 @@ class VariantProduct
         'image_id',
     ];
 
+    /**
+     * Status a variation had before the plugin made it private because its parent stopped
+     * offering one of its attribute values (see disableVariationsWithUnofferedAttributes()).
+     */
+    private const HELD_STATUS_META = '_onpage_held_status';
+
     /** Variable parent IDs whose aggregates must be resynced once at end of batch. */
     private static array $deferredParentSyncIds = [];
 
@@ -57,7 +63,7 @@ class VariantProduct
     private static function requireWooCommerce(): void
     {
         if (!\function_exists('wc_get_product') || !class_exists('\WC_Product_Variation')) {
-            throw httpException(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
         }
     }
 
@@ -65,14 +71,14 @@ class VariantProduct
     private static function normalizeStatus(mixed $value, int $element_index): string
     {
         if (!is_scalar($value) || trim((string) $value) === '') {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'status' must be a string", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'status' must be a string", 400, 'invalid_param');
         }
 
         $status = \sanitize_key((string) $value);
         $status = self::STATUS_ALIASES[$status] ?? $status;
 
         if (!in_array($status, self::SUPPORTED_STATUSES, true)) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'status' must be one of: publish, private, enabled, disabled, draft, pending",
                 400,
                 'invalid_param'
@@ -96,7 +102,7 @@ class VariantProduct
         }
 
         if (!is_array($params[$key]) || !self::isObjectArray($params[$key])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be an object", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be an object", 400, 'invalid_param');
         }
 
         return $params[$key];
@@ -133,7 +139,7 @@ class VariantProduct
         )));
 
         $fallback_language = $languages[0] ?? null;
-        $default_language = getWpmlDefaultLanguage() ?: $fallback_language;
+        $default_language = onpage_get_wpml_default_language() ?: $fallback_language;
 
         return [
             'default_language' => $default_language,
@@ -160,10 +166,10 @@ class VariantProduct
         MultiLang::requireWpmlForLanguageMap($value, self::ERROR_PREFIX, $element_index, 'attributes.' . $attribute_name);
 
         if (MultiLang::isLanguageMapShape($value)) {
-            $fallback_language = $fallback_language ?: getWpmlDefaultLanguage() ?: array_key_first($value);
+            $fallback_language = $fallback_language ?: onpage_get_wpml_default_language() ?: array_key_first($value);
             $resolved = MultiLang::resolve(
                 $value,
-                $language_code ?: getWpmlCurrentLanguage() ?: $fallback_language,
+                $language_code ?: onpage_get_wpml_current_language() ?: $fallback_language,
                 is_string($fallback_language) ? $fallback_language : null
             );
 
@@ -176,7 +182,7 @@ class VariantProduct
             return trim((string) $value);
         }
 
-        throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Variation attribute '$attribute_name' must resolve to one non-empty scalar option", 400, 'invalid_param');
+        throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Variation attribute '$attribute_name' must resolve to one non-empty scalar option", 400, 'invalid_param');
     }
 
     /** Finds all variation IDs by local_key meta. */
@@ -235,7 +241,7 @@ class VariantProduct
 
         $variation = \wc_get_product($variation_id);
         if (!$variation instanceof \WC_Product_Variation || \get_post_type($variation_id) !== self::VARIATION_POST_TYPE) {
-            throw httpException(self::ERROR_PREFIX . " :: Variation $variation_id not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Variation $variation_id not found", 404, 'not_found');
         }
 
         return $variation;
@@ -248,7 +254,7 @@ class VariantProduct
         $parent_key = Input::localKey($params['parent'] ?? null);
 
         if ($parent_id === null && $parent_key === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'parent_id' or 'parent' is required", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'parent_id' or 'parent' is required", 400, 'invalid_param');
         }
 
         $parent = $parent_id !== null
@@ -257,7 +263,7 @@ class VariantProduct
 
         if (!$parent instanceof \WC_Product_Variable || $parent->get_type() !== 'variable') {
             $parent_type = method_exists($parent, 'get_type') ? (string) $parent->get_type() : 'unknown';
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parent product must be a variable product; current type is '$parent_type'", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parent product must be a variable product; current type is '$parent_type'", 400, 'invalid_param');
         }
 
         if ($parent_id !== null && $parent_key !== null) {
@@ -268,7 +274,7 @@ class VariantProduct
             $group_parent_ids = self::getAllowedParentIdsForLocalKey($resolved_parent_id);
 
             if (!in_array((int) $parent->get_id(), $group_parent_ids, true)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: parent_id and parent refer to different products", 409, 'parent_mismatch');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: parent_id and parent refer to different products", 409, 'parent_mismatch');
             }
         }
 
@@ -281,7 +287,7 @@ class VariantProduct
         $parent = Product::requireProductById($parent_id);
         if (!$parent instanceof \WC_Product_Variable || $parent->get_type() !== 'variable') {
             $parent_type = method_exists($parent, 'get_type') ? (string) $parent->get_type() : 'unknown';
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parent product must be a variable product; current type is '$parent_type'", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parent product must be a variable product; current type is '$parent_type'", 400, 'invalid_param');
         }
 
         return $parent;
@@ -290,7 +296,7 @@ class VariantProduct
     /** WPML language details object for a parent product. */
     private static function getProductLanguageDetails(int $product_id): mixed
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         return \apply_filters('wpml_element_language_details', null, [
             'element_id' => $product_id,
@@ -301,7 +307,7 @@ class VariantProduct
     /** Returns WPML trid for a parent product, when available. */
     private static function getProductTrid(int $product_id): int|null
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         if (\function_exists('wpml_get_content_trid')) {
             $trid = \wpml_get_content_trid(self::PRODUCT_POST_TYPE, $product_id);
@@ -316,7 +322,7 @@ class VariantProduct
     /** Returns WPML translations map for a parent product translation group. */
     private static function getProductTranslations(int $trid): array
     {
-        if (!isWpmlActive()) return [];
+        if (!onpage_is_wpml_active()) return [];
 
         $translations = \apply_filters(
             'wpml_get_element_translations',
@@ -336,7 +342,7 @@ class VariantProduct
         ?string $current_language = null,
         ?int $trid = null
     ): array {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return $current_language ? [$current_language => $product_id] : [];
         }
 
@@ -347,7 +353,7 @@ class VariantProduct
             if (is_array($translations)) {
                 foreach ($translations as $lang => $translation) {
                     $translated_product_id = isset($translation->element_id) ? (int) $translation->element_id : 0;
-                    if (postExists($translated_product_id)) {
+                    if (onpage_post_exists($translated_product_id)) {
                         $translation_ids[(string) $lang] = $translated_product_id;
                     }
                 }
@@ -357,7 +363,7 @@ class VariantProduct
         if ($trid) {
             foreach (self::getProductTranslations($trid) as $lang => $translation) {
                 $translated_product_id = isset($translation->element_id) ? (int) $translation->element_id : 0;
-                if (postExists($translated_product_id)) {
+                if (onpage_post_exists($translated_product_id)) {
                     $translation_ids[(string) $lang] = $translated_product_id;
                 }
             }
@@ -373,7 +379,7 @@ class VariantProduct
     /** WPML language details object for a variation. */
     private static function getVariationLanguageDetails(int $variation_id): mixed
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         return \apply_filters('wpml_element_language_details', null, [
             'element_id' => $variation_id,
@@ -384,7 +390,7 @@ class VariantProduct
     /** Returns WPML translations map for a variation translation group. */
     private static function getVariationTranslations(int $trid): array
     {
-        if (!isWpmlActive()) return [];
+        if (!onpage_is_wpml_active()) return [];
 
         $translations = \apply_filters(
             'wpml_get_element_translations',
@@ -410,7 +416,7 @@ class VariantProduct
         }
 
         if (!$trid) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Unable to resolve variation translation group (trid)", 500, 'wpml_error');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Unable to resolve variation translation group (trid)", 500, 'wpml_error');
         }
 
         return $trid;
@@ -419,7 +425,7 @@ class VariantProduct
     /** Sets WPML element language details for a variation. */
     private static function setVariationLanguage(int $variation_id, string $lang, int|false $trid = false, ?string $source_lang = null): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         \do_action('wpml_set_element_language_details', [
             'element_id' => $variation_id,
@@ -530,7 +536,7 @@ class VariantProduct
         self::requireWooCommerce();
 
         if ($params !== [] && array_is_list($params)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Variant payload must be an object", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Variant payload must be an object", 400, 'invalid_param');
         }
 
         if (array_key_exists('image', $params)) {
@@ -548,7 +554,7 @@ class VariantProduct
         $language = self::getLanguageContext($params);
         self::requireWpmlForTranslations($language['translated_languages'], $element_index);
 
-        if (isWpmlActive() && $language['translated_languages'] !== []) {
+        if (onpage_is_wpml_active() && $language['translated_languages'] !== []) {
             return self::saveTranslatedFromParams($params, $local_key, $parent, $language, $element_index);
         }
 
@@ -661,7 +667,10 @@ class VariantProduct
     ): int {
         $parent_id = (int) $parent->get_id();
 
-        if ($variation_id === null) {
+        // `id` names the source-language variation: a translation that does not exist yet must
+        // be created below its own parent, not resolved to the source (which would fail with
+        // duplicate_local_key because the source sits under another parent).
+        if ($variation_id === null && !$is_translation) {
             $variation_id = Input::positiveInt($params['id'] ?? null);
         }
         if ($variation_id === null) {
@@ -673,7 +682,7 @@ class VariantProduct
             : new \WC_Product_Variation();
 
         if ($variation_id !== null && (int) $variation->get_parent_id() !== $parent_id) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists for another parent product", 409, 'duplicate_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists for another parent product", 409, 'duplicate_local_key');
         }
 
         if ($allowed_parent_ids === []) {
@@ -697,11 +706,15 @@ class VariantProduct
             try {
                 self::applyFields($variation, $params, $element_index, $language_code, $fallback_language, $is_translation);
                 self::applyAttributes($variation, $parent, $params, $element_index, $variation_id === null, $language_code, $fallback_language);
+                if (array_key_exists('attributes', $params)) {
+                    self::assertAttributeCombinationAvailable($variation, $parent, $variation_id, $element_index);
+                }
+                self::applyHeldStatus($variation, $parent, $params);
                 $saved_id = (int) $variation->save();
             } catch (\OnPage\Exceptions\HttpException $e) {
                 throw $e;
             } catch (\Throwable $e) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Failed to save variation :: " . $e->getMessage(), 500, 'request_failed');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to save variation :: " . $e->getMessage(), 500, 'request_failed');
             }
 
             \update_post_meta($saved_id, self::LOCAL_KEY_META, $local_key);
@@ -722,7 +735,7 @@ class VariantProduct
     /** Returns the parent product IDs that may share translated variations with the same local_key. */
     private static function getAllowedParentIdsForLocalKey(int $parent_id): array
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return [$parent_id];
         }
 
@@ -757,14 +770,14 @@ class VariantProduct
 
             $existing_parent_id = (int) \wp_get_post_parent_id((int) $existing_variation_id);
             if ($existing_parent_id === $parent_id) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists", 409, 'duplicate_local_key');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists", 409, 'duplicate_local_key');
             }
 
             if (in_array($existing_parent_id, $allowed_parent_ids, true)) {
                 continue;
             }
 
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists for another parent product", 409, 'duplicate_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists for another parent product", 409, 'duplicate_local_key');
         }
     }
 
@@ -785,7 +798,7 @@ class VariantProduct
         if (array_key_exists('name', $params)) {
             $name = self::resolveValue($params['name'], $language_code, $fallback_language);
             if ($name !== null && !is_scalar($name)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' must resolve to a string or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' must resolve to a string or null", 400, 'invalid_param');
             }
 
             if (is_scalar($name) && trim((string) $name) !== '') {
@@ -799,7 +812,7 @@ class VariantProduct
         if ($description_key !== null) {
             $description = self::resolveValue($params[$description_key], $language_code, $fallback_language);
             if ($description !== null && !is_scalar($description)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$description_key' must resolve to a string or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$description_key' must resolve to a string or null", 400, 'invalid_param');
             }
 
             $variation->set_description($description === null ? '' : (string) $description);
@@ -865,7 +878,7 @@ class VariantProduct
 
         if (is_int($image)) {
             if (!RemoteMedia::isAttachmentId($image)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
             }
 
             RemoteMedia::linkMediaToPost($image, $variation_id);
@@ -875,12 +888,12 @@ class VariantProduct
         }
 
         if (!is_string($image)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must resolve to an attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must resolve to an attachment ID, a valid remote URL, or null", 400, 'invalid_param');
         }
 
         $url = RemoteMedia::sanitizeUrl($image);
         if ($url === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be a valid remote URL or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be a valid remote URL or null", 400, 'invalid_param');
         }
 
         $import_result = RemoteMedia::urlToPost($url, $variation_id, 'image');
@@ -900,7 +913,7 @@ class VariantProduct
     ): void {
         if (!array_key_exists('attributes', $params)) {
             if ($creating) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'attributes' is required when creating a variant", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'attributes' is required when creating a variant", 400, 'invalid_param');
             }
 
             return;
@@ -908,7 +921,7 @@ class VariantProduct
 
         $payload = self::optionalObjectParam($params, 'attributes', $element_index) ?? [];
         if ($payload === []) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'attributes' must not be empty", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'attributes' must not be empty", 400, 'invalid_param');
         }
 
         $parent_attributes = self::getParentVariationAttributes($parent);
@@ -925,7 +938,7 @@ class VariantProduct
 
             $attribute_key = self::normalizeAttributeKey((string) $attribute_name);
             if (!isset($parent_attributes[$attribute_key])) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' is not configured as a variation attribute on the parent product", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' is not configured as a variation attribute on the parent product", 400, 'invalid_param');
             }
 
             $attributes[$attribute_key] = self::resolveVariationAttributeValue(
@@ -937,6 +950,260 @@ class VariantProduct
         }
 
         $variation->set_attributes($attributes);
+    }
+
+    /**
+     * Rejects a variation whose attribute combination another variation of the parent already has.
+     *
+     * WooCommerce matches the customer's choice to the first variation with that combination, so
+     * a second one (under another local_key) could never be bought. Attributes the parent offers
+     * but the variation leaves unset count as "any" (empty string), as WooCommerce stores them.
+     */
+    private static function assertAttributeCombinationAvailable(
+        \WC_Product_Variation $variation,
+        \WC_Product_Variable $parent,
+        ?int $variation_id,
+        int $element_index
+    ): void {
+        $parent_id = (int) $parent->get_id();
+        $attribute_keys = array_keys(self::getParentVariationAttributes($parent));
+        $combination = self::buildAttributeCombination($variation->get_attributes(), $attribute_keys);
+
+        $sibling_ids = \get_posts([
+            'post_type' => self::VARIATION_POST_TYPE,
+            'post_status' => 'any',
+            'post_parent' => $parent_id,
+            'fields' => 'ids',
+            'numberposts' => -1,
+        ]);
+        $sibling_ids = is_array($sibling_ids) ? array_map('intval', $sibling_ids) : [];
+        $sibling_ids = array_values(array_filter(
+            $sibling_ids,
+            static fn(int $sibling_id): bool => $sibling_id !== (int) $variation_id
+        ));
+        if ($sibling_ids === []) {
+            return;
+        }
+
+        \update_meta_cache('post', $sibling_ids);
+
+        foreach ($sibling_ids as $sibling_id) {
+            $sibling_attributes = [];
+            foreach ($attribute_keys as $attribute_key) {
+                $sibling_attributes[$attribute_key] = \get_post_meta($sibling_id, 'attribute_' . $attribute_key, true);
+            }
+
+            if (self::buildAttributeCombination($sibling_attributes, $attribute_keys) !== $combination) {
+                continue;
+            }
+
+            $described = implode(', ', array_map(
+                static fn(string $key, string $value): string => $key . '=' . ($value !== '' ? $value : '(any)'),
+                array_keys($combination),
+                $combination
+            ));
+
+            throw onpage_http_exception(
+                self::ERROR_PREFIX . " :: Element $element_index :: Parent product $parent_id already has variation $sibling_id with attributes [$described]",
+                409,
+                'duplicate_variation'
+            );
+        }
+    }
+
+    /**
+     * Comparable attribute combination: one lowercase value per parent variation attribute.
+     *
+     * @param array<string, mixed> $attributes
+     * @param string[] $attribute_keys
+     * @return array<string, string>
+     */
+    private static function buildAttributeCombination(array $attributes, array $attribute_keys): array
+    {
+        $normalized = [];
+        foreach ($attributes as $key => $value) {
+            $normalized[self::normalizeAttributeKey((string) $key)] = is_scalar($value) ? (string) $value : '';
+        }
+
+        $combination = [];
+        foreach ($attribute_keys as $attribute_key) {
+            $combination[$attribute_key] = strtolower(trim($normalized[$attribute_key] ?? ''));
+        }
+
+        return $combination;
+    }
+
+    /**
+     * Whether a variation uses an attribute value its parent no longer offers.
+     *
+     * That happens when a product save removes an option (or a whole variation attribute) that
+     * existing variations still use. An empty value means "any" and is always offered. A parent
+     * attribute with no options accepts any value, as in resolveVariationAttributeValue().
+     */
+    private static function hasUnofferedAttributes(\WC_Product_Variation $variation, \WC_Product_Variable $parent): bool
+    {
+        $parent_attributes = self::getParentVariationAttributes($parent);
+
+        foreach ($variation->get_attributes() as $key => $value) {
+            $value = is_scalar($value) ? trim((string) $value) : '';
+            if ($value === '') {
+                continue;
+            }
+
+            $attribute = $parent_attributes[self::normalizeAttributeKey((string) $key)] ?? null;
+            if ($attribute === null) {
+                return true;
+            }
+
+            $offered = self::getOfferedAttributeValues($attribute);
+            // Older WooCommerce versions stored custom values as slugs: accept either form.
+            if (
+                $offered !== []
+                && !in_array(strtolower($value), $offered, true)
+                && !in_array(\sanitize_title($value), $offered, true)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Lowercase values a parent attribute offers to variations: term slugs for a global
+     * attribute, option texts (and their slugs) for a custom one.
+     *
+     * @return string[]
+     */
+    private static function getOfferedAttributeValues(\WC_Product_Attribute $attribute): array
+    {
+        if ($attribute->is_taxonomy()) {
+            $values = [];
+            foreach ($attribute->get_options() as $term_id) {
+                $term = \get_term((int) $term_id, $attribute->get_name());
+                if ($term instanceof \WP_Term) {
+                    $values[] = strtolower((string) $term->slug);
+                }
+            }
+
+            return $values;
+        }
+
+        $values = [];
+        foreach ($attribute->get_options() as $option) {
+            $values[] = strtolower(trim((string) $option));
+            $values[] = \sanitize_title((string) $option);
+        }
+
+        return array_values(array_unique($values));
+    }
+
+    /**
+     * Keeps a variation private while it uses an attribute value its parent no longer offers.
+     *
+     * The status it would otherwise have (the payload `status`, or the one it had before the
+     * plugin disabled it) is held in HELD_STATUS_META. Once the variation's attributes are all
+     * offered again, that status is put back and the held value is dropped.
+     */
+    private static function applyHeldStatus(\WC_Product_Variation $variation, \WC_Product_Variable $parent, array $params): void
+    {
+        $variation_id = (int) $variation->get_id();
+        $held_status = $variation_id > 0 ? \get_post_meta($variation_id, self::HELD_STATUS_META, true) : '';
+        $held_status = is_string($held_status) ? $held_status : '';
+
+        if (self::hasUnofferedAttributes($variation, $parent)) {
+            if ($variation_id <= 0) {
+                return;
+            }
+
+            // The status this save asked for (or the current one) is what must come back later.
+            $wanted_status = array_key_exists('status', $params) || $held_status === ''
+                ? (string) $variation->get_status()
+                : $held_status;
+            if ($wanted_status === 'private') {
+                \delete_post_meta($variation_id, self::HELD_STATUS_META);
+
+                return;
+            }
+
+            \update_post_meta($variation_id, self::HELD_STATUS_META, $wanted_status);
+            $variation->set_status('private');
+
+            return;
+        }
+
+        if ($held_status === '') {
+            return;
+        }
+
+        if (!array_key_exists('status', $params)) {
+            $variation->set_status($held_status);
+        }
+
+        \delete_post_meta($variation_id, self::HELD_STATUS_META);
+    }
+
+    /**
+     * Makes private the plugin-managed variations of $parent that use an attribute value the
+     * parent no longer offers (non-destructive: nothing is deleted, the previous status is held
+     * in HELD_STATUS_META and restored by the next variation save with valid attributes).
+     *
+     * Called after a product save that sent `attributes`. WooCommerce itself leaves such
+     * variations published: they no longer show in the product page selectors but can still be
+     * reached (and bought) through direct links, carts and feeds.
+     */
+    public static function disableVariationsWithUnofferedAttributes(\WC_Product_Variable $parent, int $element_index): void
+    {
+        $parent_id = (int) $parent->get_id();
+        if ($parent_id <= 0) {
+            return;
+        }
+
+        $variation_ids = \get_posts([
+            'post_type' => self::VARIATION_POST_TYPE,
+            'post_status' => 'any',
+            'post_parent' => $parent_id,
+            'fields' => 'ids',
+            'numberposts' => -1,
+            'meta_query' => [[
+                'key' => self::LOCAL_KEY_META,
+                'compare' => 'EXISTS',
+            ]],
+        ]);
+
+        $changed = false;
+        foreach (is_array($variation_ids) ? $variation_ids : [] as $variation_id) {
+            $variation = \wc_get_product((int) $variation_id);
+            if (!$variation instanceof \WC_Product_Variation || $variation->get_status() === 'private') {
+                continue;
+            }
+
+            if (!self::hasUnofferedAttributes($variation, $parent)) {
+                continue;
+            }
+
+            try {
+                \update_post_meta((int) $variation_id, self::HELD_STATUS_META, (string) $variation->get_status());
+                $variation->set_status('private');
+                $variation->save();
+                $changed = true;
+            } catch (\Throwable $e) {
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to disable variation $variation_id :: " . $e->getMessage(), 500, 'request_failed');
+            }
+        }
+
+        // The product endpoints do not flush the deferred parent syncs, so resync right away:
+        // the parent's price range and stock must stop counting the disabled variations.
+        if ($changed) {
+            try {
+                \WC_Product_Variable::sync($parent_id);
+                if (\function_exists('wc_delete_product_transients')) {
+                    \wc_delete_product_transients($parent_id);
+                }
+            } catch (\Throwable $e) {
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to sync parent product $parent_id :: " . $e->getMessage(), 500, 'request_failed');
+            }
+        }
     }
 
     /**
@@ -980,7 +1247,7 @@ class VariantProduct
         }
 
         if ($failures !== []) {
-            throw httpException(self::ERROR_PREFIX . ' :: Failed to sync parent product(s) :: ' . implode('; ', $failures), 500, 'request_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: Failed to sync parent product(s) :: ' . implode('; ', $failures), 500, 'request_failed');
         }
     }
 
@@ -1028,12 +1295,12 @@ class VariantProduct
             }
 
             if (!$term || \is_wp_error($term)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' was not found", 404, 'not_found');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' was not found", 404, 'not_found');
             }
 
             $allowed_term_ids = array_map('intval', $attribute->get_options());
             if ($allowed_term_ids !== [] && !in_array((int) $term->term_id, $allowed_term_ids, true)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' is not enabled on the parent product", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' is not enabled on the parent product", 400, 'invalid_param');
             }
 
             return (string) $term->slug;
@@ -1041,7 +1308,7 @@ class VariantProduct
 
         $options = array_map('strval', $attribute->get_options());
         if ($options !== [] && !in_array($value, $options, true)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' is not enabled on the parent product", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' is not enabled on the parent product", 400, 'invalid_param');
         }
 
         return $value;
@@ -1062,7 +1329,7 @@ class VariantProduct
 
         $deleted = $variation->delete(true);
         if (!$deleted) {
-            throw httpException(self::ERROR_PREFIX . " :: Failed to delete variation $variation_id", 500, 'delete_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to delete variation $variation_id", 500, 'delete_failed');
         }
     }
 
@@ -1080,7 +1347,7 @@ class VariantProduct
         if ($variation_ids === []) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . " :: Variation with local_key '$local_key' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Variation with local_key '$local_key' not found", 404, 'not_found');
         }
 
         // Missing IDs are tolerated inside the loop: deleting a variation can cascade to

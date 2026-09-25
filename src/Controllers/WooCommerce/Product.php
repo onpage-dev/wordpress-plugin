@@ -28,17 +28,14 @@ class Product
         Acf::loadFieldTypeMap(['post']);
 
         $ids = [];
+        $body = Input::requireJsonList($request, 'WooCommerce Product');
 
         // Batch term recounts: each category/tag/brand assignment would otherwise
         // recount its terms immediately. Re-enabling triggers a single recount.
         \wp_defer_term_counting(true);
         try {
-            foreach ($request->get_json_params() as $i => $params) {
-                if (!is_array($params)) {
-                    throw httpException("WooCommerce Product :: Element $i :: Product payload must be an object", 400, 'invalid_param');
-                }
-
-                $ids[] = WooCommerceProduct::save($params, $i);
+            foreach ($body as $i => $params) {
+                $ids[] = WooCommerceProduct::save(Input::requireObjectElement($params, 'WooCommerce Product', $i), $i);
             }
         } finally {
             \wp_defer_term_counting(false);
@@ -50,16 +47,16 @@ class Product
     /** REST: deletes WooCommerce products by local_key; optional `ignore` query. */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $i => $value) {
+        foreach (Input::requireJsonList($request, 'WooCommerce Product') as $i => $value) {
             $local_key = Input::localKey($value);
             if ($local_key !== null) {
                 WooCommerceProduct::deleteByLocalKey($local_key, $ignore_missing);
                 continue;
             }
 
-            throw httpException("WooCommerce Product :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
+            throw onpage_http_exception("WooCommerce Product :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
         }
 
         return new \WP_REST_Response(null, 200);

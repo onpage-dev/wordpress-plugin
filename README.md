@@ -17,7 +17,8 @@ Current version: **1.0.0**. The project follows [Semantic Versioning](https://se
 
 - Changes in each version: [CHANGELOG.md](CHANGELOG.md)
 - How to cut a release: [RELEASE.md](RELEASE.md)
-- Published versions: [GitHub Releases](https://github.com/onpage-dev/wordpress-plugin/releases)
+- Published versions: [GitHub Releases](https://github.com/onpage-dev/wordpress-plugin/releases).
+  To install, upload the `onpage-X.Y.Z.zip` attached to a release under **Plugins** in WordPress.
 
 ## Requirements
 

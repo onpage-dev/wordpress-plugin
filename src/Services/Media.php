@@ -13,6 +13,9 @@ class Media
     private const ACTION_LINKED = 'linked';
     private const ACTION_CLEARED = 'cleared';
 
+    /** Cached SHA-256 of the attachment file, with the path/size/mtime it was computed for. */
+    public const FILE_HASH_META = '_onpage_file_hash';
+
 
 
     /** Loads WordPress admin media helpers used by upload and sideload flows. */
@@ -39,16 +42,16 @@ class Media
     private static function requirePostId(mixed $value, string $param_name = 'post_id'): int
     {
         if (!is_scalar($value) || !is_numeric((string) $value)) {
-            throw httpException("Media :: Parameter '$param_name' must be a positive integer", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter '$param_name' must be a positive integer", 400, 'invalid_param');
         }
 
         $post_id = (int) $value;
         if ($post_id < 1) {
-            throw httpException("Media :: Parameter '$param_name' must be a positive integer", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter '$param_name' must be a positive integer", 400, 'invalid_param');
         }
 
         if (!\get_post($post_id)) {
-            throw httpException("Media :: Post $post_id not found", 404, 'not_found');
+            throw onpage_http_exception("Media :: Post $post_id not found", 404, 'not_found');
         }
 
         return $post_id;
@@ -79,16 +82,50 @@ class Media
         return $result;
     }
 
-    /** SHA-256 checksum of the attachment's physical file, or null if the file is missing/unreadable. */
-    private static function hashAttachmentFile(string $file_path): ?string
+    /**
+     * SHA-256 checksum of the attachment's physical file, or null if the file is missing/unreadable.
+     *
+     * Hashing every file on every GET /media page is expensive, so the checksum is cached in
+     * attachment meta together with the path, size and mtime it was computed for. Any change to
+     * one of them (a replaced or edited file) makes the cache stale and the file is hashed again.
+     */
+    private static function hashAttachmentFile(int $attachment_id, string $file_path): ?string
     {
         if ($file_path === '' || !\is_file($file_path)) {
             return null;
         }
 
-        $hash = \hash_file('sha256', $file_path);
+        $size = @\filesize($file_path);
+        $mtime = @\filemtime($file_path);
+        $fingerprint = [
+            'file' => $file_path,
+            'size' => $size !== false ? (int) $size : null,
+            'mtime' => $mtime !== false ? (int) $mtime : null,
+        ];
 
-        return $hash !== false ? $hash : null;
+        $cached = \get_post_meta($attachment_id, self::FILE_HASH_META, true);
+        if (
+            is_array($cached) &&
+            is_string($cached['hash'] ?? null) &&
+            ($cached['file'] ?? null) === $fingerprint['file'] &&
+            ($cached['size'] ?? null) === $fingerprint['size'] &&
+            ($cached['mtime'] ?? null) === $fingerprint['mtime'] &&
+            $fingerprint['size'] !== null &&
+            $fingerprint['mtime'] !== null
+        ) {
+            return $cached['hash'];
+        }
+
+        $hash = \hash_file('sha256', $file_path);
+        if ($hash === false) {
+            return null;
+        }
+
+        if ($fingerprint['size'] !== null && $fingerprint['mtime'] !== null) {
+            \update_post_meta($attachment_id, self::FILE_HASH_META, $fingerprint + ['hash' => $hash]);
+        }
+
+        return $hash;
     }
 
     /** Non-empty post meta value as a string, or null when absent. */
@@ -110,7 +147,7 @@ class Media
             'url' => \wp_get_attachment_url($attachment->ID),
             'mime_type' => $attachment->post_mime_type,
             'post_id' => (int) $attachment->post_parent,
-            'hash' => self::hashAttachmentFile($file_path),
+            'hash' => self::hashAttachmentFile($attachment->ID, $file_path),
             'token' => self::getMetaString($attachment->ID, RemoteMedia::TOKEN_META),
             'source_url' => self::getMetaString($attachment->ID, RemoteMedia::SOURCE_URL_META),
         ];
@@ -177,7 +214,7 @@ class Media
 
         if (is_int($value)) {
             if (!RemoteMedia::isAttachmentId($value)) {
-                throw httpException("Media :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'invalid_param');
+                throw onpage_http_exception("Media :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'invalid_param');
             }
 
             RemoteMedia::linkMediaToPost($value, $post_id);
@@ -188,7 +225,7 @@ class Media
 
         $url = RemoteMedia::sanitizeUrl($value);
         if ($url === null) {
-            throw httpException("Media :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'invalid_param');
         }
 
         $import_result = RemoteMedia::urlToField($url, $post_id, $field_key);
@@ -304,7 +341,7 @@ class Media
         $error_code = isset($file['error']) ? (int) $file['error'] : \UPLOAD_ERR_NO_FILE;
 
         if ($error_code !== \UPLOAD_ERR_OK) {
-            throw httpException(
+            throw onpage_http_exception(
                 "Media :: Element $element_index :: Failed to upload file '$filename' :: " . self::getUploadErrorMessage($error_code),
                 400,
                 'upload_failed'
@@ -337,7 +374,7 @@ class Media
     {
         $attachment_id = self::normalizeAttachmentId($value);
         if ($attachment_id === null) {
-            throw httpException($message, 400, 'invalid_param');
+            throw onpage_http_exception($message, 400, 'invalid_param');
         }
 
         return $attachment_id;
@@ -357,7 +394,7 @@ class Media
         $attachment = \get_post($attachment_id);
 
         if (!$attachment instanceof \WP_Post || $attachment->post_type !== 'attachment') {
-            throw httpException("Media :: $context :: Attachment $attachment_id not found", 404, 'not_found');
+            throw onpage_http_exception("Media :: $context :: Attachment $attachment_id not found", 404, 'not_found');
         }
 
         return $attachment;
@@ -374,7 +411,7 @@ class Media
         }
 
         if (!is_array($attachment_ids_param)) {
-            throw httpException("Media :: Parameter 'attachment_ids' must be an array", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter 'attachment_ids' must be an array", 400, 'invalid_param');
         }
 
         return $attachment_ids_param;
@@ -384,7 +421,7 @@ class Media
     private static function resolveSingleReplacementAttachmentId(mixed $attachment_id_param, int $file_count): array
     {
         if ($file_count !== 1) {
-            throw httpException("Media :: Parameter 'attachment_id' can only be used with a single uploaded file", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter 'attachment_id' can only be used with a single uploaded file", 400, 'invalid_param');
         }
 
         return [
@@ -435,7 +472,7 @@ class Media
         $has_attachment_ids = self::hasParamValue($attachment_ids_param);
 
         if ($has_single_attachment_id && $has_attachment_ids) {
-            throw httpException("Media :: Use either 'attachment_id' or 'attachment_ids', not both", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Use either 'attachment_id' or 'attachment_ids', not both", 400, 'invalid_param');
         }
 
         if ($has_single_attachment_id) {
@@ -454,7 +491,7 @@ class Media
     {
         $token = Input::stringOrNull($value);
         if ($token === null) {
-            throw httpException($message, 400, 'invalid_param');
+            throw onpage_http_exception($message, 400, 'invalid_param');
         }
 
         return $token;
@@ -471,7 +508,7 @@ class Media
         }
 
         if (!is_array($tokens_param)) {
-            throw httpException("Media :: Parameter 'tokens' must be an array", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter 'tokens' must be an array", 400, 'invalid_param');
         }
 
         return $tokens_param;
@@ -481,7 +518,7 @@ class Media
     private static function resolveSingleToken(mixed $token_param, int $file_count): array
     {
         if ($file_count !== 1) {
-            throw httpException("Media :: Parameter 'token' can only be used with a single uploaded file", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter 'token' can only be used with a single uploaded file", 400, 'invalid_param');
         }
 
         return [
@@ -535,7 +572,7 @@ class Media
         $has_tokens = self::hasParamValue($tokens_param);
 
         if ($has_single_token && $has_tokens) {
-            throw httpException("Media :: Use either 'token' or 'tokens', not both", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Use either 'token' or 'tokens', not both", 400, 'invalid_param');
         }
 
         if ($has_single_token) {
@@ -587,9 +624,14 @@ class Media
     /** Moves one uploaded file into WordPress uploads. */
     private static function handleUpload(array $file, int $element_index, string $filename, string $operation): array
     {
+        // WordPress rejects SVG by default; when another plugin allows it, never store it unsanitized.
+        if (Svg::isFilename($filename) && isset($file['tmp_name']) && is_string($file['tmp_name'])) {
+            Svg::sanitizeFile($file['tmp_name'], "Media :: Element $element_index :: Failed to $operation file '$filename'");
+        }
+
         $uploaded_file = \wp_handle_upload($file, ['test_form' => false]);
         if (!empty($uploaded_file['error'])) {
-            throw httpException(
+            throw onpage_http_exception(
                 "Media :: Element $element_index :: Failed to $operation file '$filename' :: {$uploaded_file['error']}",
                 500,
                 'upload_failed'
@@ -611,7 +653,7 @@ class Media
         ], $uploaded_file['file'], $post_id);
 
         if (\is_wp_error($attachment_id)) {
-            throw httpException(
+            throw onpage_http_exception(
                 "Media :: Element $element_index :: Failed to create attachment for file '$filename' :: " . $attachment_id->get_error_message(),
                 500,
                 'request_failed'
@@ -631,7 +673,7 @@ class Media
     private static function updateAttachmentRecord(int $attachment_id, array $uploaded_file, string $filename, int $post_id, int $element_index, string $existing_mime_type, ?string $token = null): void
     {
         if (!\update_attached_file($attachment_id, $uploaded_file['file'])) {
-            throw httpException("Media :: Element $element_index :: Failed to update attachment file for attachment $attachment_id", 500, 'request_failed');
+            throw onpage_http_exception("Media :: Element $element_index :: Failed to update attachment file for attachment $attachment_id", 500, 'request_failed');
         }
 
         $updated_attachment = \wp_update_post([
@@ -642,7 +684,7 @@ class Media
         ], true);
 
         if (\is_wp_error($updated_attachment)) {
-            throw httpException(
+            throw onpage_http_exception(
                 "Media :: Element $element_index :: Failed to update attachment $attachment_id :: " . $updated_attachment->get_error_message(),
                 500,
                 'request_failed'
@@ -789,31 +831,19 @@ class Media
         return $uploaded;
     }
 
-    /** Validates the JSON body for media deletion. */
-    private static function resolveDeletePayload(\WP_REST_Request $request): array
-    {
-        $payload = $request->get_json_params();
-
-        if (!is_array($payload) || $payload === []) {
-            throw httpException('Media :: Request body must be a non-empty JSON array of attachment IDs', 400, 'invalid_param');
-        }
-
-        return $payload;
-    }
-
     /** Validates the JSON body for remote media linking. */
     private static function resolveLinkPayload(\WP_REST_Request $request): array
     {
         $payload = $request->get_json_params();
         if (!is_array($payload)) {
-            throw httpException('Media :: Request body must be a JSON object', 400, 'invalid_param');
+            throw onpage_http_exception('Media :: Request body must be a JSON object', 400, 'invalid_param');
         }
 
         $resolved_post_id = self::requirePostId($payload['post_id'] ?? null);
 
         $files = $payload['files'] ?? null;
         if (!is_array($files) || $files === []) {
-            throw httpException("Media :: Parameter 'files' must be a non-empty object", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter 'files' must be a non-empty object", 400, 'invalid_param');
         }
 
         return [
@@ -842,12 +872,12 @@ class Media
                 return;
             }
 
-            throw httpException("Media :: Element $element_index :: Attachment $attachment_id not found", 404, 'not_found');
+            throw onpage_http_exception("Media :: Element $element_index :: Attachment $attachment_id not found", 404, 'not_found');
         }
 
         // wp_delete_attachment() deletes every postmeta row of the attachment, index meta included.
         if (!\wp_delete_attachment($attachment_id, true)) {
-            throw httpException("Media :: Element $element_index :: Failed to delete attachment $attachment_id", 500, 'delete_failed');
+            throw onpage_http_exception("Media :: Element $element_index :: Failed to delete attachment $attachment_id", 500, 'delete_failed');
         }
     }
 
@@ -875,7 +905,7 @@ class Media
         }
 
         if ($tokens === []) {
-            throw httpException("Media :: Parameter 'token' must contain at least one non-empty value", 400, 'invalid_param');
+            throw onpage_http_exception("Media :: Parameter 'token' must contain at least one non-empty value", 400, 'invalid_param');
         }
 
         return array_values($tokens);
@@ -931,7 +961,7 @@ class Media
         // WP_Query (rather than get_posts()) so `found_posts` is available for X-WP-Total/X-WP-TotalPages.
         $query = new \WP_Query($args);
         if (!is_array($query->posts)) {
-            throw httpException('Media :: Failed to list media', 500, 'request_failed');
+            throw onpage_http_exception('Media :: Failed to list media', 500, 'request_failed');
         }
 
         return [
@@ -950,7 +980,7 @@ class Media
 
         $files = self::normalizeFiles($request->get_file_params());
         if ($files === []) {
-            throw httpException('Media :: No uploaded files found in request', 400, 'invalid_param');
+            throw onpage_http_exception('Media :: No uploaded files found in request', 400, 'invalid_param');
         }
 
         $replacement_attachment_ids = self::resolveReplacementAttachmentIds($request, count($files));
@@ -962,13 +992,14 @@ class Media
     /** Handles the DELETE /media endpoint. */
     public static function deleteFromRequest(\WP_REST_Request $request): void
     {
-        $ignore_missing = shouldIgnoreMissing($request);
-        $payload = self::resolveDeletePayload($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
+        // Same body rule as every other batch DELETE: a JSON array, where `[]` is a no-op.
+        $payload = Input::requireJsonList($request, 'Media');
 
         foreach ($payload as $i => $value) {
             $attachment_id = self::normalizeAttachmentId($value);
             if ($attachment_id === null) {
-                throw httpException("Media :: Element $i :: Attachment ID must be a positive integer", 400, 'invalid_param');
+                throw onpage_http_exception("Media :: Element $i :: Attachment ID must be a positive integer", 400, 'invalid_param');
             }
 
             self::deleteAttachment($attachment_id, $i, $ignore_missing);

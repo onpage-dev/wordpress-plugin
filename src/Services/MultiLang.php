@@ -24,7 +24,7 @@ class MultiLang
             return [];
         }
 
-        return array_values(array_intersect(array_keys($value), getWpmlLanguages()));
+        return array_values(array_intersect(array_keys($value), onpage_get_wpml_languages()));
     }
 
     /** Language codes present anywhere in a field => value map. */
@@ -83,7 +83,7 @@ class MultiLang
         int $element_index,
         string $path
     ): void {
-        if (isWpmlActive() || !self::isLanguageMapShape($value)) {
+        if (onpage_is_wpml_active() || !self::isLanguageMapShape($value)) {
             return;
         }
 
@@ -118,7 +118,7 @@ class MultiLang
         int $element_index,
         string $path
     ): void {
-        if (isWpmlActive()) {
+        if (onpage_is_wpml_active()) {
             return;
         }
 
@@ -135,7 +135,7 @@ class MultiLang
         int $element_index,
         string $path = 'payload'
     ): void {
-        if ($translated_languages === [] || isWpmlActive()) {
+        if ($translated_languages === [] || onpage_is_wpml_active()) {
             return;
         }
 
@@ -145,7 +145,7 @@ class MultiLang
     /** Standard error shape for unsupported language-map payloads. */
     private static function throwWpmlRequired(string $error_prefix, int $element_index, string $path): void
     {
-        throw httpException(
+        throw onpage_http_exception(
             "$error_prefix :: Element $element_index :: WPML plugin is not installed or active; field '$path' contains multilingual values that cannot be handled until WPML is installed and active",
             500,
             'wpml_required'

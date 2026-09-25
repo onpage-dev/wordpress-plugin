@@ -27,12 +27,12 @@ class Taxonomy
             return $default_value;
         }
 
-        $current_language = getWpmlCurrentLanguage();
+        $current_language = onpage_get_wpml_current_language();
         if ($current_language && isset($label_map[$current_language]) && is_scalar($label_map[$current_language])) {
             return (string) $label_map[$current_language];
         }
 
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         if ($default_language && isset($label_map[$default_language]) && is_scalar($label_map[$default_language])) {
             return (string) $label_map[$default_language];
         }
@@ -63,7 +63,7 @@ class Taxonomy
             return '';
         }
 
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         if ($default_language && isset($value[$default_language]) && is_scalar($value[$default_language])) {
             return (string) $value[$default_language];
         }
@@ -114,7 +114,7 @@ class Taxonomy
     /** Marks a taxonomy as translatable in WPML sync settings. */
     private static function setWpmlTaxonomyTranslatable(string $taxonomy_key): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         global $sitepress;
 
@@ -138,7 +138,7 @@ class Taxonomy
     /** Removes a taxonomy from WPML translatable taxonomies. */
     private static function setWpmlTaxonomyNotTranslatable(string $taxonomy_key): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         global $sitepress;
 
@@ -298,7 +298,7 @@ class Taxonomy
             }
 
             if (!\acf_delete_field_group((int) $field_group_id)) {
-                throw httpException("Taxonomy :: Failed to delete FieldGroup for taxonomy '$taxonomy_slug'", 500, 'delete_failed');
+                throw onpage_http_exception("Taxonomy :: Failed to delete FieldGroup for taxonomy '$taxonomy_slug'", 500, 'delete_failed');
             }
         }
     }
@@ -318,13 +318,17 @@ class Taxonomy
             )
         );
         if (!is_array($term_ids)) {
-            throw httpException("Unable to list terms for taxonomy '$taxonomy'", 500, 'request_failed');
+            throw onpage_http_exception("Unable to list terms for taxonomy '$taxonomy'", 500, 'request_failed');
         }
 
         $term_ids = array_values(array_unique(array_map('intval', $term_ids)));
         foreach ($term_ids as $term_id) {
-            if (!\wp_delete_term((int) $term_id, $taxonomy)) {
-                throw httpException("Unable to delete term $term_id for taxonomy '$taxonomy'", 500, 'delete_failed');
+            // A WP_Error is truthy, so it has to be checked on its own.
+            $deleted = \wp_delete_term((int) $term_id, $taxonomy);
+            if (!$deleted || \is_wp_error($deleted)) {
+                $reason = \is_wp_error($deleted) ? ' :: ' . $deleted->get_error_message() : '';
+
+                throw onpage_http_exception("Unable to delete term $term_id for taxonomy '$taxonomy'$reason", 500, 'delete_failed');
             }
         }
     }
@@ -337,7 +341,11 @@ class Taxonomy
         return [
             'manage_terms' => !empty($capabilities['manage_terms']) ? \sanitize_key($capabilities['manage_terms']) : 'manage_categories',
             'edit_terms' => !empty($capabilities['edit_terms']) ? \sanitize_key($capabilities['edit_terms']) : 'manage_categories',
-            'deleteTerms' => !empty($capabilities['deleteTerms']) ? \sanitize_key($capabilities['deleteTerms']) : 'manage_categories',
+            // `delete_terms` is the WordPress capability key; the camel-case `deleteTerms`
+            // formerly written here was ignored by WordPress and is still read as a fallback.
+            'delete_terms' => !empty($capabilities['delete_terms'])
+                ? \sanitize_key($capabilities['delete_terms'])
+                : (!empty($capabilities['deleteTerms']) ? \sanitize_key($capabilities['deleteTerms']) : 'manage_categories'),
             'assign_terms' => !empty($capabilities['assign_terms']) ? \sanitize_key($capabilities['assign_terms']) : 'edit_posts',
         ];
     }
@@ -448,17 +456,17 @@ class Taxonomy
                 return;
             }
 
-            throw httpException("Taxonomy :: ID $id not found", 404, 'not_found');
+            throw onpage_http_exception("Taxonomy :: ID $id not found", 404, 'not_found');
         }
 
         try {
             self::deleteTerms($taxonomy['taxonomy']);
         } catch (\OnPage\Exceptions\HttpException $e) {
-            throw httpException($e->getMessage(), $e->status_code, $e->error_code);
+            throw onpage_http_exception($e->getMessage(), $e->status_code, $e->error_code);
         }
 
         if (!\acf_delete_taxonomy($id)) {
-            throw httpException("Taxonomy :: Failed to delete ID $id", 500, 'delete_failed');
+            throw onpage_http_exception("Taxonomy :: Failed to delete ID $id", 500, 'delete_failed');
         }
 
         self::deleteFieldGroupsForTaxonomy($taxonomy['taxonomy']);
@@ -471,24 +479,23 @@ class Taxonomy
         $taxonomy_slug = \sanitize_key($value);
         $taxonomy = self::findBySlug($taxonomy_slug);
         if (!$taxonomy) {
+            // Nothing to delete: the slug may be a taxonomy this plugin does not own (e.g.
+            // `product_cat`), whose field groups and WPML settings must stay untouched.
             if ($ignore_missing) {
-                self::deleteFieldGroupsForTaxonomy($taxonomy_slug);
-                self::cleanupDeletedTaxonomy($taxonomy_slug);
-
                 return;
             }
 
-            throw httpException("Taxonomy :: Taxonomy '$taxonomy_slug' not found", 404, 'not_found');
+            throw onpage_http_exception("Taxonomy :: Taxonomy '$taxonomy_slug' not found", 404, 'not_found');
         }
 
         try {
             self::deleteTerms($taxonomy_slug);
         } catch (\OnPage\Exceptions\HttpException $e) {
-            throw httpException($e->getMessage(), $e->status_code, $e->error_code);
+            throw onpage_http_exception($e->getMessage(), $e->status_code, $e->error_code);
         }
 
         if (!\acf_delete_taxonomy($taxonomy['ID'])) {
-            throw httpException("Taxonomy :: Unable to delete Taxonomy with slug '$taxonomy_slug'", 500, 'delete_failed');
+            throw onpage_http_exception("Taxonomy :: Unable to delete Taxonomy with slug '$taxonomy_slug'", 500, 'delete_failed');
         }
 
         self::deleteFieldGroupsForTaxonomy($taxonomy_slug);
@@ -538,7 +545,7 @@ class Taxonomy
      */
     public static function saveFromParams(array $params, int $element_index = 0): int
     {
-        $key = $params['key'];
+        $key = Input::requireStringParam($params, 'key', 'Taxonomy', $element_index);
 
         $raw_singular_label = $params['singular_label'] ?? '';
         $raw_plural_label = $params['plural_label'] ?? '';
@@ -557,7 +564,7 @@ class Taxonomy
 
         $result = \acf_update_taxonomy($data);
         if (!$result) {
-            throw httpException("Taxonomy :: Failed to save Taxonomy with key $key", 500, 'acf_error');
+            throw onpage_http_exception("Taxonomy :: Failed to save Taxonomy with key $key", 500, 'acf_error');
         }
 
         self::setWpmlTaxonomyTranslatable($key);

@@ -13,7 +13,8 @@ class PostRepository
 
 
     /**
-     * All post IDs for a post type, or null when the query does not return an array.
+     * All post IDs for a post type (trashed ones included), or null when the query does not
+     * return an array.
      *
      * @return int[]|null
      */
@@ -21,7 +22,8 @@ class PostRepository
     {
         $ids = \get_posts([
             'post_type' => $wp_post_type,
-            'post_status' => 'any',
+            // 'trash' next to 'any' keeps the bin in: 'any' alone excludes it.
+            'post_status' => ['any', 'trash'],
             'fields' => 'ids',
             'numberposts' => -1,
             'suppress_filters' => false,
@@ -97,12 +99,18 @@ class PostRepository
      * has no tiebreaker, so translations created within the same second came back in a
      * non-deterministic order — and callers that take the first match would pick a random
      * language. Use Post::pickCanonicalPost() to choose a language-aware representative.
+     *
+     * Trashed posts are included by default: a trashed element still owns its local_key, and
+     * leaving it out made a re-import create a second post with the same key. Post::update()
+     * restores the trashed post before writing it, and a delete by local_key removes it too.
+     * Reads pass `$include_trashed = false`: a trashed post is not live content, so
+     * `GET /posts/{local_key}?keyfield=local_key` answers 404 for it, like `GET /posts?local_key=`.
      */
-    public static function findPostsByLocalKey(string $local_key, string $wp_post_type = 'any'): array
+    public static function findPostsByLocalKey(string $local_key, string $wp_post_type = 'any', bool $include_trashed = true): array
     {
         $posts = \get_posts([
             'post_type' => $wp_post_type,
-            'post_status' => 'any',
+            'post_status' => $include_trashed ? ['any', 'trash'] : 'any',
             'numberposts' => -1,
             'orderby' => 'ID',
             'order' => 'ASC',

@@ -15,6 +15,11 @@ class ProductDownloads
     private const ERROR_PREFIX = 'WooCommerce Product';
     private const PUBLIC_DOWNLOAD_IDS_META = '_onpage_public_download_ids';
     private const DOWNLOAD_IMPORT_TIMEOUT_SECONDS = 12;
+    /** Fingerprint of the downloads the plugin last copied from the parent onto a variation. */
+    private const INHERITED_DOWNLOADS_META = '_onpage_inherited_downloads';
+
+    /** Whether the uploads base URL was already approved during this request. */
+    private static bool $uploads_directory_approved = false;
 
 
 
@@ -47,6 +52,9 @@ class ProductDownloads
             return;
         }
 
+        $existing_ids_by_file = self::getExistingDownloadIdsByFile($product);
+        $used_ids = [];
+
         $downloads = [];
         foreach ($params['downloads'] as $download_index => $download_payload) {
             if (!is_array($download_payload)) continue;
@@ -58,15 +66,17 @@ class ProductDownloads
 
             $force_refresh = self::toBool($download_payload['refresh'] ?? false);
             $file_url = self::resolveDownloadFileUrl($raw_file, $element_index, (int) $download_index, $force_refresh);
+            $file = (string) \apply_filters('woocommerce_file_download_path', $file_url, $product, $download_index);
 
             $name = self::resolveDownloadValue($download_payload['name'] ?? null, $language_code, $fallback_language)
                 ?: self::getDownloadNameFromUrl($file_url);
-            $download_id = $download_payload['id'] ?: \wp_generate_uuid4();
+            $download_id = self::resolveDownloadId($download_payload['id'] ?? null, $file, $raw_file, $existing_ids_by_file, $used_ids);
+            $used_ids[] = $download_id;
 
             $download = new \WC_Product_Download();
-            $download->set_id((string) $download_id);
+            $download->set_id($download_id);
             $download->set_name($name);
-            $download->set_file(\apply_filters('woocommerce_file_download_path', $file_url, $product, $download_index));
+            $download->set_file($file);
             $downloads[] = $download;
         }
 
@@ -76,8 +86,98 @@ class ProductDownloads
                 $product->set_downloadable(true);
             }
         } catch (\Throwable $e) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Failed to set downloadable files :: " . $e->getMessage(), 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to set downloadable files :: " . $e->getMessage(), 400, 'invalid_param');
         }
+    }
+
+    /**
+     * Download id for one `downloads[]` entry, stable across syncs and languages.
+     *
+     * WooCommerce keys customers' download permissions by (product, download id): a new id on
+     * every sync would cut buyers off from files they paid for. So, in order:
+     *
+     * 1. the `id` sent in the payload;
+     * 2. the id of the download the product already has for the same file URL (this also keeps
+     *    ids created by earlier plugin versions, which were random);
+     * 3. an id derived from the file's source: the On Page® storage segment when the URL carries
+     *    one, otherwise the source URL, or the attachment ID. The same source gives the same id
+     *    on every sync and on every translation.
+     *
+     * An id already taken by an earlier entry of the same payload is never reused, so two entries
+     * pointing at the same file stay two downloads.
+     *
+     * @param array<string, string> $existing_ids_by_file
+     * @param string[] $used_ids
+     */
+    private static function resolveDownloadId(
+        mixed $payload_id,
+        string $file,
+        mixed $raw_file,
+        array $existing_ids_by_file,
+        array $used_ids
+    ): string {
+        $payload_id = is_scalar($payload_id) ? trim((string) $payload_id) : '';
+        if ($payload_id !== '') {
+            return $payload_id;
+        }
+
+        $existing_id = $existing_ids_by_file[$file] ?? null;
+        if ($existing_id !== null && !in_array($existing_id, $used_ids, true)) {
+            return $existing_id;
+        }
+
+        $source = is_int($raw_file)
+            ? 'attachment:' . $raw_file
+            : (RemoteMedia::tokenFromUrl((string) $raw_file) ?? trim((string) $raw_file));
+
+        $download_id = self::deterministicDownloadId($source);
+        for ($occurrence = 2; in_array($download_id, $used_ids, true); $occurrence++) {
+            $download_id = self::deterministicDownloadId($source . '#' . $occurrence);
+        }
+
+        return $download_id;
+    }
+
+    /** UUID-shaped id derived from a download source. */
+    private static function deterministicDownloadId(string $source): string
+    {
+        $hash = md5('onpage-download|' . $source);
+
+        return sprintf(
+            '%s-%s-%s-%s-%s',
+            substr($hash, 0, 8),
+            substr($hash, 8, 4),
+            substr($hash, 12, 4),
+            substr($hash, 16, 4),
+            substr($hash, 20, 12)
+        );
+    }
+
+    /**
+     * Ids of the product's current downloads, keyed by file URL (the first one wins).
+     *
+     * @return array<string, string>
+     */
+    private static function getExistingDownloadIdsByFile(mixed $product): array
+    {
+        if (!is_object($product) || !\method_exists($product, 'get_downloads')) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($product->get_downloads() as $download) {
+            if (!is_object($download) || !\method_exists($download, 'get_file') || !\method_exists($download, 'get_id')) {
+                continue;
+            }
+
+            $file = (string) $download->get_file();
+            $download_id = (string) $download->get_id();
+            if ($file !== '' && $download_id !== '' && !array_key_exists($file, $ids)) {
+                $ids[$file] = $download_id;
+            }
+        }
+
+        return $ids;
     }
 
     /** Links imported download attachments to the parent product in Media Library. */
@@ -134,7 +234,13 @@ class ProductDownloads
         \update_post_meta($product_id, self::PUBLIC_DOWNLOAD_IDS_META, array_values(array_unique($download_ids)));
     }
 
-    /** Syncs parent variable-product downloads to all existing variations when downloads were submitted. */
+    /**
+     * Syncs parent variable-product downloads to its existing variations when downloads were submitted.
+     *
+     * The API has no per-variation `downloads`: a variation's downloads are either copies of the
+     * parent's made by the plugin, or files a site admin set on that variation in WooCommerce.
+     * Only the first kind is overwritten (see applyPayloadsToVariation()).
+     */
     public static function syncVariableProductToVariations(mixed $product, array $params, int $element_index): void
     {
         if (!array_key_exists('downloads', $params)) {
@@ -282,23 +388,83 @@ class ProductDownloads
         ];
     }
 
-    /** Copies a list of WooCommerce downloads onto one variation. */
+    /**
+     * Copies a list of parent downloads onto one variation, unless the variation has its own.
+     *
+     * After each copy the fingerprint of what was written is stored in INHERITED_DOWNLOADS_META.
+     * A variation whose current downloads no longer match that fingerprint was edited by someone
+     * else (a site admin in WooCommerce), so it is left alone. A variation with no downloads, or
+     * with no fingerprint yet (copied by an earlier plugin version, which always overwrote), is
+     * treated as inheriting. Nothing is saved when the variation already has the parent's
+     * downloads, which keeps repeated syncs (one per language) idempotent.
+     */
     private static function applyPayloadsToVariation(
         \WC_Product_Variation $variation,
         array $download_payloads,
         int $element_index
     ): void {
+        $variation_id = (int) $variation->get_id();
+        $current_fingerprint = self::fingerprintDownloads(array_values(array_map(
+            [self::class, 'buildCrudPayload'],
+            $variation->get_downloads()
+        )));
+        $target_fingerprint = self::fingerprintDownloads($download_payloads);
+        $inherited_fingerprint = $variation_id > 0
+            ? \get_post_meta($variation_id, self::INHERITED_DOWNLOADS_META, true)
+            : '';
+
+        $has_own_downloads = $current_fingerprint !== self::fingerprintDownloads([])
+            && is_string($inherited_fingerprint)
+            && $inherited_fingerprint !== ''
+            && $inherited_fingerprint !== $current_fingerprint;
+        if ($has_own_downloads) {
+            return;
+        }
+
+        if ($current_fingerprint === $target_fingerprint && $variation->get_downloadable() === ($download_payloads !== [])) {
+            if ($variation_id > 0 && $inherited_fingerprint !== $target_fingerprint) {
+                \update_post_meta($variation_id, self::INHERITED_DOWNLOADS_META, $target_fingerprint);
+            }
+
+            return;
+        }
+
         try {
             $variation->set_downloads($download_payloads);
             $variation->set_downloadable($download_payloads !== []);
             $variation->save();
+
+            $variation_id = (int) $variation->get_id();
+            if ($variation_id > 0) {
+                // Fingerprint what WooCommerce actually stored, which is what the next sync reads back.
+                \update_post_meta($variation_id, self::INHERITED_DOWNLOADS_META, self::fingerprintDownloads(array_values(array_map(
+                    [self::class, 'buildCrudPayload'],
+                    $variation->get_downloads()
+                ))));
+            }
         } catch (\Throwable $e) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Failed to sync downloadable files to variation " . (int) $variation->get_id() . " :: " . $e->getMessage(),
                 400,
                 'invalid_param'
             );
         }
+    }
+
+    /** Order-independent fingerprint of a list of CRUD download payloads (id, name, file). */
+    private static function fingerprintDownloads(array $download_payloads): string
+    {
+        $entries = array_map(
+            static fn(array $payload): string => implode("\0", [
+                (string) ($payload['download_id'] ?? ''),
+                (string) ($payload['name'] ?? ''),
+                (string) ($payload['file'] ?? ''),
+            ]),
+            $download_payloads
+        );
+        sort($entries, \SORT_STRING);
+
+        return md5(implode("\n", $entries));
     }
 
     /** Resolves a downloadable file payload value for one product language. */
@@ -349,12 +515,12 @@ class ProductDownloads
     {
         if (is_int($raw_file)) {
             if (!RemoteMedia::isAttachmentId($raw_file)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' must be an existing attachment ID or a valid URL", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' must be an existing attachment ID or a valid URL", 400, 'invalid_param');
             }
 
             $attachment_url = \wp_get_attachment_url($raw_file);
             if (!is_string($attachment_url) || $attachment_url === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Failed to resolve attachment URL for 'downloads.$download_index.file'", 500, 'request_failed');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to resolve attachment URL for 'downloads.$download_index.file'", 500, 'request_failed');
             }
 
             self::ensureWooApprovedDownloadDirectory($attachment_url);
@@ -363,12 +529,12 @@ class ProductDownloads
         }
 
         if (!is_scalar($raw_file)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' must be an existing attachment ID or a valid URL", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' must be an existing attachment ID or a valid URL", 400, 'invalid_param');
         }
 
         $file_url = RemoteMedia::sanitizeUrl((string) $raw_file);
         if ($file_url === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' must resolve to an existing attachment ID or a valid URL", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' must resolve to an existing attachment ID or a valid URL", 400, 'invalid_param');
         }
 
         return self::normalizeDownloadFileUrl($file_url, $element_index, $download_index, $force_refresh);
@@ -395,10 +561,7 @@ class ProductDownloads
     /** Whether the download URL should be imported into Media Library for WooCommerce compatibility. */
     private static function shouldImportDownloadToMediaLibrary(string $url): bool
     {
-        $uploads = \wp_get_upload_dir();
-        $uploads_base_url = is_string($uploads['baseurl'] ?? null)
-            ? \untrailingslashit((string) $uploads['baseurl'])
-            : '';
+        $uploads_base_url = self::getUploadsBaseUrl();
 
         if ($uploads_base_url !== '' && str_starts_with($url, $uploads_base_url . '/')) {
             return false;
@@ -447,10 +610,24 @@ class ProductDownloads
         return \file_exists($path) ? $path : null;
     }
 
-    /** Ensures WooCommerce approved download directories include the parent of a file reference. */
-    private static function ensureWooApprovedDownloadDirectory(string $file_reference): void
+    /**
+     * Ensures WooCommerce's approved download directories cover a local file URL the product uses.
+     *
+     * Only URLs WordPress produced for Media Library files reach this method, never the remote
+     * URL a client sent. A file under the uploads base URL is covered by a single rule for that
+     * base (WooCommerce matches a download against its parent directories, so a per-file rule is
+     * not possible), added once instead of one rule per `uploads/YYYY/MM` folder. A URL outside
+     * it (uploads offloaded to a CDN by another plugin) falls back to its own directory.
+     */
+    private static function ensureWooApprovedDownloadDirectory(string $file_url): void
     {
         if (!\function_exists('wc_get_container')) {
+            return;
+        }
+
+        $uploads_base_url = self::getUploadsBaseUrl();
+        $is_under_uploads = $uploads_base_url !== '' && str_starts_with($file_url, $uploads_base_url . '/');
+        if ($is_under_uploads && self::$uploads_directory_approved) {
             return;
         }
 
@@ -472,18 +649,34 @@ class ProductDownloads
                 return;
             }
 
-            $parent = \untrailingslashit((string) \dirname($file_reference));
-            if ($parent === '' || $parent === '.' || $parent === '/') {
+            $directory = $is_under_uploads
+                ? $uploads_base_url
+                : \untrailingslashit((string) \dirname($file_url));
+            if ($directory === '' || $directory === '.' || $directory === '/') {
                 return;
             }
 
-            $directory_id = $register->add_approved_directory($parent, true);
+            $directory_id = $register->add_approved_directory($directory, true);
             if (is_int($directory_id) && $directory_id > 0 && \method_exists($register, 'enable_by_id')) {
                 $register->enable_by_id($directory_id);
+            }
+
+            if ($is_under_uploads) {
+                self::$uploads_directory_approved = true;
             }
         } catch (\Throwable $e) {
             return;
         }
+    }
+
+    /** Uploads base URL without trailing slash, or an empty string when unavailable. */
+    private static function getUploadsBaseUrl(): string
+    {
+        $uploads = \wp_get_upload_dir();
+
+        return is_string($uploads['baseurl'] ?? null)
+            ? \untrailingslashit((string) $uploads['baseurl'])
+            : '';
     }
 
     /** Returns a WooCommerce-safe downloadable file reference. */
@@ -494,12 +687,12 @@ class ProductDownloads
             return $url;
         }
 
-        self::ensureWooApprovedDownloadDirectory($url);
-
+        // The remote URL is not approved: WooCommerce only ever receives the imported local URL,
+        // approved below once the import succeeded.
         try {
             $media = RemoteMedia::urlToMediaLibrary($url, 'downloads_' . $download_index, self::DOWNLOAD_IMPORT_TIMEOUT_SECONDS, $force_refresh);
         } catch (\Throwable $e) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Failed to import downloadable file for 'downloads.$download_index.file' :: " . $e->getMessage(),
                 500,
                 'request_failed'
@@ -509,7 +702,7 @@ class ProductDownloads
         $attachment_id = (int) ($media['attachment_id'] ?? 0);
         $attachment_path = self::getExistingAttachmentPath($attachment_id);
         if ($attachment_path === null) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Imported downloadable file for 'downloads.$download_index.file' is missing on disk",
                 500,
                 'request_failed'
@@ -518,7 +711,7 @@ class ProductDownloads
 
         $attachment_url = \wp_get_attachment_url($attachment_id);
         if (!is_string($attachment_url) || $attachment_url === '') {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Failed to resolve imported downloadable file URL for 'downloads.$download_index.file'",
                 500,
                 'request_failed'

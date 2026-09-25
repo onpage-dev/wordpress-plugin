@@ -23,14 +23,11 @@ class VariantProduct
     public function save(\WP_REST_Request $request): \WP_REST_Response
     {
         $ids = [];
+        $body = Input::requireJsonList($request, 'WooCommerce Variant Product');
 
         try {
-            foreach ($request->get_json_params() as $i => $params) {
-                if (!is_array($params) || array_is_list($params)) {
-                    throw httpException("WooCommerce Variant Product :: Element $i :: Variant payload must be an object", 400, 'invalid_param');
-                }
-
-                $ids[] = WooCommerceVariantProduct::save($params, $i);
+            foreach ($body as $i => $params) {
+                $ids[] = WooCommerceVariantProduct::save(Input::requireObjectElement($params, 'WooCommerce Variant Product', $i), $i);
             }
 
             // Resync each touched variable parent once, instead of per variation.
@@ -52,16 +49,16 @@ class VariantProduct
     /** REST: deletes WooCommerce product variations by local_key; optional `ignore` query. */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $i => $value) {
+        foreach (Input::requireJsonList($request, 'WooCommerce Variant Product') as $i => $value) {
             $local_key = Input::localKey($value);
             if ($local_key !== null) {
                 WooCommerceVariantProduct::deleteByLocalKey($local_key, $ignore_missing);
                 continue;
             }
 
-            throw httpException("WooCommerce Variant Product :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
+            throw onpage_http_exception("WooCommerce Variant Product :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'invalid_param');
         }
 
         return new \WP_REST_Response(null, 200);

@@ -45,6 +45,7 @@ Important notes:
 
 - **ACF is always required**, even if you don't need any custom fields. Without ACF, the plugin turns its API off and shows a red notice in the WordPress admin. This applies to WooCommerce-only syncs too, and even if products need no custom fields.
 - **ACF PRO** is only needed for advanced field types (repeater, flexible content, gallery).
+  Flexible content has not been tested with the plugin yet: check the result before you rely on it.
 - **WPML** is only needed for multilingual syncs. It is a **paid plugin**.
 - Without WPML, the multilingual features are not available.
 
@@ -132,6 +133,19 @@ Good to know:
 
 - The token is saved in the WordPress configuration.
 - If you regenerate the token, the old one stops working.
+
+## Upgrading from an earlier installation
+
+If your site already ran an earlier version of the **On Page®** plugin:
+
+1. Upload the new .zip under **Plugins** with **Upload Plugin**, and choose to replace the current
+   version when WordPress asks.
+2. Open **Plugins** and check that **On Page®** is active. The plugin's main file has a new name,
+   so WordPress may report that the old version was deactivated. If so, activate **On Page®**
+   again. Your data and your token are kept.
+3. Ask whoever maintains your **client** to run the plugin's **migration** once. It moves the
+   identifiers written by earlier versions to the current format. It is safe to run more than
+   once.
 
 ## Multilingual sites
 

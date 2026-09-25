@@ -64,8 +64,6 @@ class Router
                 $e->getMessage(),
                 ['status' => $e->status_code]
             );
-        } catch (\Throwable $e) {
-            throw $e;
         }
 
         return null;

@@ -40,7 +40,7 @@ class Term
     /** Assigns WPML language metadata to a term (via term_taxonomy_id). */
     private static function setTermLanguage(int $term_id, string $taxonomy, string $language_code, int|false $trid = false, ?string $source_language_code = null): void
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return;
         }
 
@@ -63,7 +63,7 @@ class Term
     /** WPML element language details for a term. */
     private static function getTermLanguageDetails(int $term_id, string $taxonomy): mixed
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return null;
         }
 
@@ -83,7 +83,7 @@ class Term
     /** Map of language code to translation row for a WPML trid. */
     private static function getTermTranslations(int $trid, string $taxonomy): array
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return [];
         }
 
@@ -108,7 +108,7 @@ class Term
     /** Builds a WPML `language_code => term_id` map for a term (empty when WPML is inactive). */
     public static function buildTranslationsMap(int $term_id, string $taxonomy): array
     {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return [];
         }
 
@@ -175,6 +175,23 @@ class Term
 
         return $existing_local_key === null
             || $existing_local_key === $local_key;
+    }
+
+    /**
+     * Whether a slug-matched term is the element already being written (`$term_id`).
+     *
+     * Stricter than termMatchesLocalKey(): the element already has its own term, so the
+     * slug holder may only stand in for it when it is the same term, a member of the same
+     * WPML translation group, or a term carrying the same local_key. An unowned term or one
+     * of another element is a different term, and writing the payload on it would hijack it.
+     */
+    private static function slugTermBelongsToElement(int $slug_term_id, int $term_id, string $taxonomy, ?string $local_key): bool
+    {
+        if (self::areSameTranslationGroup($slug_term_id, $term_id, $taxonomy)) {
+            return true;
+        }
+
+        return $local_key !== null && self::getTermLocalKey($slug_term_id) === $local_key;
     }
 
     /** Finds term IDs by local_key within a taxonomy, bypassing WPML term filters. */
@@ -261,7 +278,7 @@ class Term
             return null;
         }
 
-        if (!$language_code || !isWpmlActive()) {
+        if (!$language_code || !onpage_is_wpml_active()) {
             return $term_ids[0];
         }
 
@@ -297,14 +314,14 @@ class Term
             return (int) $term->term_id;
         }
 
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return null;
         }
 
         $languages = array_values(array_unique(array_filter([
-            getWpmlCurrentLanguage(),
-            getWpmlDefaultLanguage(),
-            ...getWpmlLanguages(),
+            onpage_get_wpml_current_language(),
+            onpage_get_wpml_default_language(),
+            ...onpage_get_wpml_languages(),
         ], fn(mixed $lang): bool => is_string($lang) && $lang !== '')));
 
         foreach ($languages as $language_code) {
@@ -345,7 +362,7 @@ class Term
     /** Maps a term to its translation in the given language when WPML is active. */
     private static function getTermIdForLanguage(int $term_id, string $taxonomy, ?string $language_code): int
     {
-        if (!$language_code || !isWpmlActive()) {
+        if (!$language_code || !onpage_is_wpml_active()) {
             return $term_id;
         }
 
@@ -368,7 +385,7 @@ class Term
     /** True when a term can be safely updated as the target language. */
     private static function canUpdateTermForLanguage(int $term_id, string $taxonomy, ?string $language_code): bool
     {
-        if (!$language_code || !isWpmlActive()) {
+        if (!$language_code || !onpage_is_wpml_active()) {
             return true;
         }
 
@@ -390,7 +407,7 @@ class Term
             return true;
         }
 
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return false;
         }
 
@@ -443,7 +460,7 @@ class Term
     {
         $taxonomy = self::getTaxonomySlug($identifier);
         if (!$taxonomy) {
-            throw httpException("Term :: Taxonomy '$identifier' not found", 404, 'not_found');
+            throw onpage_http_exception("Term :: Taxonomy '$identifier' not found", 404, 'not_found');
         }
 
         return $taxonomy;
@@ -476,7 +493,7 @@ class Term
     {
         $term = \get_term($term_id, $taxonomy);
         if (!$term || \is_wp_error($term)) {
-            throw httpException("Term $term_id not found for taxonomy '$taxonomy'", 404, 'not_found');
+            throw onpage_http_exception("Term $term_id not found for taxonomy '$taxonomy'", 404, 'not_found');
         }
 
         return $term;
@@ -499,7 +516,7 @@ class Term
         if ($parent_ids === null) {
             $terms = \get_terms($args);
             if (\is_wp_error($terms)) {
-                throw httpException($terms->get_error_message(), 500, 'request_failed');
+                throw onpage_http_exception($terms->get_error_message(), 500, 'request_failed');
             }
 
             return $terms;
@@ -510,7 +527,7 @@ class Term
         foreach ($parent_ids as $parent_id) {
             $children = \get_terms($args + ['parent' => (int) $parent_id]);
             if (\is_wp_error($children)) {
-                throw httpException($children->get_error_message(), 500, 'request_failed');
+                throw onpage_http_exception($children->get_error_message(), 500, 'request_failed');
             }
 
             foreach ($children as $child) {
@@ -539,7 +556,7 @@ class Term
         string $error_prefix
     ): ?array {
         if ($parent_id !== null && $parent_lk !== null) {
-            throw httpException("$error_prefix :: Use only one of 'parent_id' and 'parent_lk'", 400, 'invalid_param');
+            throw onpage_http_exception("$error_prefix :: Use only one of 'parent_id' and 'parent_lk'", 400, 'invalid_param');
         }
 
         if ($parent_id !== null) {
@@ -548,7 +565,7 @@ class Term
 
         if ($parent_lk !== null) {
             if ($taxonomy === null) {
-                throw httpException("$error_prefix :: 'parent_lk' requires 'taxonomy'", 400, 'invalid_param');
+                throw onpage_http_exception("$error_prefix :: 'parent_lk' requires 'taxonomy'", 400, 'invalid_param');
             }
 
             return self::findTermIdsByLocalKey($parent_lk, $taxonomy);
@@ -585,7 +602,7 @@ class Term
     /** Prefers the default-language member of a translation group as the representative term. */
     private static function pickGroupRepresentative(int $term_id, array $translations): int
     {
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         if ($default_language !== null && !empty($translations[$default_language])) {
             return (int) $translations[$default_language];
         }
@@ -665,7 +682,7 @@ class Term
             static fn($value): bool => is_scalar($value) && (string) $value !== ''
         ));
         $fallback_language = $named_languages[0] ?? ($translated_languages[0] ?? null);
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         $base_language = $default_language ?: $fallback_language;
         $has_shared_name = array_key_exists('shared', $name_map) && $name_map['shared'] !== null;
 
@@ -696,7 +713,7 @@ class Term
     {
         if (array_key_exists('local_key', $params) && $params['local_key'] !== null
             && Input::localKey($params['local_key']) === null) {
-            throw httpException("Term :: Element $element_index :: Parameter 'local_key' must be a positive integer or a non-empty string", 400, 'invalid_param');
+            throw onpage_http_exception("Term :: Element $element_index :: Parameter 'local_key' must be a positive integer or a non-empty string", 400, 'invalid_param');
         }
     }
 
@@ -718,28 +735,28 @@ class Term
         MultiLang::requireWpmlForDetectedLanguages($payload['translated_languages'], 'Term', $element_index);
 
         if (!$payload['base_language'] && !empty($payload['translated_languages'])) {
-            throw httpException("Term :: Element $element_index :: Unable to resolve default language", 500, 'wpml_error');
+            throw onpage_http_exception("Term :: Element $element_index :: Unable to resolve default language", 500, 'wpml_error');
         }
 
         $base_name = self::resolveBaseName($payload['name_map'], $payload['base_language']);
         if ($base_name === null) {
-            throw httpException("Term :: Element $element_index :: Name is required", 400, 'invalid_param');
+            throw onpage_http_exception("Term :: Element $element_index :: Name is required", 400, 'invalid_param');
         }
 
         if (!empty($payload['requested_term_id'])) {
             $existing_term = \get_term($payload['requested_term_id'], $taxonomy);
             if (!$existing_term || \is_wp_error($existing_term)) {
-                throw httpException("Term :: Element $element_index :: Term '{$payload['requested_term_id']}' not found for taxonomy '$taxonomy'", 404, 'not_found');
+                throw onpage_http_exception("Term :: Element $element_index :: Term '{$payload['requested_term_id']}' not found for taxonomy '$taxonomy'", 404, 'not_found');
             }
         }
 
         $term_id_from_local_key = $payload['local_key'] ? self::findByLocalKey($payload['local_key'], $taxonomy) : null;
         if ($payload['local_key'] && !empty($payload['requested_term_id']) && $term_id_from_local_key && !self::areSameTranslationGroup($payload['requested_term_id'], $term_id_from_local_key, $taxonomy)) {
-            throw httpException("Term :: Element $element_index :: local_key '{$payload['local_key']}' already exists for taxonomy '$taxonomy'", 409, 'duplicate_local_key');
+            throw onpage_http_exception("Term :: Element $element_index :: local_key '{$payload['local_key']}' already exists for taxonomy '$taxonomy'", 409, 'duplicate_local_key');
         }
 
         if ($payload['parent_local_key'] && !self::findByLocalKeyForLanguage($payload['parent_local_key'], $taxonomy, $payload['base_language'])) {
-            throw httpException("Term :: Element $element_index :: Parent local_key '{$payload['parent_local_key']}' not found for taxonomy '$taxonomy'", 404, 'not_found');
+            throw onpage_http_exception("Term :: Element $element_index :: Parent local_key '{$payload['parent_local_key']}' not found for taxonomy '$taxonomy'", 404, 'not_found');
         }
 
         return (string) $base_name;
@@ -1109,7 +1126,8 @@ class Term
         array $data,
         string $name,
         ?string $language_code = null,
-        ?string $local_key = null
+        ?string $local_key = null,
+        int $owner_term_id = 0
     ): array|\WP_Error {
         if ($error->get_error_code() !== 'duplicate_term_slug') {
             return $error;
@@ -1132,6 +1150,16 @@ class Term
 
         foreach ($candidate_ids as $candidate_id) {
             if (!self::canUseTermForLanguage((int) $candidate_id, $taxonomy, $language_code)) {
+                continue;
+            }
+
+            // Another element's term keeps its content: with an owner term (the element is
+            // updating its own term) only a term of that element qualifies, otherwise any
+            // term the local_key may adopt.
+            $is_same_element = $owner_term_id > 0
+                ? self::slugTermBelongsToElement((int) $candidate_id, $owner_term_id, $taxonomy, $local_key)
+                : self::termMatchesLocalKey((int) $candidate_id, $local_key);
+            if (!$is_same_element) {
                 continue;
             }
 
@@ -1245,7 +1273,7 @@ class Term
                 : null;
         }
 
-        if (!$language_code || !isWpmlActive()) {
+        if (!$language_code || !onpage_is_wpml_active()) {
             return $term_ids[0];
         }
 
@@ -1282,37 +1310,38 @@ class Term
             $term_id = self::getTermIdForLanguage($term_id, $taxonomy, $language_code);
         }
 
+        // With a term already resolved (by id or local_key), the slug holder replaces it only
+        // when it is part of the same element: under WPML a same-language term of another
+        // element may own the payload slug, and taking it would overwrite that element.
         $slug_term_id = self::findTermIdByDataSlug($data, $taxonomy, $language_code, $local_key);
-        if (
-            $slug_term_id
-            && (
-                $slug_term_id === $term_id
-                || ($term_id && $language_code)
-                || (!$term_id && self::termMatchesLocalKey($slug_term_id, $local_key))
-            )
-        ) {
+        if ($slug_term_id && (
+            $term_id
+                ? self::slugTermBelongsToElement($slug_term_id, $term_id, $taxonomy, $local_key)
+                : self::termMatchesLocalKey($slug_term_id, $local_key)
+        )) {
             $term_id = $slug_term_id;
         }
 
         if ($term_id) {
+            // A slug holder of the same element has already replaced $term_id above, so a
+            // duplicate slug here is owned by a different term: recovery may only move the
+            // write to another term of this element.
             $result = self::updateWordPressTerm($term_id, $taxonomy, $data, $name, $language_code);
-
-            if (
-                \is_wp_error($result)
-                && $result->get_error_code() === 'duplicate_term_slug'
-                && $slug_term_id
-                && $slug_term_id !== $term_id
-            ) {
-                $retry = self::updateWordPressTerm($slug_term_id, $taxonomy, $data, $name, $language_code);
-
-                return \is_wp_error($retry)
-                    ? self::recoverDuplicateSlugUpdate($retry, $slug_term_id, $taxonomy, $data, $name, $language_code, $local_key)
-                    : $retry;
+            if (\is_wp_error($result)) {
+                $result = self::recoverDuplicateSlugUpdate($result, $term_id, $taxonomy, $data, $name, $language_code, $local_key, $term_id);
             }
 
-            return \is_wp_error($result)
-                ? self::recoverDuplicateSlugUpdate($result, $term_id, $taxonomy, $data, $name, $language_code, $local_key)
-                : $result;
+            // The payload slug is still owned by another element: update this term but keep
+            // its current slug, the same way an insert falls back to a unique slug instead of
+            // overwriting the owner (see updateExistingTermFromInsertError()).
+            if (\is_wp_error($result) && $result->get_error_code() === 'duplicate_term_slug') {
+                $data_without_slug = $data;
+                unset($data_without_slug['slug']);
+
+                return self::updateWordPressTerm($term_id, $taxonomy, $data_without_slug, $name, $language_code);
+            }
+
+            return $result;
         }
 
         $result = self::insertWordPressTerm($taxonomy, $data, $name, $language_code);
@@ -1340,7 +1369,7 @@ class Term
         $result = self::upsertTermData($term_id, $taxonomy, $data, $base_name, $payload['base_language'], $payload['local_key']);
 
         if (\is_wp_error($result)) {
-            throw httpException("Term :: Element $element_index :: " . $result->get_error_message(), 500, 'request_failed');
+            throw onpage_http_exception("Term :: Element $element_index :: " . $result->get_error_message(), 500, 'request_failed');
         }
 
         $resolved_term_id = (int) $result['term_id'];
@@ -1361,7 +1390,7 @@ class Term
     /** Assigns the base WPML language to scalar/single-language term payloads when missing. */
     private static function ensureBaseTermLanguage(int $term_id, string $taxonomy, ?string $base_language): void
     {
-        if (!$base_language || !isWpmlActive()) {
+        if (!$base_language || !onpage_is_wpml_active()) {
             return;
         }
 
@@ -1385,7 +1414,7 @@ class Term
         $language_details = self::getTermLanguageDetails($term_id, $taxonomy);
         $trid = isset($language_details?->trid) ? (int) $language_details->trid : 0;
         if (!$trid) {
-            throw httpException("Term :: Element $element_index :: Unable to resolve translation group (trid)", 500, 'wpml_error');
+            throw onpage_http_exception("Term :: Element $element_index :: Unable to resolve translation group (trid)", 500, 'wpml_error');
         }
 
         return $trid;
@@ -1394,7 +1423,7 @@ class Term
     /** Creates or updates translated terms for the payload languages. */
     private static function syncTranslations(array $payload, string $taxonomy, int $term_id, int $element_index): void
     {
-        if (empty($payload['translated_languages']) || !isWpmlActive() || !$payload['base_language']) {
+        if (empty($payload['translated_languages']) || !onpage_is_wpml_active() || !$payload['base_language']) {
             return;
         }
 
@@ -1423,7 +1452,10 @@ class Term
                 ?: ($translated_term_taxonomy_id ? self::getTermIdByTaxonomyId($translated_term_taxonomy_id, $taxonomy) : 0);
 
             if (!$translated_term_id) {
-                $translated_term_id = self::findTermIdByDataSlug($translated_data, $taxonomy, (string) $language_code, $payload['local_key']) ?: 0;
+                // A slug match may be adopted only when no other element owns it (see
+                // termMatchesLocalKey()); otherwise a distinct translation is created.
+                $slug_term_id = self::findTermIdByDataSlug($translated_data, $taxonomy, (string) $language_code, $payload['local_key']) ?: 0;
+                $translated_term_id = ($slug_term_id && self::termMatchesLocalKey($slug_term_id, $payload['local_key'])) ? $slug_term_id : 0;
             }
 
             $translated_result = self::upsertTermData(
@@ -1449,7 +1481,7 @@ class Term
             }
 
             if (\is_wp_error($translated_result)) {
-                throw httpException(
+                throw onpage_http_exception(
                     "Term :: Element $element_index :: Unable to upsert translation '$language_code' :: " . $translated_result->get_error_message(),
                     500,
                     'request_failed'
@@ -1502,11 +1534,16 @@ class Term
     {
         $taxonomy = $taxonomy ?? self::getTermTaxonomy($term_id);
         if ($taxonomy === null) {
-            throw httpException("Term :: Term $term_id not found", 404, 'not_found');
+            throw onpage_http_exception("Term :: Term $term_id not found", 404, 'not_found');
         }
 
-        if (!\wp_delete_term($term_id, $taxonomy)) {
-            throw httpException("Term :: Unable to delete", 500, 'delete_failed');
+        // wp_delete_term() reports some failures (e.g. an unknown taxonomy) with a WP_Error,
+        // which is truthy, so it must be checked explicitly.
+        $deleted = \wp_delete_term($term_id, $taxonomy);
+        if (!$deleted || \is_wp_error($deleted)) {
+            $reason = \is_wp_error($deleted) ? ' :: ' . $deleted->get_error_message() : '';
+
+            throw onpage_http_exception("Term :: Unable to delete$reason", 500, 'delete_failed');
         }
     }
 }

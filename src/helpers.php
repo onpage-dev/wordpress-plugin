@@ -2,59 +2,9 @@
 
 
 
-use OnPage\Env;
 use OnPage\Exceptions\HttpException;
 
 
-
-if (!function_exists('env')) {
-    /**
-     * Returns a string value from the plugin `.env` via `Env::get()`.
-     *
-     * @param string $key     Environment key.
-     * @param mixed  $default Fallback when the key is absent (coerced to string).
-     */
-    function env(string $key, $default = ''): string
-    {
-        $value = Env::get($key, $default);
-
-        return is_string($value) ? $value : (string) $value;
-    }
-}
-
-if (!function_exists('array_is_list')) {
-    /**
-     * Polyfill for PHP 8.0, matching PHP 8.1's array_is_list().
-     */
-    function array_is_list(array $array): bool
-    {
-        $expected_key = 0;
-
-        foreach ($array as $key => $_) {
-            if ($key !== $expected_key) {
-                return false;
-            }
-
-            $expected_key++;
-        }
-
-        return true;
-    }
-}
-
-/**
- * Prefixes a post type slug with `post_` when missing, matching plugin conventions.
- */
-function norm_post_type(string $post_type): string
-{
-    $prefix = 'post_';
-
-    if (str_starts_with($post_type, $prefix)) {
-        return $post_type;
-    }
-
-    return $prefix . $post_type;
-}
 
 /**
  * Whether a post row is still loadable by WordPress.
@@ -62,7 +12,7 @@ function norm_post_type(string $post_type): string
  * WPML translation groups live in their own table, so they can outlive the posts they
  * point at: this is the guard that keeps a dead member out of a language => id map.
  */
-function postExists(int $post_id): bool
+function onpage_post_exists(int $post_id): bool
 {
     return $post_id > 0 && \get_post($post_id) instanceof \WP_Post;
 }
@@ -70,7 +20,7 @@ function postExists(int $post_id): bool
 /**
  * Whether the `ignore` query flag is present on the current REST request.
  */
-function shouldIgnoreMissing(\WP_REST_Request $request): bool
+function onpage_should_ignore_missing(\WP_REST_Request $request): bool
 {
     return array_key_exists('ignore', $request->get_query_params());
 }
@@ -80,7 +30,7 @@ function shouldIgnoreMissing(\WP_REST_Request $request): bool
  * the WordPress core REST API convention so clients can detect the last page without
  * guessing from an empty result.
  */
-function setPaginationHeaders(\WP_REST_Response $response, int $total, int $per_page): void
+function onpage_set_pagination_headers(\WP_REST_Response $response, int $total, int $per_page): void
 {
     $total_pages = $per_page > 0 ? (int) \ceil($total / $per_page) : 0;
 
@@ -96,7 +46,7 @@ function setPaginationHeaders(\WP_REST_Response $response, int $total, int $per_
  * Memoized per request: the active multilingual plugin set cannot change while a
  * single REST import runs, and this is queried dozens of times per batch element.
  */
-function isWpmlActive(): bool
+function onpage_is_wpml_active(): bool
 {
     static $is_active = null;
 
@@ -113,7 +63,7 @@ function isWpmlActive(): bool
  * Memoized per request; the configured default language is invariant for the
  * duration of an import request (unlike the *current* language, which switches).
  */
-function getWpmlDefaultLanguage(): string|null
+function onpage_get_wpml_default_language(): string|null
 {
     static $default_language = false;
 
@@ -121,7 +71,7 @@ function getWpmlDefaultLanguage(): string|null
         return $default_language;
     }
 
-    if (!isWpmlActive()) {
+    if (!onpage_is_wpml_active()) {
         return $default_language = null;
     }
 
@@ -133,9 +83,9 @@ function getWpmlDefaultLanguage(): string|null
 /**
  * Get the current WPML language code, if configured.
  */
-function getWpmlCurrentLanguage(): string|null
+function onpage_get_wpml_current_language(): string|null
 {
-    if (!isWpmlActive()) return null;
+    if (!onpage_is_wpml_active()) return null;
 
     $language = \apply_filters('wpml_current_language', null);
 
@@ -150,7 +100,7 @@ function getWpmlCurrentLanguage(): string|null
  * element). Each cache miss otherwise runs the full `wpml_active_languages`
  * filter chain, which WPML resolves with internal queries.
  */
-function getWpmlLanguages(): array
+function onpage_get_wpml_languages(): array
 {
     static $cached_languages = null;
 
@@ -159,7 +109,7 @@ function getWpmlLanguages(): array
     }
 
     $languages = [];
-    if (!isWpmlActive()) return $cached_languages = $languages;
+    if (!onpage_is_wpml_active()) return $cached_languages = $languages;
 
     $active_languages = \apply_filters('wpml_active_languages', null, ['skip_missing' => 0]);
     if (is_array($active_languages)) {
@@ -170,7 +120,7 @@ function getWpmlLanguages(): array
         }
     }
 
-    $default_language = getWpmlDefaultLanguage();
+    $default_language = onpage_get_wpml_default_language();
     if ($default_language && !in_array($default_language, $languages, true)) {
         $languages[] = $default_language;
     }
@@ -189,7 +139,7 @@ function getWpmlLanguages(): array
  *
  * @return HttpException
  */
-function httpException(string $message = '', int $status_code = 500, string $error_code = 'onpage_api_error'): HttpException
+function onpage_http_exception(string $message = '', int $status_code = 500, string $error_code = 'onpage_api_error'): HttpException
 {
     return new HttpException($message, $status_code, $error_code);
 }

@@ -32,7 +32,7 @@ class Term
     private static function requireWooCommerce(string $error_prefix): void
     {
         if (!\function_exists('wc_get_product')) {
-            throw httpException($error_prefix . ' :: WooCommerce is required', 500, 'woocommerce_required');
+            throw onpage_http_exception($error_prefix . ' :: WooCommerce is required', 500, 'woocommerce_required');
         }
     }
 
@@ -42,7 +42,7 @@ class Term
         self::requireWooCommerce($error_prefix);
 
         if (!\taxonomy_exists($taxonomy)) {
-            throw httpException($error_prefix . " :: Taxonomy '$taxonomy' not found", 404, 'not_found');
+            throw onpage_http_exception($error_prefix . " :: Taxonomy '$taxonomy' not found", 404, 'not_found');
         }
     }
 
@@ -84,7 +84,7 @@ class Term
 
         if (is_int($value)) {
             if (!RemoteMedia::isAttachmentId($value)) {
-                throw httpException($error_prefix . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+                throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
             }
 
             return $value;
@@ -92,7 +92,7 @@ class Term
 
         $url = RemoteMedia::sanitizeUrl($value);
         if ($url === null) {
-            throw httpException($error_prefix . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
         }
 
         $import_result = RemoteMedia::urlToMediaLibrary($url, 'thumbnail');
@@ -179,11 +179,11 @@ class Term
 
         $parent_local_key = Input::localKey($parent);
         if ($parent_local_key === null) {
-            throw httpException($error_prefix . " :: Element $element_index :: Parameter 'parent' must be null or the parent category local_key (positive integer or non-empty string)", 400, 'invalid_param');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parameter 'parent' must be null or the parent category local_key (positive integer or non-empty string)", 400, 'invalid_param');
         }
 
         if (!TermService::findIdByLocalKey($parent_local_key, $taxonomy)) {
-            throw httpException($error_prefix . " :: Element $element_index :: Parent term with local_key '$parent_local_key' not found", 404, 'not_found');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parent term with local_key '$parent_local_key' not found", 404, 'not_found');
         }
 
         $params['parent'] = 0;
@@ -256,7 +256,7 @@ class Term
         if ($term_ids === []) {
             if ($ignore_missing) return;
 
-            throw httpException($error_prefix . " :: Element $element_index :: Term with local_key '$local_key' not found", 404, 'not_found');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Term with local_key '$local_key' not found", 404, 'not_found');
         }
 
         foreach ($term_ids as $resolved_term_id) {

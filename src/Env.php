@@ -6,6 +6,10 @@ namespace OnPage;
 
 
 
+/**
+ * Reads the plugin `.env` file. Test-only: the tests in `src/Tests` require this file
+ * themselves, and `plugin.php` never loads it, so production requests never read `.env`.
+ */
 class Env
 {
     private static ?self $instance = null;

@@ -23,7 +23,8 @@ class Migration
      * Renames the On Page® local key post meta from the legacy `local_key` key to `onpage_local_key`.
      *
      * Only posts need this: terms already store the local key under `onpage_local_key`.
-     * Idempotent — a second run matches no rows and is a no-op.
+     * A post that already has `onpage_local_key` keeps it and loses the legacy row, so no post
+     * ends up with two local key rows. Idempotent — a second run matches no rows and is a no-op.
      */
     public static function renameLocalKeyMeta(): array
     {
@@ -36,9 +37,25 @@ class Migration
         ), ARRAY_A);
 
         if ($rows === null) {
-            throw httpException("Migration :: Failed to read post meta", 500, 'migration_failed');
+            throw onpage_http_exception("Migration :: Failed to read post meta", 500, 'migration_failed');
         }
 
+        // Posts that already carry the target key keep it: renaming their legacy row would give
+        // them two `onpage_local_key` rows, so the legacy copy is dropped instead.
+        $duplicates_removed = $wpdb->query($wpdb->prepare(
+            "DELETE legacy FROM {$wpdb->postmeta} legacy
+             INNER JOIN {$wpdb->postmeta} target
+                     ON target.post_id = legacy.post_id AND target.meta_key = %s
+             WHERE legacy.meta_key = %s",
+            PostRepository::LOCAL_KEY_META,
+            self::LEGACY_META
+        ));
+
+        if ($duplicates_removed === false) {
+            throw onpage_http_exception("Migration :: Failed to remove legacy post meta already migrated", 500, 'migration_failed');
+        }
+
+        // Only posts without the target key are left: rename their legacy row.
         $renamed = $wpdb->query($wpdb->prepare(
             "UPDATE {$wpdb->postmeta} SET meta_key = %s WHERE meta_key = %s",
             PostRepository::LOCAL_KEY_META,
@@ -46,7 +63,7 @@ class Migration
         ));
 
         if ($renamed === false) {
-            throw httpException("Migration :: Failed to rename post meta key", 500, 'migration_failed');
+            throw onpage_http_exception("Migration :: Failed to rename post meta key", 500, 'migration_failed');
         }
 
         // Drop the orphaned ACF reference meta (no longer read by anything).
@@ -56,7 +73,7 @@ class Migration
         ));
 
         if ($acf_reference_removed === false) {
-            throw httpException("Migration :: Failed to remove ACF reference meta", 500, 'migration_failed');
+            throw onpage_http_exception("Migration :: Failed to remove ACF reference meta", 500, 'migration_failed');
         }
 
         // Terms already store the local key under the target key; the legacy `local_key` and its
@@ -68,7 +85,7 @@ class Migration
         ));
 
         if ($term_legacy_removed === false) {
-            throw httpException("Migration :: Failed to remove legacy term meta", 500, 'migration_failed');
+            throw onpage_http_exception("Migration :: Failed to remove legacy term meta", 500, 'migration_failed');
         }
 
         // Raw SQL bypasses WP's meta caches; flush so subsequent reads see the new key.
@@ -76,6 +93,7 @@ class Migration
 
         return [
             'renamed' => (int) $renamed,
+            'duplicates_removed' => (int) $duplicates_removed,
             'acf_reference_removed' => (int) $acf_reference_removed,
             'term_legacy_removed' => (int) $term_legacy_removed,
             'items' => array_map(static fn(array $row): array => [
@@ -122,7 +140,7 @@ class Migration
             ), ARRAY_A);
 
             if ($rows === null) {
-                throw httpException("Migration :: Failed to read media source URLs", 500, 'migration_failed');
+                throw onpage_http_exception("Migration :: Failed to read media source URLs", 500, 'migration_failed');
             }
 
             if ($rows === []) {
@@ -185,7 +203,7 @@ class Migration
         ));
 
         if ($inserted === false) {
-            throw httpException("Migration :: Failed to write media storage tokens", 500, 'migration_failed');
+            throw onpage_http_exception("Migration :: Failed to write media storage tokens", 500, 'migration_failed');
         }
 
         return intdiv(count($values), 3);

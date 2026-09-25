@@ -11,6 +11,7 @@ The project ships a Docker Compose environment with MySQL, WordPress and Adminer
 
 1. Copy `.env.example` to `.env` and fill in the values.
 2. Start the containers with `./start`. Stop them with `./stop`, or restart them with `./restart`.
+   The scripts work from any directory, for example `~/projects/wordpress-plugin/start`.
 3. Open WordPress and complete the installation.
 4. Install and activate **Advanced Custom Fields**. Add WooCommerce and WPML if your change
    touches them.
@@ -21,15 +22,20 @@ The project ships a Docker Compose environment with MySQL, WordPress and Adminer
 | WordPress | http://localhost:8040 |
 | Adminer (database) | http://localhost:8041/?server=mysql&db=wordpress |
 
+Both ports are bound to `127.0.0.1` only, so they are not reachable from other machines on your
+network.
+
 In Adminer, log in with the `MYSQL_USER` and `MYSQL_PASSWORD` values from `.env`.
 
 ### How the plugin gets into WordPress
 
-The container mounts two things from the repository:
+The container mounts these paths from the repository:
 
 - `./wp-content` becomes the site's `wp-content`. It holds the other plugins, themes and uploads.
   Docker creates it on the first start. It is not versioned.
 - `plugin.php`, `routes.php` and `src/` are mounted into `wp-content/plugins/onpage/`.
+- `config/.htaccess` becomes the site's `.htaccess`, with the rewrite rules WordPress needs for
+  pretty permalinks.
 
 So the plugin runs straight from your working copy. Edits to the code are live on the next request,
 with no copy or rebuild. The mounts are listed in [docker-compose.yml](docker-compose.yml).
@@ -38,32 +44,111 @@ If you add a new file or folder at the root of the plugin, add a mount for it to
 the whole repository: it contains `mysql/`, and the container changes the owner of everything
 under `wp-content` on start, which would break the database files.
 
-### Comments in `.env`
+### What reads `.env`
 
-`.env` is read by two programs: Docker Compose and the plugin (through `parse_ini_file`). They do
-not agree on comment syntax. If a `#` comment contains any of `( ) " ! & | $ { } [ ] ~`, PHP drops
-the **whole** file and every variable reads as empty, with no warning. Keep comments to plain prose.
+`.env` is read by Docker Compose (the `MYSQL_*` and `HOST_*` variables) and by the tests (the
+`WP_TEST_*` variables, through `src/Env.php`). The plugin itself never reads it: `plugin.php` does
+not load `src/Env.php`.
+
+The two readers do not agree on comment syntax. If a `#` comment contains any of
+`( ) " ! & | $ { } [ ] ~`, PHP's `parse_ini_file()` drops the **whole** file and every variable
+reads as empty, with no warning. Keep comments to plain prose. `./bin/test-launcher` checks for this
+before it starts and reports it explicitly.
 
 ## Tests
 
-The tests live in [src/Tests/](src/Tests/). They are end-to-end tests: they call the REST API of a
-real WordPress site.
+The tests live in [src/Tests/](src/Tests/). They are command-line PHP scripts and are not part of
+the plugin: `plugin.php` does not include them, and they are left out of the release archive (see
+[RELEASE.md](RELEASE.md)).
 
-1. Set `WP_TEST_URL` and `WP_TEST_TOKEN` in `.env`. The token is the one generated on the
-   **On Page®** admin page of the test site.
-2. Run the tests:
+You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, not in the container.
 
-   ```sh
-   ./bin/test-launcher              # every test
-   ./bin/test-launcher AcfShared    # only tests whose name contains "AcfShared"
-   ```
+### Two kinds of tests
+
+| Test | Kind | Needs |
+| --- | --- | --- |
+| `MultiLangResolveFields.php` | offline | nothing: no site, no `.env` |
+| `FieldGroupMalformedFields.php` | offline | nothing: no site, no `.env` |
+| `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
+| `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
+| `WooCommerceCatalog.php` | end-to-end | a site with ACF and WooCommerce |
+
+- **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
+- **End-to-end tests** call the REST API of a real WordPress site with the plugin active. None of
+  them needs WPML.
+
+### Running them
+
+For the end-to-end tests, set these in `.env` (see `.env.example`):
+
+- `WP_TEST_URL`: base URL of the test site, without a trailing slash, for example
+  `http://localhost:8040`
+- `WP_TEST_TOKEN`: the token generated on the **On Page®** admin page of the test site (the value
+  of the `onpage_auth_token` option)
+
+Then run:
+
+```sh
+./bin/test-launcher              # every test
+./bin/test-launcher AcfShared    # only tests whose name contains "AcfShared"
+php src/Tests/MultiLangResolveFields.php   # one test on its own
+```
+
+The launcher works from any directory inside the repository. It runs the tests one at a time, in
+alphabetical order, and shows each result. It **stops at the first failure** and returns that
+test's exit code. Rationale: the tests share the same site, so continuing on a dirty state would
+only produce follow-on errors.
 
 Good to know:
 
-- The tests create and delete their own data. **Never point them at a production site.**
-- The run stops at the first failing test. Later tests share the same site, so their failures
-  would only be side effects.
-- Each run rewrites `logs/audit.log` with the full HTTP conversation of the last run.
+- The end-to-end tests create and delete their own data. **Never point them at a production site.**
+- Every end-to-end test follows a create-delete flow: it builds its own fixture (post type, field
+  groups, content), runs its checks and removes everything, even when an assertion fails. Cleanup
+  also runs before the fixture, so an interrupted run does not block the next one. Cleanup always
+  uses `?ignore=1`.
+
+### Audit log
+
+Each launcher run rewrites `logs/audit.log` with the full HTTP conversation of that run:
+
+- one `[req]` line per call, with method, URL and body
+- one `[res]` line per call, with HTTP status, duration and response body
+
+Calls are grouped under the header of the test that made them, and each test ends with an
+`[esito]` (result) line. JSON bodies are pretty-printed. A response that is not JSON (a PHP fatal
+error, an HTML error page) is logged verbatim.
+
+The token is never written: the `Authorization` header appears as `Bearer <nascosto>` ("hidden"), so
+the file can be attached to a bug report. A test run on its own with `php src/Tests/<Name>.php`
+appends to the same file. Writing the log can never make a test fail: if the file is not writable,
+logging is silently disabled. `logs/` is in `.gitignore`.
+
+### What each test covers
+
+- **`WooCommerceCatalog.php`** is the baseline. In one pass it does what every import does:
+  - it declares the structures: a custom taxonomy, a WooCommerce global attribute, and ACF field
+    groups for product, variation, `product_cat`, `product_tag`, `product_brand`, the custom
+    taxonomy and the attribute's `pa_*` taxonomy;
+  - it publishes data into them: a brand, a parent and a child category, a tag, the attribute's
+    values, a custom-taxonomy term, a simple product, a variable product and its variations, each
+    with its own ACF values;
+  - it reads everything back through the `GET` endpoints and finally deletes it all.
+
+  The data is made up in the file. Unlike the equivalent test in the separate
+  `connector-wordpress` repository, nothing is read from On Page®, so the test runs against a bare
+  WordPress install.
+- **`AcfSharedStructuredFields.php`** checks that structured ACF values sent as shared on
+  `POST /posts` (a repeater, a group, a multi-checkbox) survive the round trip.
+- **`DuplicateTitleDistinctLocalKeys.php`** checks that two different On Page® elements with the
+  same name can both be imported and re-imported, on `POST /posts` and on
+  `POST /woocommerce/products`.
+- **`MultiLangResolveFields.php`** covers the shared-value rule offline, directly on
+  `MultiLang::resolveFields()`. It includes a case labeled *current behavior, not the desired one*,
+  which pins the known false positive described in
+  [internals.md](docs/dev/internals.md#2-shared-vs-translated). It fails if someone changes the
+  predicate, so that the change is a deliberate decision.
+- **`FieldGroupMalformedFields.php`** checks offline that a malformed `fields` payload on
+  `FieldGroup::persistFields()` stops the request before anything is written or deleted.
 
 ## Making a change
 
@@ -81,8 +166,8 @@ Update the docs in the same change as the code:
 - If you add or change an endpoint, update [docs/API.md](docs/API.md): the route, its parameters,
   the response shape and the error codes. Add new endpoints to its endpoint index too.
 - If you add, rename or remove a guide, update [docs/README.md](docs/README.md).
-- Write in English. The full style rules are in [AGENTS.md](AGENTS.md). They apply to people as
-  well as to AI agents.
+- Write in English. The full style rules, and the table of which document to update for which
+  change, are in [AGENTS.md](AGENTS.md). They apply to people as well as to AI agents.
 
 ## Releases
 

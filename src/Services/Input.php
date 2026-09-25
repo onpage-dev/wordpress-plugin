@@ -106,12 +106,67 @@ class Input
         return $string !== null ? [[null, $string]] : [];
     }
 
+    /**
+     * Returns the JSON request body as a list, or throws `400 invalid_param`.
+     *
+     * Every batch endpoint takes a JSON array. A missing or non-JSON body (`null`), a scalar
+     * or an object with named keys is rejected here, so controllers can iterate the result
+     * and pass each integer index on as the element index.
+     *
+     * The empty object `{}` decodes to the same `[]` as the empty list, so the raw body is
+     * checked too: only a literal JSON array counts as an (empty) batch.
+     */
+    public static function requireJsonList(\WP_REST_Request $request, string $error_prefix): array
+    {
+        $body = $request->get_json_params();
+        $is_empty_object = $body === [] && str_starts_with(ltrim((string) $request->get_body()), '{');
+        if (!is_array($body) || !array_is_list($body) || $is_empty_object) {
+            throw onpage_http_exception($error_prefix . ' :: Request body must be a JSON array', 400, 'invalid_param');
+        }
+
+        return $body;
+    }
+
+    /**
+     * Returns a batch element as an array, or throws `400 invalid_param` when it is not a
+     * JSON object (scalars, `null`, lists and the empty object `{}` are all rejected).
+     */
+    public static function requireObjectElement(mixed $value, string $error_prefix, int $element_index): array
+    {
+        if (!is_array($value) || array_is_list($value)) {
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Invalid payload; expected a non-empty JSON object", 400, 'invalid_param');
+        }
+
+        return $value;
+    }
+
+    /**
+     * Returns a strictly positive integer ID (an int, or a string of digits only), or null.
+     *
+     * Unlike `positiveInt()`, which accepts any numeric string, values such as `"12abc"`,
+     * `"1.5"`, `" 12"`, `true` or arrays are rejected instead of being cast.
+     */
+    public static function strictPositiveInt(mixed $value): int|null
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+
+        // Leading zeros are tolerated; digit strings beyond PHP_INT_MAX are not (their cast would clamp).
+        $digits = is_string($value) && ctype_digit($value) ? ltrim($value, '0') : '';
+        if ($digits !== '' && $digits === (string) (int) $digits) {
+            return (int) $digits;
+        }
+
+        return null;
+    }
+
     /** Returns a required non-empty string param or throws the standard REST error. */
     public static function requireStringParam(array $params, string $key, string $error_prefix, int $element_index): string
     {
         $value = self::stringOrNull($params[$key] ?? null);
         if ($value === null) {
-            throw httpException($error_prefix . " :: Element $element_index :: Parameter '$key' is required", 400, 'invalid_param');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parameter '$key' is required", 400, 'invalid_param');
         }
 
         return $value;
@@ -122,7 +177,7 @@ class Input
     {
         $value = self::positiveInt($params[$key] ?? null);
         if ($value === null) {
-            throw httpException($error_prefix . " :: Element $element_index :: Parameter '$key' must be a positive integer", 400, 'invalid_param');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parameter '$key' must be a positive integer", 400, 'invalid_param');
         }
 
         return $value;
@@ -133,7 +188,7 @@ class Input
     {
         $value = self::localKey($params[$key] ?? null);
         if ($value === null) {
-            throw httpException($error_prefix . " :: Element $element_index :: Parameter '$key' must be a positive integer or a non-empty string", 400, 'invalid_param');
+            throw onpage_http_exception($error_prefix . " :: Element $element_index :: Parameter '$key' must be a positive integer or a non-empty string", 400, 'invalid_param');
         }
 
         return $value;

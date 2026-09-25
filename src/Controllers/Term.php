@@ -67,14 +67,12 @@ class Term
         Acf::loadFieldTypeMap(['term']);
 
         $ids = [];
-        foreach ($request->get_json_params() as $i => $params) {
-            if (!is_array($params)) {
-                throw httpException("Term :: Element $i :: Invalid payload; expected an object", 400, 'invalid_param');
-            }
+        foreach (Input::requireJsonList($request, 'Term') as $i => $params) {
+            $params = Input::requireObjectElement($params, 'Term', $i);
 
             $taxonomy_param = Input::stringOrNull($params['taxonomy'] ?? null);
             if ($taxonomy_param === null) {
-                throw httpException("Term :: Element $i :: Parameter 'taxonomy' is required", 400, 'invalid_param');
+                throw onpage_http_exception("Term :: Element $i :: Parameter 'taxonomy' is required", 400, 'invalid_param');
             }
 
             $taxonomy = TermService::requireTaxonomySlug($taxonomy_param);
@@ -87,7 +85,10 @@ class Term
     /**
      * REST: deletes terms by ID from the JSON body. The taxonomy is optional (`?taxonomy=`):
      * when omitted each term's taxonomy is resolved from the term itself, so a single request
-     * can delete terms of different taxonomies.
+     * can delete terms of different taxonomies. Optional `ignore` query skips missing terms.
+     *
+     * IDs are validated strictly (a positive int or a digit-only string): a cast would turn
+     * `"12abc"` into 12 and any array into 1, deleting a term nobody asked for.
      *
      * @param \WP_REST_Request $request Route request; JSON body is a list of term IDs.
      */
@@ -95,9 +96,24 @@ class Term
     {
         $taxonomy_param = Input::requestString($request, 'taxonomy');
         $taxonomy = $taxonomy_param !== null ? TermService::requireTaxonomySlug($taxonomy_param) : null;
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $term_id) {
-            TermService::deleteById((int) $term_id, $taxonomy);
+        foreach (Input::requireJsonList($request, 'Term') as $i => $value) {
+            $term_id = Input::strictPositiveInt($value);
+            if ($term_id === null) {
+                throw onpage_http_exception("Term :: Element $i :: Invalid delete value; expected a term ID (positive integer)", 400, 'input_invalid');
+            }
+
+            // Checked here so a missing term (or one outside `?taxonomy=`) answers 404 instead of
+            // reaching `wp_delete_term()`, whose `false` for "no such term" reads as a failure.
+            $term = \get_term($term_id, $taxonomy ?? '');
+            if (!$term instanceof \WP_Term) {
+                if ($ignore_missing) continue;
+
+                throw onpage_http_exception("Term :: Element $i :: Term $term_id not found", 404, 'not_found');
+            }
+
+            TermService::deleteById($term_id, $taxonomy ?? $term->taxonomy);
         }
 
         return new \WP_REST_Response(null, 200);

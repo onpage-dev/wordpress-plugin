@@ -55,7 +55,7 @@ class Product
     private static function requireWooCommerce(): void
     {
         if (!\function_exists('wc_get_product') || !class_exists('\WC_Product_Simple') || !class_exists('\WC_Product_Variable')) {
-            throw httpException(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
         }
     }
 
@@ -75,12 +75,12 @@ class Product
     private static function normalizeProductType(mixed $value, int $element_index): string
     {
         if (!is_scalar($value) || trim((string) $value) === '') {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props.product_type' must be a string", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props.product_type' must be a string", 400, 'invalid_param');
         }
 
         $product_type = \sanitize_key((string) $value);
         if (!in_array($product_type, self::SUPPORTED_PRODUCT_TYPES, true)) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props.product_type' must be one of: " . implode(', ', self::SUPPORTED_PRODUCT_TYPES),
                 400,
                 'invalid_param'
@@ -135,7 +135,7 @@ class Product
         }
 
         if (!is_array($params[$key]) || !self::isObjectArray($params[$key])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be an object", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$key' must be an object", 400, 'invalid_param');
         }
 
         return $params[$key];
@@ -162,14 +162,14 @@ class Product
 
         if (is_scalar($value)) {
             if (trim((string) $value) === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must be a non-empty value or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must be a non-empty value or null", 400, 'invalid_param');
             }
 
             return;
         }
 
         if (!is_array($value)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must be a scalar, list, WPML language map or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must be a scalar, list, WPML language map or null", 400, 'invalid_param');
         }
 
         MultiLang::requireWpmlForLanguageMap($value, self::ERROR_PREFIX, $element_index, 'attributes.' . $attribute_name);
@@ -183,12 +183,12 @@ class Product
         }
 
         if (!array_is_list($value)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must be a list or WPML language map", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must be a list or WPML language map", 400, 'invalid_param');
         }
 
         foreach ($value as $option_index => $option) {
             if (!is_scalar($option) || trim((string) $option) === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name.$option_index' must be a non-empty value", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name.$option_index' must be a non-empty value", 400, 'invalid_param');
             }
         }
     }
@@ -204,7 +204,7 @@ class Product
         foreach ($attributes as $attribute_name => $value) {
             $attribute_name = trim((string) $attribute_name);
             if ($attribute_name === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute name must be non-empty", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute name must be non-empty", 400, 'invalid_param');
             }
 
             self::validateAttributeValue($value, $attribute_name, $element_index);
@@ -218,7 +218,7 @@ class Product
     {
         if ($value === null || $value === '') {
             if ($required) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' is required", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' is required", 400, 'invalid_param');
             }
 
             return;
@@ -226,7 +226,7 @@ class Product
 
         if (is_scalar($value)) {
             if (trim((string) $value) === '' && $required) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' is required", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' is required", 400, 'invalid_param');
             }
 
             return;
@@ -241,7 +241,7 @@ class Product
             return;
         }
 
-        throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' must be a string, language map or null", 400, 'invalid_param');
+        throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter '$path' must be a string, language map or null", 400, 'invalid_param');
     }
 
     /** Normalizes the native WooCommerce downloadable files payload. */
@@ -256,19 +256,19 @@ class Product
         }
 
         if (!is_array($params['downloads']) || !array_is_list($params['downloads'])) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads' must be a list or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads' must be a list or null", 400, 'invalid_param');
         }
 
         $downloads = [];
         foreach ($params['downloads'] as $download_index => $download) {
             if (!is_array($download) || array_is_list($download)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index' must be an object", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index' must be an object", 400, 'invalid_param');
             }
 
             $has_file = array_key_exists('file', $download);
             $has_url = array_key_exists('url', $download);
             if (!$has_file && !$has_url) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' is required", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.file' is required", 400, 'invalid_param');
             }
 
             $file = $has_file ? $download['file'] : $download['url'];
@@ -280,7 +280,7 @@ class Product
 
             $id = Input::stringOrNull($download['id'] ?? null);
             if (array_key_exists('id', $download) && $download['id'] !== null && $id === null) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.id' must be a non-empty string or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'downloads.$download_index.id' must be a non-empty string or null", 400, 'invalid_param');
             }
 
             $downloads[] = [
@@ -298,7 +298,7 @@ class Product
     private static function requireName(array $params, int $element_index): string|array
     {
         if (!array_key_exists('name', $params)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
         }
 
         if (is_scalar($params['name']) && trim((string) $params['name']) !== '') {
@@ -310,14 +310,14 @@ class Product
         if (MultiLang::isLanguageMapShape($params['name'] ?? null)) {
             foreach ($params['name'] as $language_code => $name) {
                 if (!is_scalar($name) || trim((string) $name) === '') {
-                    throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name.$language_code' must be a non-empty string", 400, 'invalid_param');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name.$language_code' must be a non-empty string", 400, 'invalid_param');
                 }
             }
 
             return $params['name'];
         }
 
-        throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' must be a non-empty string or a WPML language map", 400, 'invalid_param');
+        throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' must be a non-empty string or a WPML language map", 400, 'invalid_param');
     }
 
     /** Returns the DTO status value, defaulting to publish. */
@@ -328,7 +328,7 @@ class Product
         }
 
         if (!is_scalar($params['status']) || trim((string) $params['status']) === '') {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'status' must be a string", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'status' must be a string", 400, 'invalid_param');
         }
 
         return trim((string) $params['status']);
@@ -338,7 +338,7 @@ class Product
     private static function normalizeProductPayload(array $params, int $element_index): array
     {
         if ($params !== [] && array_is_list($params)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Product payload must be an object", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Product payload must be an object", 400, 'invalid_param');
         }
 
         $normalized = [
@@ -375,7 +375,7 @@ class Product
 
         if (array_key_exists('slug', $params)) {
             if ($params['slug'] !== null && !is_scalar($params['slug']) && !is_array($params['slug'])) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'slug' must be a string or a WPML language map", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'slug' must be a string or a WPML language map", 400, 'invalid_param');
             }
             MultiLang::requireWpmlForLanguageMap($params['slug'], self::ERROR_PREFIX, $element_index, 'slug');
             $normalized['slug'] = $params['slug'];
@@ -383,7 +383,7 @@ class Product
 
         if (array_key_exists('update_slug', $params)) {
             if (!is_bool($params['update_slug'])) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'update_slug' must be a boolean", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'update_slug' must be a boolean", 400, 'invalid_param');
             }
             $normalized['update_slug'] = $params['update_slug'];
         }
@@ -412,7 +412,7 @@ class Product
         if (array_key_exists('id', $params)) {
             $product_id = Input::positiveInt($params['id']);
             if ($params['id'] !== null && $product_id === null) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'id' must be a positive integer or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'id' must be a positive integer or null", 400, 'invalid_param');
             }
 
             if ($product_id !== null) {
@@ -480,7 +480,7 @@ class Product
         )));
 
         $fallback_language = $languages[0] ?? null;
-        $default_language = getWpmlDefaultLanguage() ?: $fallback_language;
+        $default_language = onpage_get_wpml_default_language() ?: $fallback_language;
 
         return [
             'default_language' => $default_language,
@@ -557,11 +557,11 @@ class Product
         $product_ids = self::findProductIdsByLocalKey($local_key);
         if ($product_ids === []) return null;
 
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return $product_ids[0];
         }
 
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         foreach ($product_ids as $product_id) {
             $language_details = self::getProductLanguageDetails($product_id);
             if ($default_language && !empty($language_details?->language_code) && (string) $language_details->language_code === $default_language) {
@@ -621,7 +621,7 @@ class Product
 
         $product = \wc_get_product($product_id);
         if (!$product || \get_post_type($product_id) !== self::PRODUCT_POST_TYPE) {
-            throw httpException(self::ERROR_PREFIX . " :: Product $product_id not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Product $product_id not found", 404, 'not_found');
         }
 
         return $product;
@@ -636,7 +636,7 @@ class Product
         // recreated after its translations.
         $product_id = self::findCanonicalProductIdByLocalKey($local_key);
         if (!$product_id) {
-            throw httpException(self::ERROR_PREFIX . " :: Product with local_key '$local_key' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Product with local_key '$local_key' not found", 404, 'not_found');
         }
 
         return self::requireProductById($product_id);
@@ -750,7 +750,7 @@ class Product
     /** Picks the default-language product of a group, falling back to the given id. */
     private static function pickGroupRepresentative(int $product_id, array $translations): int
     {
-        $default_language = getWpmlDefaultLanguage();
+        $default_language = onpage_get_wpml_default_language();
         if ($default_language !== null && !empty($translations[$default_language])) {
             return (int) $translations[$default_language];
         }
@@ -829,7 +829,7 @@ class Product
         $local_key = Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index);
 
         if (!array_key_exists('title', $params)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
         }
 
         $title_map = MultiLang::splitValueByLanguage($params['title']);
@@ -841,7 +841,7 @@ class Product
         ));
 
         if ($title === '') {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' is required", 400, 'invalid_param');
         }
 
         // No local_key uniqueness re-check here: save() only reaches insertFromParams
@@ -849,7 +849,7 @@ class Product
         // re-querying would always return null. Updates are routed away earlier.
 
         if (self::findDuplicateProductIdByTitle($title, $local_key)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Name '$title' already exists", 409, 'duplicate_title');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Name '$title' already exists", 409, 'duplicate_title');
         }
 
         foreach ($language['translated_languages'] as $language_code) {
@@ -862,13 +862,13 @@ class Product
             ));
 
             if ($translated_title !== '' && self::findDuplicateProductIdByTitle($translated_title, $local_key)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Name '$translated_title' already exists", 409, 'duplicate_title');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Name '$translated_title' already exists", 409, 'duplicate_title');
             }
         }
 
         $product_type = self::getRequestedProductType($params, $element_index) ?? self::DEFAULT_PRODUCT_TYPE;
         $product = self::createProductObject($product_type);
-        $product->set_status((string) ($params['status'] ?? 'draft'));
+        $product->set_status((string) ($params['status'] ?? 'publish'));
         $created_product_ids = [];
 
         try {
@@ -883,7 +883,7 @@ class Product
             );
             $created_product_ids[] = $product_id;
 
-            if ($language['translated_languages'] !== [] && isWpmlActive()) {
+            if ($language['translated_languages'] !== [] && onpage_is_wpml_active()) {
                 self::insertTranslatedProducts(
                     $product_id,
                     $params,
@@ -929,7 +929,7 @@ class Product
     {
         $product_id = Input::positiveInt($params['id'] ?? null);
         if ($product_id === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'id' must be a positive integer", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'id' must be a positive integer", 400, 'invalid_param');
         }
 
         $language = self::getLanguageContext($params);
@@ -966,7 +966,7 @@ class Product
             if (!$resolved_by_local_key) {
                 // Explicit id + someone else's local_key: a genuine collision the caller
                 // must resolve, since the two products are different On Page® elements.
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists", 409, 'duplicate_local_key');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' already exists", 409, 'duplicate_local_key');
             }
 
             $translation_ids = self::reconcileForeignLocalKeyHolders(
@@ -1004,7 +1004,7 @@ class Product
                     : $product_id;
 
                 if ($title !== '' && self::findDuplicateProductIdByTitle($title, $local_key, $group_product_id)) {
-                    throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Name '$title' already exists", 409, 'duplicate_title');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Name '$title' already exists", 409, 'duplicate_title');
                 }
             }
         }
@@ -1110,7 +1110,7 @@ class Product
             // Falls through to wp_delete_post() below.
         }
 
-        if (postExists($product_id)) {
+        if (onpage_post_exists($product_id)) {
             \wp_delete_post($product_id, true);
         }
     }
@@ -1162,7 +1162,7 @@ class Product
             try {
                 $product_id = (int) $product->save();
             } catch (\Throwable $e) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Failed to save product :: " . $e->getMessage(), 500, 'request_failed');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to save product :: " . $e->getMessage(), 500, 'request_failed');
             }
 
             if ($set_language_details && $language_code) {
@@ -1175,6 +1175,9 @@ class Product
             self::applyImage($product, $params, $product_id, $element_index, $language_code, $fallback_language);
             self::applyGallery($product, $params, $product_id, $element_index, $language_code, $fallback_language);
             ProductDownloads::syncVariableProductToVariations($product, $params, $element_index);
+            if (array_key_exists('attributes', $params) && $product instanceof \WC_Product_Variable) {
+                VariantProduct::disableVariationsWithUnofferedAttributes($product, $element_index);
+            }
             self::saveAcfFields($product_id, $acf_fields);
 
             if (isset($params['terms']) && is_array($params['terms'])) {
@@ -1234,7 +1237,7 @@ class Product
     ): int {
         $product_type = self::getRequestedProductType($params, $element_index) ?? self::DEFAULT_PRODUCT_TYPE;
         $translated_product = self::createProductObject($product_type);
-        $translated_product->set_status((string) ($params['status'] ?? 'draft'));
+        $translated_product->set_status((string) ($params['status'] ?? 'publish'));
 
         $translated_product_id = Wpml::runWithLanguage($language_code, function () use (
             $translated_product,
@@ -1255,7 +1258,7 @@ class Product
             try {
                 return (int) $translated_product->save();
             } catch (\Throwable $e) {
-                throw httpException(
+                throw onpage_http_exception(
                     self::ERROR_PREFIX . " :: Element $element_index :: Failed to save product translation '$language_code' :: " . $e->getMessage(),
                     500,
                     'request_failed'
@@ -1357,7 +1360,7 @@ class Product
         array $translation_ids,
         array $translated_languages
     ): void {
-        if ($translated_languages === [] || !isWpmlActive() || $source_language === null) {
+        if ($translated_languages === [] || !onpage_is_wpml_active() || $source_language === null) {
             return;
         }
 
@@ -1380,7 +1383,7 @@ class Product
         }
 
         if (!$trid) {
-            throw httpException(
+            throw onpage_http_exception(
                 self::ERROR_PREFIX . " :: Element $element_index :: Unable to resolve translation group (trid) for Product $source_product_id",
                 500,
                 'wpml_error'
@@ -1479,7 +1482,7 @@ class Product
         }
 
         if (!is_array($params['props']) || ($params['props'] !== [] && array_is_list($params['props']))) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props' must be an object", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props' must be an object", 400, 'invalid_param');
         }
 
         return $params['props'];
@@ -1554,13 +1557,13 @@ class Product
         }
 
         if (!is_array($value) || !array_is_list($value)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must resolve to a scalar, list or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' must resolve to a scalar, list or null", 400, 'invalid_param');
         }
 
         $options = [];
         foreach ($value as $option) {
             if (!is_scalar($option) || trim((string) $option) === '') {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' contains an invalid option", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$attribute_name' contains an invalid option", 400, 'invalid_param');
             }
 
             $options[] = trim((string) $option);
@@ -1604,6 +1607,31 @@ class Product
         $payload = MultiLang::resolveFields($params['attributes'], $language_code, $fallback_language);
         $attributes = [];
         $used_for_variations = $product instanceof \WC_Product_Variable || $product->get_type() === 'variable';
+
+        // The payload manages custom attributes only. Global `pa_*` attributes a site admin
+        // added in WooCommerce (and the variations built on them) are kept as they are, unless
+        // the payload sends a key with the same name, which replaces it as before.
+        $payload_keys = [];
+        foreach (array_keys($payload) as $attribute_name) {
+            $attribute_name = trim((string) $attribute_name);
+            if ($attribute_name !== '') {
+                $payload_keys[self::getAttributeLookupKey($attribute_name)] = true;
+            }
+        }
+
+        foreach ($product->get_attributes() as $existing_key => $existing_attribute) {
+            if (!$existing_attribute instanceof \WC_Product_Attribute || !$existing_attribute->is_taxonomy()) {
+                continue;
+            }
+
+            $existing_key = self::getAttributeLookupKey((string) $existing_key);
+            if (isset($payload_keys[$existing_key])) {
+                continue;
+            }
+
+            $existing_attribute->set_position(count($attributes));
+            $attributes[$existing_key] = $existing_attribute;
+        }
 
         foreach ($payload as $attribute_name => $value) {
             $attribute_name = trim((string) $attribute_name);
@@ -1652,7 +1680,7 @@ class Product
 
         if (is_int($image)) {
             if (!RemoteMedia::isAttachmentId($image)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
             }
 
             RemoteMedia::linkMediaToPost($image, $product_id);
@@ -1662,12 +1690,12 @@ class Product
         }
 
         if (!is_string($image)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must resolve to an attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must resolve to an attachment ID, a valid remote URL, or null", 400, 'invalid_param');
         }
 
         $url = RemoteMedia::sanitizeUrl($image);
         if ($url === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be a valid remote URL or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'image' must be a valid remote URL or null", 400, 'invalid_param');
         }
 
         $import_result = RemoteMedia::urlToPost($url, $product_id, 'image');
@@ -1703,7 +1731,7 @@ class Product
         }
 
         if (!is_array($gallery) || !array_is_list($gallery)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' must resolve to a list of remote URLs or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' must resolve to a list of remote URLs or null", 400, 'invalid_param');
         }
 
         $attachment_ids = [];
@@ -1718,7 +1746,7 @@ class Product
 
             if (is_int($entry)) {
                 if (!RemoteMedia::isAttachmentId($entry)) {
-                    throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' entry $position must be an existing attachment ID", 400, 'invalid_param');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' entry $position must be an existing attachment ID", 400, 'invalid_param');
                 }
 
                 RemoteMedia::linkMediaToPost($entry, $product_id);
@@ -1729,12 +1757,12 @@ class Product
             }
 
             if (!is_string($entry)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' entry $position must be an attachment ID or a remote URL string", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' entry $position must be an attachment ID or a remote URL string", 400, 'invalid_param');
             }
 
             $url = RemoteMedia::sanitizeUrl($entry);
             if ($url === null) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' entry $position must be a valid remote URL", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'gallery' entry $position must be a valid remote URL", 400, 'invalid_param');
             }
 
             $import_result = RemoteMedia::urlToPost($url, $product_id, 'image');
@@ -1754,7 +1782,7 @@ class Product
         try {
             $product->save();
         } catch (\Throwable $e) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Failed to save product image :: " . $e->getMessage(), 500, 'request_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Failed to save product image :: " . $e->getMessage(), 500, 'request_failed');
         }
     }
 
@@ -1782,7 +1810,7 @@ class Product
         ]);
 
         if (empty($language_details->trid) || empty($language_details->language_code)) {
-            throw httpException(self::ERROR_PREFIX . " :: Failed to initialize WPML language details to Product $product_id", 500, 'request_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to initialize WPML language details to Product $product_id", 500, 'request_failed');
         }
 
         return $language_details;
@@ -1791,7 +1819,7 @@ class Product
     /** WPML language details object for a product. */
     private static function getProductLanguageDetails(int $product_id): mixed
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         return \apply_filters('wpml_element_language_details', null, [
             'element_id' => $product_id,
@@ -1802,7 +1830,7 @@ class Product
     /** Returns WPML translations map for a product translation group. */
     private static function getProductTranslations(int $trid): array
     {
-        if (!isWpmlActive()) return [];
+        if (!onpage_is_wpml_active()) return [];
 
         $translations = \apply_filters(
             'wpml_get_element_translations',
@@ -1819,7 +1847,7 @@ class Product
     /** Drops from the product's WPML group the language slots whose product no longer exists. */
     private static function pruneOrphanProductTranslations(int $product_id): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         $trid = self::getProductTrid($product_id);
         if (!$trid) return;
@@ -1830,7 +1858,7 @@ class Product
     /** Returns WPML trid for a product, when available. */
     private static function getProductTrid(int $product_id): int|null
     {
-        if (!isWpmlActive()) return null;
+        if (!onpage_is_wpml_active()) return null;
 
         if (\function_exists('wpml_get_content_trid')) {
             $trid = \wpml_get_content_trid(self::PRODUCT_POST_TYPE, $product_id);
@@ -1868,7 +1896,7 @@ class Product
         ?string $current_language = null,
         ?int $trid = null
     ): array {
-        if (!isWpmlActive()) {
+        if (!onpage_is_wpml_active()) {
             return $current_language ? [$current_language => $product_id] : [];
         }
 
@@ -1879,7 +1907,7 @@ class Product
             if (is_array($translations)) {
                 foreach ($translations as $lang => $translation) {
                     $translated_product_id = isset($translation->element_id) ? (int) $translation->element_id : 0;
-                    if (postExists($translated_product_id)) {
+                    if (onpage_post_exists($translated_product_id)) {
                         $translation_ids[(string) $lang] = $translated_product_id;
                     }
                 }
@@ -1894,7 +1922,7 @@ class Product
             if (is_array($duplicates)) {
                 foreach ($duplicates as $lang => $duplicate_product_id) {
                     $duplicate_product_id = (int) $duplicate_product_id;
-                    if (postExists($duplicate_product_id)) {
+                    if (onpage_post_exists($duplicate_product_id)) {
                         $translation_ids[(string) $lang] = $duplicate_product_id;
                     }
                 }
@@ -1917,7 +1945,7 @@ class Product
         if ($trid) {
             foreach (self::getProductTranslations($trid) as $lang => $translation) {
                 $translated_product_id = isset($translation->element_id) ? (int) $translation->element_id : 0;
-                if (postExists($translated_product_id)) {
+                if (onpage_post_exists($translated_product_id)) {
                     $translation_ids[(string) $lang] = $translated_product_id;
                 }
             }
@@ -1933,7 +1961,7 @@ class Product
     /** Sets WPML element language details for a product. */
     private static function setProductLanguage(int $product_id, string $lang, int|false $trid = false, ?string $source_lang = null): void
     {
-        if (!isWpmlActive()) return;
+        if (!onpage_is_wpml_active()) return;
 
         \do_action('wpml_set_element_language_details', [
             'element_id' => $product_id,
@@ -1954,7 +1982,7 @@ class Product
     private static function areSameTranslationGroup(int $left_product_id, int $right_product_id): bool
     {
         if ($left_product_id === $right_product_id) return true;
-        if (!isWpmlActive()) return false;
+        if (!onpage_is_wpml_active()) return false;
 
         $left_trid = self::getProductTrid($left_product_id);
         $right_trid = self::getProductTrid($right_product_id);
@@ -1971,12 +1999,12 @@ class Product
         if (!$product || \get_post_type($product_id) !== self::PRODUCT_POST_TYPE) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . " :: Product $product_id not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Product $product_id not found", 404, 'not_found');
         }
 
         $deleted = $product->delete(true);
         if (!$deleted) {
-            throw httpException(self::ERROR_PREFIX . " :: Failed to delete product $product_id", 500, 'delete_failed');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to delete product $product_id", 500, 'delete_failed');
         }
     }
 
@@ -1994,7 +2022,7 @@ class Product
         if ($product_ids === []) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . " :: Product with local_key '$local_key' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Product with local_key '$local_key' not found", 404, 'not_found');
         }
 
         // Missing IDs are tolerated inside the loop: one delete can cascade to another

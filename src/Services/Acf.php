@@ -160,6 +160,24 @@ class Acf
         )));
     }
 
+    /**
+     * Returns the entry stored under a payload field name, or null.
+     *
+     * FieldGroup saves field names through `sanitize_key()`, which lowercases them: a field
+     * declared as `MyField` is stored as `myfield`. The exact name is tried first, then its
+     * sanitized form, so `acf_fields` payloads resolve whichever case they use.
+     */
+    private static function lookupByFieldName(array $map, string $field_name): mixed
+    {
+        if (array_key_exists($field_name, $map)) {
+            return $map[$field_name];
+        }
+
+        $normalized_name = \sanitize_key($field_name);
+
+        return $normalized_name !== $field_name ? ($map[$normalized_name] ?? null) : null;
+    }
+
     /** Whether any loaded ACF field group defines the given field name, optionally scoped by entity type. */
     public static function hasField(string $field_name, ?string $context = null, ?string $target = null): bool
     {
@@ -172,7 +190,7 @@ class Acf
         if ($context !== null && $target !== null) {
             self::loadFieldTypeMap([$context]);
 
-            $scoped_type = self::$fieldTypeMap[$context][$target][$field_name] ?? null;
+            $scoped_type = self::lookupByFieldName(self::$fieldTypeMap[$context][$target] ?? [], $field_name);
             if (is_string($scoped_type)) {
                 return $scoped_type;
             }
@@ -189,8 +207,9 @@ class Acf
         self::loadFieldTypeMap();
 
         foreach (self::$fieldTypeMap['groups'] ?? [] as $field_group_map) {
-            if (array_key_exists($field_name, $field_group_map)) {
-                return $field_group_map[$field_name];
+            $field_type = self::lookupByFieldName($field_group_map, $field_name);
+            if (is_string($field_type)) {
+                return $field_type;
             }
         }
 
@@ -212,8 +231,9 @@ class Acf
             self::loadFieldTypeMap([$context]);
 
             $field_map = self::$fieldTypeMap[$context . '_fields'][$target] ?? [];
-            if (isset($field_map[$field_name]) && is_array($field_map[$field_name])) {
-                return $field_map[$field_name];
+            $field = self::lookupByFieldName($field_map, $field_name);
+            if (is_array($field)) {
+                return $field;
             }
 
             foreach ($field_map as $field) {
@@ -228,8 +248,9 @@ class Acf
         self::loadFieldTypeMap();
 
         foreach (self::$fieldTypeMap['group_fields'] ?? [] as $field_group_map) {
-            if (isset($field_group_map[$field_name]) && is_array($field_group_map[$field_name])) {
-                return $field_group_map[$field_name];
+            $field = self::lookupByFieldName($field_group_map, $field_name);
+            if (is_array($field)) {
+                return $field;
             }
 
             foreach ($field_group_map as $field) {
@@ -252,15 +273,16 @@ class Acf
         if ($context !== null && $target !== null) {
             self::loadFieldTypeMap([$context]);
 
-            $scoped_key = self::$fieldTypeMap[$context . '_keys'][$target][$field_name] ?? null;
+            $scoped_key = self::lookupByFieldName(self::$fieldTypeMap[$context . '_keys'][$target] ?? [], $field_name);
             return is_string($scoped_key) ? $scoped_key : null;
         }
 
         self::loadFieldTypeMap();
 
         foreach (self::$fieldTypeMap['group_keys'] ?? [] as $field_group_map) {
-            if (array_key_exists($field_name, $field_group_map)) {
-                return $field_group_map[$field_name];
+            $field_key = self::lookupByFieldName($field_group_map, $field_name);
+            if (is_string($field_key)) {
+                return $field_key;
             }
         }
 
@@ -276,10 +298,15 @@ class Acf
      *    with its `attachment_id`. For `post` context the attachment is also linked to
      *    the parent post (`RemoteMedia::urlToPost`); for other contexts it is just
      *    imported (`RemoteMedia::urlToMediaLibrary`).
-     *  - `image`/`file` with an int value: treated as an existing attachment ID. For
-     *    `post` context it is also linked to the parent post, same as the URL case.
+     *  - `image`/`file` with an int (or numeric string) value: treated as an existing
+     *    attachment ID. For `post` context it is also linked to the parent post, same as
+     *    the URL case.
+     *  - `image`/`file` with a value that is neither an existing attachment ID nor a valid
+     *    URL: rejected with `400 input_invalid`, like the `files` payload.
      *  - `repeater`: validated (must be a list of row objects), recursed into; sub-field
-     *    `image`/`file` URLs/attachment IDs resolved the same way, nested repeaters supported.
+     *    `image`/`file` URLs/attachment IDs resolved the same way, nested repeaters and
+     *    groups supported.
+     *  - `group`: validated (must be an object), its sub-fields resolved like a repeater row.
      */
     public static function updateFieldValue(
         int|string $object_id,
@@ -295,13 +322,13 @@ class Acf
         if ($field_type === 'tab') return;
 
         if ($value !== null && $value !== '') {
-            if (in_array($field_type, ['image', 'file'], true) && (is_string($value) || is_int($value))) {
-                $attachment_id = self::resolveMediaValueToAttachment($value, $object_id, $field_key, $context);
-                if ($attachment_id !== null) {
-                    $value = $attachment_id;
-                }
+            // `0` / `"0"` clear the field, as ACF stores an empty media field.
+            if (in_array($field_type, ['image', 'file'], true) && (is_string($value) || is_int($value)) && !self::isMediaClearValue($value)) {
+                $value = self::requireMediaAttachment($value, $object_id, $field_key, $context);
             } elseif ($field_type === 'repeater' && is_array($field)) {
                 $value = self::resolveRepeaterValue($field, $value, $object_id, $field_key, $context);
+            } elseif ($field_type === 'group' && is_array($field)) {
+                $value = self::resolveGroupValue($field, $value, $object_id, $field_key, $context);
             }
         }
 
@@ -309,11 +336,11 @@ class Acf
             if (\acf_update_value($value, $object_id, $field) !== false) return;
             if (self::valuePersisted($value, (string) $field['name'], $object_id)) return;
 
-            throw httpException("Failed to assign ACF field '$field_key'", 500, 'acf_error');
+            throw onpage_http_exception("Failed to assign ACF field '$field_key'", 500, 'acf_error');
         }
 
         if ($context !== null && $target !== null) {
-            throw httpException("ACF field '$field_key' not found for $context '$target'", 400, 'invalid_param');
+            throw onpage_http_exception("ACF field '$field_key' not found for $context '$target'", 400, 'invalid_param');
         }
 
         $selector = self::getFieldKey($field_key, $context, $target) ?? $field_key;
@@ -321,7 +348,43 @@ class Acf
         if (\update_field($selector, $value, $object_id) !== false) return;
         if (self::valuePersisted($value, $selector, $object_id)) return;
 
-        throw httpException("Failed to assign ACF field '$field_key'", 500, 'acf_error');
+        throw onpage_http_exception("Failed to assign ACF field '$field_key'", 500, 'acf_error');
+    }
+
+    /** Whether an `image`/`file` value is ACF's "no attachment" value (`0` or `"0"`). */
+    private static function isMediaClearValue(string|int $value): bool
+    {
+        return $value === 0 || (is_string($value) && trim($value) === '0');
+    }
+
+    /**
+     * Resolves an `image`/`file` value to an attachment ID, or throws `400 input_invalid`.
+     *
+     * Writing an unresolvable value (a malformed URL, the ID of a deleted attachment) raw
+     * left the field pointing at nothing while the request answered 200. Same rule and
+     * message as the `files` payload (Post::resolveRemoteFiles()).
+     *
+     * @param string      $path       Field path used in the error message.
+     * @param string|null $import_key Key the imported file is named after (defaults to $path).
+     */
+    private static function requireMediaAttachment(
+        string|int $value,
+        int|string $object_id,
+        string $path,
+        ?string $context,
+        ?string $import_key = null
+    ): int {
+        // A numeric string is an attachment ID sent as text, as ACF itself stores it.
+        if (is_string($value) && ctype_digit(trim($value))) {
+            $value = (int) trim($value);
+        }
+
+        $attachment_id = self::resolveMediaValueToAttachment($value, $object_id, $import_key ?? $path, $context);
+        if ($attachment_id === null) {
+            throw onpage_http_exception("Field '$path' in acf_fields must be an existing attachment ID or a valid URL", 400, 'input_invalid');
+        }
+
+        return $attachment_id;
     }
 
     /**
@@ -361,12 +424,7 @@ class Acf
      * Normalizes a repeater payload before handing it to `acf_update_value()`.
      *
      * - Validates the outer shape (must be a list of row objects).
-     * - Skips `tab` sub-fields (UI separators).
-     * - Recurses into nested repeater sub-fields.
-     * - Resolves `image`/`file` sub-field URLs/attachment IDs into Media Library attachment
-     *   IDs, reusing `resolveMediaValueToAttachment` so post-context attachments stay linked
-     *   to their parent post.
-     * - Passes all other sub-field values through untouched.
+     * - Resolves each row's sub-fields with `resolveSubFieldValues()`.
      */
     private static function resolveRepeaterValue(
         array $field_def,
@@ -376,13 +434,72 @@ class Acf
         ?string $context
     ): array {
         if (!is_array($value) || !array_is_list($value)) {
-            throw httpException(
+            throw onpage_http_exception(
                 "Repeater '$path' must be a list of rows",
                 400,
                 'invalid_param'
             );
         }
 
+        $resolved_rows = [];
+        foreach ($value as $row_index => $row) {
+            if (!is_array($row) || array_is_list($row)) {
+                throw onpage_http_exception(
+                    "Repeater '$path' row $row_index must be an object",
+                    400,
+                    'invalid_param'
+                );
+            }
+
+            $resolved_rows[] = self::resolveSubFieldValues($field_def, $row, $object_id, "{$path}[$row_index]", $context);
+        }
+
+        return $resolved_rows;
+    }
+
+    /**
+     * Normalizes a group payload before handing it to `acf_update_value()`.
+     *
+     * - Validates the outer shape (must be an object keyed by sub-field name; `{}` is allowed).
+     * - Resolves its sub-fields with `resolveSubFieldValues()`, exactly like a repeater row.
+     */
+    private static function resolveGroupValue(
+        array $field_def,
+        mixed $value,
+        int|string $object_id,
+        string $path,
+        ?string $context
+    ): array {
+        if (!is_array($value) || ($value !== [] && array_is_list($value))) {
+            throw onpage_http_exception(
+                "Group '$path' must be an object",
+                400,
+                'invalid_param'
+            );
+        }
+
+        return self::resolveSubFieldValues($field_def, $value, $object_id, $path, $context);
+    }
+
+    /**
+     * Resolves the sub-field values of one repeater row or one group.
+     *
+     * - Skips `tab` sub-fields (UI separators).
+     * - Recurses into nested `repeater` and `group` sub-fields.
+     * - Resolves `image`/`file` sub-field URLs/attachment IDs into Media Library attachment
+     *   IDs with `requireMediaAttachment()` (post-context attachments stay linked to their
+     *   parent post; unresolvable values are rejected with `400 input_invalid`).
+     * - Passes all other sub-field values through untouched.
+     *
+     * @param string $path Path of the row or group; sub-field paths are `{$path}[name]`.
+     */
+    private static function resolveSubFieldValues(
+        array $field_def,
+        array $row,
+        int|string $object_id,
+        string $path,
+        ?string $context
+    ): array {
         $sub_fields_by_name = [];
         foreach (is_array($field_def['sub_fields'] ?? null) ? $field_def['sub_fields'] : [] as $sub_field) {
             if (!is_array($sub_field)) continue;
@@ -393,46 +510,42 @@ class Acf
             }
         }
 
-        $resolved_rows = [];
-        foreach ($value as $row_index => $row) {
-            if (!is_array($row) || array_is_list($row)) {
-                throw httpException(
-                    "Repeater '$path' row $row_index must be an object",
-                    400,
-                    'invalid_param'
-                );
+        $resolved_row = [];
+        foreach ($row as $sub_name => $sub_value) {
+            if (!is_string($sub_name)) continue;
+
+            // Same case-insensitive match as top-level fields; the row is keyed by the
+            // stored name, which is the one ACF resolves sub-fields by.
+            $sub_def = self::lookupByFieldName($sub_fields_by_name, $sub_name);
+            if (is_array($sub_def) && is_string($sub_def['name'] ?? null)) {
+                $sub_name = $sub_def['name'];
+            }
+            $sub_type = is_array($sub_def) ? ($sub_def['type'] ?? null) : null;
+            $sub_path = "{$path}[$sub_name]";
+
+            if ($sub_type === 'tab') continue;
+
+            $has_value = $sub_value !== null && $sub_value !== '';
+
+            if ($sub_type === 'repeater' && is_array($sub_def) && $has_value) {
+                $resolved_row[$sub_name] = self::resolveRepeaterValue($sub_def, $sub_value, $object_id, $sub_path, $context);
+                continue;
             }
 
-            $resolved_row = [];
-            foreach ($row as $sub_name => $sub_value) {
-                if (!is_string($sub_name)) continue;
-
-                $sub_def = $sub_fields_by_name[$sub_name] ?? null;
-                $sub_type = is_array($sub_def) ? ($sub_def['type'] ?? null) : null;
-                $sub_path = "$path[$row_index][$sub_name]";
-
-                if ($sub_type === 'tab') continue;
-
-                if ($sub_type === 'repeater' && is_array($sub_def)) {
-                    $resolved_row[$sub_name] = self::resolveRepeaterValue($sub_def, $sub_value, $object_id, $sub_path, $context);
-                    continue;
-                }
-
-                if (in_array($sub_type, ['image', 'file'], true) && (is_string($sub_value) || is_int($sub_value)) && $sub_value !== '') {
-                    $attachment_id = self::resolveMediaValueToAttachment($sub_value, $object_id, $sub_name, $context);
-                    if ($attachment_id !== null) {
-                        $resolved_row[$sub_name] = $attachment_id;
-                        continue;
-                    }
-                }
-
-                $resolved_row[$sub_name] = $sub_value;
+            if ($sub_type === 'group' && is_array($sub_def) && $has_value) {
+                $resolved_row[$sub_name] = self::resolveGroupValue($sub_def, $sub_value, $object_id, $sub_path, $context);
+                continue;
             }
 
-            $resolved_rows[] = $resolved_row;
+            if (in_array($sub_type, ['image', 'file'], true) && (is_string($sub_value) || is_int($sub_value)) && $sub_value !== '' && !self::isMediaClearValue($sub_value)) {
+                $resolved_row[$sub_name] = self::requireMediaAttachment($sub_value, $object_id, $sub_path, $context, $sub_name);
+                continue;
+            }
+
+            $resolved_row[$sub_name] = $sub_value;
         }
 
-        return $resolved_rows;
+        return $resolved_row;
     }
 
     /**

@@ -24,7 +24,7 @@ class Media
         $result = MediaService::listFromRequest($request);
 
         $response = new \WP_REST_Response($result['items'], 200);
-        setPaginationHeaders($response, $result['total'], $result['per_page']);
+        onpage_set_pagination_headers($response, $result['total'], $result['per_page']);
 
         return $response;
     }

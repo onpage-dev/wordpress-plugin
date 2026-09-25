@@ -25,64 +25,65 @@ define('ONPAGE_PLUGIN_DIR', __DIR__);
 
 
 
-include 'src/Env.php';
+// `src/Env.php` is deliberately not loaded: it reads the `.env` file, which only the tests in
+// `src/Tests` use. A stray `.env` in the plugin folder is therefore never read in production.
 
 
 
-include 'src/Exceptions/HttpException.php';
+require_once __DIR__ . '/src/Exceptions/HttpException.php';
 
 
 
-include 'src/helpers.php';
+require_once __DIR__ . '/src/helpers.php';
 
 
 
-include 'src/Services/Auth.php';
-include 'src/Services/Acf.php';
-include 'src/Services/FieldGroup.php';
-include 'src/Services/Input.php';
-include 'src/Services/MultiLang.php';
-include 'src/Services/Wpml.php';
-include 'src/Services/Media.php';
-include 'src/Services/PostRepository.php';
-include 'src/Services/Post.php';
-include 'src/Services/PostType.php';
-include 'src/Services/Svg.php';
-include 'src/Services/TermRepository.php';
-include 'src/Services/Term.php';
-include 'src/Services/Taxonomy.php';
-include 'src/Services/RemoteMedia.php';
-include 'src/Services/Migration.php';
-include 'src/Services/Index.php';
-include 'src/Services/WooCommerce/Attribute.php';
-include 'src/Services/WooCommerce/Brand.php';
-include 'src/Services/WooCommerce/Term.php';
-include 'src/Services/WooCommerce/Taxonomy.php';
-include 'src/Services/WooCommerce/ProductDownloads.php';
-include 'src/Services/WooCommerce/Product.php';
-include 'src/Services/WooCommerce/VariantProduct.php';
+require_once __DIR__ . '/src/Services/Auth.php';
+require_once __DIR__ . '/src/Services/Acf.php';
+require_once __DIR__ . '/src/Services/FieldGroup.php';
+require_once __DIR__ . '/src/Services/Input.php';
+require_once __DIR__ . '/src/Services/MultiLang.php';
+require_once __DIR__ . '/src/Services/Wpml.php';
+require_once __DIR__ . '/src/Services/Media.php';
+require_once __DIR__ . '/src/Services/PostRepository.php';
+require_once __DIR__ . '/src/Services/Post.php';
+require_once __DIR__ . '/src/Services/PostType.php';
+require_once __DIR__ . '/src/Services/Svg.php';
+require_once __DIR__ . '/src/Services/TermRepository.php';
+require_once __DIR__ . '/src/Services/Term.php';
+require_once __DIR__ . '/src/Services/Taxonomy.php';
+require_once __DIR__ . '/src/Services/RemoteMedia.php';
+require_once __DIR__ . '/src/Services/Migration.php';
+require_once __DIR__ . '/src/Services/Index.php';
+require_once __DIR__ . '/src/Services/WooCommerce/Attribute.php';
+require_once __DIR__ . '/src/Services/WooCommerce/Brand.php';
+require_once __DIR__ . '/src/Services/WooCommerce/Term.php';
+require_once __DIR__ . '/src/Services/WooCommerce/Taxonomy.php';
+require_once __DIR__ . '/src/Services/WooCommerce/ProductDownloads.php';
+require_once __DIR__ . '/src/Services/WooCommerce/Product.php';
+require_once __DIR__ . '/src/Services/WooCommerce/VariantProduct.php';
 
 
 
-include 'src/Views/UI.php';
+require_once __DIR__ . '/src/Views/UI.php';
 
 
 
-include 'src/Controllers/FieldGroup.php';
-include 'src/Controllers/PostType.php';
-include 'src/Controllers/Post.php';
-include 'src/Controllers/Taxonomy.php';
-include 'src/Controllers/Term.php';
-include 'src/Controllers/Media.php';
-include 'src/Controllers/Migration.php';
-include 'src/Controllers/Index.php';
-include 'src/Controllers/WooCommerce/Attribute.php';
-include 'src/Controllers/WooCommerce/AttributeTerm.php';
-include 'src/Controllers/WooCommerce/Brand.php';
-include 'src/Controllers/WooCommerce/Category.php';
-include 'src/Controllers/WooCommerce/Product.php';
-include 'src/Controllers/WooCommerce/VariantProduct.php';
-include 'src/Controllers/WooCommerce/Tag.php';
+require_once __DIR__ . '/src/Controllers/FieldGroup.php';
+require_once __DIR__ . '/src/Controllers/PostType.php';
+require_once __DIR__ . '/src/Controllers/Post.php';
+require_once __DIR__ . '/src/Controllers/Taxonomy.php';
+require_once __DIR__ . '/src/Controllers/Term.php';
+require_once __DIR__ . '/src/Controllers/Media.php';
+require_once __DIR__ . '/src/Controllers/Migration.php';
+require_once __DIR__ . '/src/Controllers/Index.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/Attribute.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/AttributeTerm.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/Brand.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/Category.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/Product.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/VariantProduct.php';
+require_once __DIR__ . '/src/Controllers/WooCommerce/Tag.php';
 
 
 
@@ -92,7 +93,7 @@ include 'src/Controllers/WooCommerce/Tag.php';
 
 
 
-include 'src/Middlewares/Auth.php';
+require_once __DIR__ . '/src/Middlewares/Auth.php';
 
 
 
@@ -109,7 +110,7 @@ include 'src/Middlewares/Auth.php';
  */
 \add_action('plugins_loaded', function (): void {
     if (\function_exists('acf_get_field_groups')) {
-        include ONPAGE_PLUGIN_DIR . '/routes.php';
+        require_once ONPAGE_PLUGIN_DIR . '/routes.php';
 
         return;
     }

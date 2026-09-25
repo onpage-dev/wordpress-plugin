@@ -52,16 +52,16 @@ class Auth
     {
         $configured_token = $this->getConfiguredToken();
         if (!$configured_token) {
-            throw httpException('On Page® API token is not configured', 500, 'onpage_auth_not_configured');
+            throw onpage_http_exception('On Page® API token is not configured', 500, 'onpage_auth_not_configured');
         }
 
         $request_token = $this->getRequestToken();
         if (!$request_token) {
-            throw httpException('Missing API token', 401, 'onpage_auth_missing_token');
+            throw onpage_http_exception('Missing API token', 401, 'onpage_auth_missing_token');
         }
 
         if (!hash_equals($configured_token, $request_token)) {
-            throw httpException('Invalid API token', 403, 'onpage_auth_invalid_token');
+            throw onpage_http_exception('Invalid API token', 403, 'onpage_auth_invalid_token');
         }
     }
 }

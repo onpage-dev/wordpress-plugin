@@ -27,7 +27,7 @@ class Brand
     private static function requireWooCommerce(): void
     {
         if (!\function_exists('wc_get_product')) {
-            throw httpException(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: WooCommerce is required', 500, 'woocommerce_required');
         }
     }
 
@@ -154,7 +154,7 @@ class Brand
 
         if (is_int($value)) {
             if (!RemoteMedia::isAttachmentId($value)) {
-                throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
             }
 
             return $value;
@@ -162,7 +162,7 @@ class Brand
 
         $url = RemoteMedia::sanitizeUrl($value);
         if ($url === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'thumbnail' must be an existing attachment ID, a valid remote URL, or null", 400, 'invalid_param');
         }
 
         $import_result = RemoteMedia::urlToMediaLibrary($url, 'thumbnail');
@@ -211,11 +211,11 @@ class Brand
 
         $parent_local_key = Input::localKey($parent);
         if ($parent_local_key === null) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'parent' must be null or the parent brand local_key (positive integer or non-empty string)", 400, 'invalid_param');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'parent' must be null or the parent brand local_key (positive integer or non-empty string)", 400, 'invalid_param');
         }
 
         if (!Term::findIdByLocalKey($parent_local_key, self::TAXONOMY)) {
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Parent term with local_key '$parent_local_key' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parent term with local_key '$parent_local_key' not found", 404, 'not_found');
         }
 
         $params['parent'] = 0;
@@ -291,7 +291,7 @@ class Brand
         if (!self::hasTaxonomy()) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . ' :: Brand taxonomy not found', 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . ' :: Brand taxonomy not found', 404, 'not_found');
         }
 
         self::ensureRuntimeTaxonomy();
@@ -300,7 +300,7 @@ class Brand
         if ($term_ids === []) {
             if ($ignore_missing) return;
 
-            throw httpException(self::ERROR_PREFIX . " :: Element $element_index :: Brand with local_key '$local_key' not found", 404, 'not_found');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Brand with local_key '$local_key' not found", 404, 'not_found');
         }
 
         foreach ($term_ids as $resolved_term_id) {

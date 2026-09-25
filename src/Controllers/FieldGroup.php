@@ -7,6 +7,7 @@ namespace OnPage\Controllers;
 
 
 use OnPage\Services\FieldGroup as FieldGroupService;
+use OnPage\Services\Input;
 
 
 
@@ -28,8 +29,8 @@ class FieldGroup
     public function insert(\WP_REST_Request $request): \WP_REST_Response
     {
         $ids = [];
-        foreach ($request->get_json_params() as $params) {
-            $ids[] = FieldGroupService::insertFromParams($params);
+        foreach (Input::requireJsonList($request, 'FieldGroup') as $i => $params) {
+            $ids[] = FieldGroupService::insertFromParams(Input::requireObjectElement($params, 'FieldGroup', $i));
         }
 
         return new \WP_REST_Response($ids, 200);
@@ -42,13 +43,15 @@ class FieldGroup
      */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $value) {
+        foreach (Input::requireJsonList($request, 'FieldGroup') as $i => $value) {
             if (is_int($value)) {
                 FieldGroupService::deleteById($value, $ignore_missing);
             } elseif (is_string($value)) {
                 FieldGroupService::deleteByTitle($value, $ignore_missing);
+            } else {
+                throw onpage_http_exception("FieldGroup :: Element $i :: Invalid delete value; expected field group ID (int) or title (string)", 400, 'input_invalid');
             }
         }
 

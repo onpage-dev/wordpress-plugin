@@ -101,10 +101,11 @@ $router->bind('POST', '/woocommerce/products', [ProductController::class, 'save'
 - **One routing table.** It reads at a glance as an index of the whole API. It is the living
   documentation of the contract.
 - **Middleware is an explicit parameter.** The router maps the middleware onto the WordPress
-  `permission_callback` ([Router.php:108](../../src/Router.php#L108)). Auth is declared on the route, so
-  it cannot be forgotten.
+  `permission_callback` ([Router.php:88](../../src/Router.php#L88) and
+  [Router.php:106-108](../../src/Router.php#L106-L108)). Auth is declared on the route, so it cannot
+  be forgotten.
 - **Centralized dispatch and error handling.** `Router::dispatch()`
-  ([Router.php:41-72](../../src/Router.php#L41-L72)) is the **only** place that catches `HttpException`
+  ([Router.php:41-70](../../src/Router.php#L41-L70)) is the **only** place that catches `HttpException`
   and converts it to `WP_Error`. Services throw domain exceptions without knowing about HTTP. The
   translation into a response happens in one place.
 - **`{param}` placeholders.** They are converted into named capture groups
@@ -118,10 +119,11 @@ abstraction costs about 100 lines, and the readability of `routes.php` pays for 
 
 Controllers do **only** this:
 
-1. load the ACF field-type map once per request;
-2. iterate over the JSON batch;
-3. delegate each item to the Service;
-4. package the response.
+1. validate the shape of the request body (see section 4.12);
+2. load the ACF field-type map once per request, when the endpoint writes ACF fields;
+3. iterate over the JSON batch;
+4. delegate each item to the Service;
+5. package the response.
 
 The [Category](../../src/Controllers/WooCommerce/Category.php) controller is a typical example: about 60
 lines, no domain logic.
@@ -129,7 +131,8 @@ lines, no domain logic.
 **Why:** the hard logic (WPML resolution, idempotent upsert, media sideloading, ACF) is shared by many
 endpoints. Keeping it in Services enables **reuse**. For example:
 
-- `WooCommerce\Term::save` serves categories, tags, brands and attribute terms;
+- `Term::save` serves `/terms`, categories, tags, brands and attribute terms (categories, tags and
+  attribute terms through the `WooCommerce\Term::save` wrapper, brands through `WooCommerce\Brand::save`);
 - `Acf::updateFieldValue` serves posts, products, variations and terms.
 
 If this logic lived in Controllers, it would be duplicated 4–6 times.
@@ -138,8 +141,8 @@ If this logic lived in Controllers, it would be duplicated 4–6 times.
 
 Error handling has **two stages**:
 
-1. In the domain, code throws `httpException($msg, $status, $code)`
-   ([helpers.php:168](../../src/helpers.php#L168)). This creates an
+1. In the domain, code throws `onpage_http_exception($msg, $status, $code)`
+   ([helpers.php:142](../../src/helpers.php#L142)). This creates an
    [HttpException](../../src/Exceptions/HttpException.php) carrying an HTTP status and an error code.
 2. At the edge, `Router::dispatch` turns it into the `WP_Error` that WordPress serializes into the
    response.
@@ -150,9 +153,9 @@ Error handling has **two stages**:
   forget. They just throw.
 - The uniform message format `Service :: Element {i} :: ...` points every batch error straight to the
   item that caused it.
-- Exceptions that are not `HttpException` are re-thrown
-  ([Router.php:67-69](../../src/Router.php#L67-L69)). Real bugs surface as 500s with a stack trace
-  instead of being masked.
+- Exceptions that are not `HttpException` are not caught
+  ([Router.php:61](../../src/Router.php#L61) catches only `HttpException`). Real bugs reach
+  WordPress' own fatal-error handling and surface as 500s instead of being masked.
 
 ### 4.4 Authentication: Bearer token + admin UI, no token endpoint
 
@@ -173,14 +176,15 @@ requires the `manage_options` capability and is protected by a CSRF nonce.
 
   | Situation | Response |
   |---|---|
-  | Token not configured | `500` (never a silent pass-through) |
-  | Token missing from request | `401` |
-  | Token wrong | `403` |
+  | Token not configured | `500 onpage_auth_not_configured` (never a silent pass-through) |
+  | Token missing from request | `401 onpage_auth_missing_token` |
+  | Token wrong | `403 onpage_auth_invalid_token` |
 
 ### 4.5 The batch as contract, idempotency via `local_key`
 
-Every write endpoint accepts a **JSON array** and processes one item at a time. The core of the whole
-design is that writes are **idempotent upserts** keyed by `local_key`.
+Every batch endpoint accepts a **JSON array** and processes one item at a time. The `/media`
+endpoints are the exception: uploads are multipart, and `POST /media/link` takes one object. The core
+of the whole design is that writes are **idempotent upserts** keyed by `local_key`.
 
 `local_key` is the external On Page® identifier. It is a positive integer **or a non-empty string**.
 Integers and numeric strings are equivalent, because WordPress meta values are strings anyway.
@@ -208,7 +212,8 @@ Earlier on, the post key was written through an implicit ACF field (meta `local_
 [internals.md](internals.md) for the full mapping.
 
 **Accepted trade-off: partial state.** If an item fails, the `HttpException` stops the batch. Items
-already written **stay written**. This is deliberate:
+already written **stay written**. Only `POST /posts` rolls back within one item: a failed insert
+deletes the source post and every translation it created. This is deliberate:
 
 - There are no SQL transactions across APIs. WooCommerce, ACF and WPML write to different tables
   through their own hooks, so a real rollback is not realistic.
@@ -241,17 +246,19 @@ They then resolve the final value for each language through a fallback chain.
   only to the source language, not to translations" (see [internals.md](internals.md)) live in the Services,
   behind the shared/translated model.
 
-The WPML helpers ([helpers.php:75-155](../../src/helpers.php#L75-L155)) are **memoized per request**.
-`isWpmlActive`, `getWpmlDefaultLanguage` and `getWpmlLanguages` are called dozens of times per item,
-and the set of languages does not change during an import. This is the cheapest, highest-impact
+The WPML helpers ([helpers.php:43-129](../../src/helpers.php#L43-L129)) are **memoized per request**.
+`onpage_is_wpml_active`, `onpage_get_wpml_default_language` and `onpage_get_wpml_languages` are
+called dozens of times per item, and the set of languages does not change during an import.
+`onpage_get_wpml_current_language` is not memoized, because the current language switches during a
+multilingual write. This is the cheapest, highest-impact
 memoization in the plugin (see the WPML memoization notes in [the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.md)).
 
 ### 4.7 WooCommerce as a specialization of WordPress primitives
 
 The WooCommerce Services do not start from scratch:
 
-- **Categories, tags, brands and attribute terms are terms.** They reuse `WooCommerce\Term::save`,
-  which is itself built on the generic `TermService`.
+- **Categories, tags, brands and attribute terms are terms.** They reuse the generic
+  `Term::save` (`TermService`), through thin WooCommerce wrappers.
 - **Products are posts**, plus WooCommerce CRUD objects (`WC_Product`, `WC_Product_Variation`) for
   prices, SKUs, attributes and downloads.
 
@@ -266,9 +273,12 @@ All ACF field writes go through `Acf::updateFieldValue`, shared by posts, produc
 terms. In one place it handles:
 
 - skipping `tab` fields;
-- converting URLs to `attachment_id` for `image`/`file` fields;
-- recursive normalization of `repeater`/`group` fields;
-- the per-field language map.
+- converting URLs to `attachment_id` for `image`/`file` fields, and rejecting values that are
+  neither an existing attachment nor a URL;
+- recursive normalization of `repeater` and `group` fields;
+- matching field names case-insensitively (exact name first, then its `sanitize_key()` form).
+
+The per-language resolution happens before, in one place too: `MultiLang::resolveFields()`.
 
 **Why:** ACF logic is subtle and full of edge cases. Keeping it in one place guarantees that every
 endpoint behaves **identically** on repeaters, images and language maps, and that a fix applies
@@ -277,9 +287,12 @@ not once per field.
 
 ### 4.9 Remote media isolated in `RemoteMedia`
 
-All media import goes through `RemoteMedia`: product/variation images, ACF `image`/`file` fields,
-downloads, category/brand thumbnails. The service downloads the file, deduplicates by source URL
-(`findAttachmentBySourceUrl`) and creates the attachment.
+All remote media import goes through `RemoteMedia`: product/variation images, ACF `image`/`file`
+fields, downloads, category/brand thumbnails, `POST /media/link`. The service deduplicates
+(`findAttachmentBySourceUrl`: the On Page® storage token first, then the exact source URL),
+downloads the file and creates the attachment. It is also the only place that widens the upload
+allowlist (a fixed list of media and document extensions) and sanitizes SVG files (`Svg`). See
+[internals.md](internals.md#media-and-remotemedia).
 
 **Why:** network I/O is the most fragile and expensive part of an import. Isolating it behind one
 service:
@@ -293,27 +306,71 @@ in [the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.
 
 ### 4.10 Repositories for critical lookups
 
-`local_key` lookups use direct `$wpdb` queries (`TermRepository`/`PostRepository`) instead of
-`get_terms(meta_query)` / `get_posts(meta_query)`.
+Term `local_key` and slug lookups use direct `$wpdb` queries (`TermRepository`) instead of
+`get_terms(meta_query)`. Post lookups (`PostRepository`) still use `get_posts()` with a
+`meta_query`, but with `suppress_filters => true` so WPML does not scope them to one language.
 
 **Why:**
 
-- During an import, every write invalidates the `WP_Query` caches.
-- WPML's filters on `WP_Query` are expensive when repeated thousands of times.
-- A direct prepared query skips that path and is language-independent (`local_key` is the same in
-  every language).
+- During an import, every write invalidates the term query caches.
+- WPML's filters are expensive when repeated thousands of times, and they scope results to the
+  current language.
+- `local_key` is the same in every language, so its lookup must be language-independent.
 
 This is a targeted optimization where profiling showed the cost. It is not a general bypass of
-WordPress.
+WordPress. Moving post lookups to `$wpdb` too is still open (see
+[the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.md)).
 
-### 4.11 Bootstrap with manual includes + lightweight `Env`
+### 4.11 Bootstrap with manual includes
 
 [plugin.php](../../plugin.php) includes files in an **explicit dependency order**, with no autoloader.
-[Env](../../src/Env.php) is a singleton that reads an optional `.env` file for local configuration.
+Every include uses `require_once __DIR__ . '/...'`, so it does not depend on the current directory.
+Routes are registered only when ACF is active: `routes.php` is loaded on `plugins_loaded` if
+`acf_get_field_groups()` exists, and an admin notice is shown otherwise.
+
+[Env](../../src/Env.php) reads the `.env` file. It is **test-only**: `plugin.php` never loads it, and
+the tests in `src/Tests/` require it themselves. A stray `.env` in the plugin folder is therefore
+never read in production.
 
 **Why:** without Composer there is no PSR-4 autoloading. Manual include order is verbose, but it
 removes any dependency on build tooling and makes the dependency graph **readable in one file**. This
 follows from the "no external dependencies" constraint in section 2.
+
+### 4.12 Request body validation in the Controllers
+
+Controllers check the shape of the body before any Service runs, with the helpers in
+[Input.php](../../src/Services/Input.php):
+
+- `Input::requireJsonList()`: the body of a batch endpoint must be a JSON array, else
+  `400 invalid_param`. `{}` decodes to the same `[]` as an empty list, so the raw body is checked
+  too and an empty object is rejected.
+- `Input::requireObjectElement()`: each `POST` element must be a non-empty JSON object, else
+  `400 invalid_param`.
+- `Input::strictPositiveInt()`: an ID must be a positive integer or a digit-only string. A cast
+  would turn `"12abc"` into 12 and any array into 1, and delete something nobody asked for.
+
+**Why:** a malformed body used to reach the Services and end as a PHP warning with `200 []`, or as a
+`500`. Checking the shape once, at the edge, gives every endpoint the same `400` and lets the
+Services assume an array of objects.
+
+### 4.13 Global helpers carry the `onpage_` prefix
+
+The few global functions in [helpers.php](../../src/helpers.php) (`onpage_http_exception`,
+`onpage_is_wpml_active`, `onpage_should_ignore_missing`, `onpage_set_pagination_headers`, ...) all
+start with `onpage_`. Everything else lives in the `OnPage\` namespace.
+
+**Why:** global functions share one namespace with WordPress core and every other plugin. A generic
+name such as `httpException()` or `env()` can collide with another plugin and cause a fatal error on
+activation.
+
+### 4.14 The release archive holds only runtime files
+
+[.gitattributes](../../.gitattributes) marks everything that is not needed at runtime as
+`export-ignore`: the tests and `src/Env.php`, `bin/`, the Docker environment, `config/`, the
+`start`/`stop`/`restart` scripts, `.env.example` and the repository tooling (`.gitignore`,
+`.gitattributes`). `git archive`, and the source archives GitHub attaches to a release, leave them
+out. The archive keeps the plugin code, the README, the LICENSE and the documents the README links
+to, including `AGENTS.md`, which `CONTRIBUTING.md` links to. See [RELEASE.md](../../RELEASE.md).
 
 ---
 
@@ -322,7 +379,9 @@ follows from the "no external dependencies" constraint in section 2.
 1. WordPress invokes the route registered by `Router::resolve()` on `rest_api_init`.
 2. `permission_callback` → `AuthMiddleware::handle` → `Auth::check` validates the Bearer token.
 3. `callback` → `Router::dispatch` instantiates `ProductController` and calls `save`.
-4. The Controller loads the ACF field-type map once, then iterates over the JSON array.
+4. The Controller checks that the body is a JSON array (`Input::requireJsonList`), loads the ACF
+   field-type map once, then iterates over the array. Each element must be a JSON object
+   (`Input::requireObjectElement`).
 5. For each item it calls `Product::save`, which:
    - normalizes the payload, splits shared/translated values and resolves WPML languages;
    - looks up the existing entity by `local_key` and decides between insert and update (upsert);
@@ -344,13 +403,17 @@ These rules make the system predictable. Breaking one is almost always a bug.
   | Concern | Where |
   |---|---|
   | Auth | Middleware |
+  | Body shape | `Input::requireJsonList` / `Input::requireObjectElement` in the Controllers |
   | Errors | `Router::dispatch` |
   | ACF writes | `Acf::updateFieldValue` |
-  | Media | `RemoteMedia` |
+  | Per-language resolution | `MultiLang::resolveFields` |
+  | Remote media | `RemoteMedia` |
   | Languages | Memoized WPML helpers |
+  | Missing items on delete | `onpage_should_ignore_missing` (`?ignore`) |
 
 - **Uniform write endpoints:** body is an array, upsert by `local_key`, errors prefixed with
   `Service :: Element {i}`, response is an array of IDs.
+- **Global names are prefixed:** every global function starts with `onpage_`.
 - **`local_key` is the reconciliation key.** It is stored as technical meta. The caller is never asked
   for a WordPress ID as primary identity.
 - **Transparent WPML:** the same code runs with and without WPML. A multilingual payload without WPML
@@ -368,10 +431,11 @@ Deliberate choices and their rationale:
   the `attachment_id`s). It is also the dominant bottleneck in media-heavy imports. Isolating it in
   `RemoteMedia` (section 4.9) keeps an async path open. *Non-goal for now:* background import.
 - **Minimal router.** No advanced routing features; only what is needed is added.
-- **No ORM, no generic DB abstraction.** The plugin uses WordPress APIs. Direct queries appear only in
-  the Repositories for critical lookups (section 4.10).
-- **Imperative validation, not a declarative schema.** Validation is spread across the Services as
-  chains of checks. It is repetitive and walks the payload several times (see the validation notes in
+- **No ORM, no generic DB abstraction.** The plugin uses WordPress APIs. Direct queries appear in
+  the Repositories for critical lookups (section 4.10), and in bulk maintenance operations
+  (`POST /migration`, `DELETE /indexes`, WPML orphan cleanup).
+- **Imperative validation, not a declarative schema.** Apart from the body shape checked in the
+  Controllers (section 4.12), validation is spread across the Services as chains of checks. It is repetitive and walks the payload several times (see the validation notes in
   [the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.md)). A normalized, single-pass DTO is the most natural refactor if validation cost
   ever becomes dominant.
 

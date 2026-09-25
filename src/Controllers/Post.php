@@ -23,7 +23,7 @@ class Post
     {
         $keyfield = (string) ($request->get_query_params()['keyfield'] ?? 'id');
         if ($keyfield !== 'id' && $keyfield !== 'local_key') {
-            throw httpException("Invalid keyfield '$keyfield'", 400, 'invalid_keyfield');
+            throw onpage_http_exception("Invalid keyfield '$keyfield'", 400, 'invalid_keyfield');
         }
 
         $type = Input::requestString($request, 'type');
@@ -41,7 +41,7 @@ class Post
     {
         $local_key = Input::localKey($request['id']);
         if ($local_key === null) {
-            throw httpException("Invalid local_key '{$request['id']}'", 400, 'invalid_param');
+            throw onpage_http_exception("Invalid local_key '{$request['id']}'", 400, 'invalid_param');
         }
 
         return $local_key;
@@ -61,7 +61,7 @@ class Post
 
         $response = new \WP_REST_Response($result['items'], 200);
         if ($result['total'] !== null && $result['per_page'] !== null) {
-            setPaginationHeaders($response, $result['total'], $result['per_page']);
+            onpage_set_pagination_headers($response, $result['total'], $result['per_page']);
         }
 
         return $response;
@@ -77,13 +77,14 @@ class Post
         Acf::loadFieldTypeMap(['post']);
 
         $ids = [];
+        $body = Input::requireJsonList($request, 'Post');
 
         // Batch term recounts: each post's taxonomy assignment would otherwise
         // recount its terms immediately. Re-enabling triggers a single recount.
         \wp_defer_term_counting(true);
         try {
-            foreach ($request->get_json_params() as $i => $params) {
-                $ids[] = PostService::save($params, $i);
+            foreach ($body as $i => $params) {
+                $ids[] = PostService::save(Input::requireObjectElement($params, 'Post', $i), $i);
             }
         } finally {
             \wp_defer_term_counting(false);
@@ -100,15 +101,15 @@ class Post
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
         $query_params = $request->get_query_params();
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
         $keyfield = (string) ($query_params['keyfield'] ?? 'id_or_post_type');
         if (!in_array($keyfield, ['id_or_post_type', 'local_key'], true)) {
-            throw httpException("Invalid keyfield '$keyfield'", 400, 'invalid_keyfield');
+            throw onpage_http_exception("Invalid keyfield '$keyfield'", 400, 'invalid_keyfield');
         }
 
         $query_type = Input::stringOrNull($query_params['type'] ?? null);
 
-        foreach ($request->get_json_params() as $i => $value) {
+        foreach (Input::requireJsonList($request, 'Post') as $i => $value) {
             if (is_array($value) && !array_is_list($value)) {
                 $payload_local_key = Input::localKey($value['local_key'] ?? null);
                 if ($payload_local_key !== null) {
@@ -139,7 +140,7 @@ class Post
                     continue;
                 }
 
-                throw httpException("Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'input_invalid');
+                throw onpage_http_exception("Post :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'input_invalid');
             }
 
             if (is_int($value)) {
@@ -147,7 +148,7 @@ class Post
             } elseif (is_string($value)) {
                 PostService::deleteByPostType($value, $ignore_missing);
             } else {
-                throw httpException("Element $i :: Invalid delete value; expected post ID (int) or post type slug (string)", 400, 'input_invalid');
+                throw onpage_http_exception("Post :: Element $i :: Invalid delete value; expected post ID (int) or post type slug (string)", 400, 'input_invalid');
             }
         }
 

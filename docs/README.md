@@ -19,9 +19,9 @@ Technical guides. They cover the REST contract, the plugin internals and the des
 | Document | What it covers |
 | --- | --- |
 | [dev/integration-guide.md](dev/integration-guide.md) | writing a client: examples, call order, errors. Start here. |
-| [dev/internals.md](dev/internals.md) | plugin internals, controller by controller |
+| [dev/internals.md](dev/internals.md) | plugin internals: controllers, services, media and migrations |
 | [dev/architecture.md](dev/architecture.md) | architectural decisions and trade-offs |
-| [dev/woocommerce.md](dev/woocommerce.md) | how WooCommerce products and their downloads are saved |
+| [dev/woocommerce.md](dev/woocommerce.md) | how WooCommerce products, variations and their downloads are saved |
 
 ### Notes: [`dev/notes/`](dev/notes/)
 

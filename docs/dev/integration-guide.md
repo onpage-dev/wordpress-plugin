@@ -123,7 +123,7 @@ This is deliberate. The plugin calls ACF's API without guards:
 - `Acf::loadFieldTypeMap()` calls `acf_get_field_groups()` (`src/Services/Acf.php:91`) on the
   ACF-aware routes.
 - The post-type, field-group and taxonomy services call `acf_get_acf_post_types()` /
-  `acf_get_field_groups()` directly (`src/Services/PostType.php:73`,
+  `acf_get_field_groups()` directly (`src/Services/PostType.php:19`,
   `src/Services/FieldGroup.php:40`, `src/Services/Taxonomy.php:290`).
 
 If the routes were registered without ACF, they would die with a PHP fatal instead of answering.
@@ -195,9 +195,26 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 **Write bodies are JSON arrays.**
 
-- Every content `POST` takes a **list of objects**, never a single object.
+- Every content `POST` takes a **list of objects**, never a single object. Each element must be a
+  non-empty JSON object.
 - Every `DELETE` takes a **list of scalars**: `local_key`s, numeric ids or slugs, depending on the
-  route. `DELETE /posts` also accepts `{"local_key": …}` objects.
+  route. `DELETE /posts` also accepts objects: `{"local_key": …, "type": …}`, `{"id": …}` or
+  `{"type": …}`.
+- Send `Content-Type: application/json`. Without it WordPress does not parse the body, and the
+  request fails as if the body were missing.
+
+The plugin checks the shape before doing any work:
+
+| You send | Result |
+| --- | --- |
+| no body, invalid JSON, a scalar or a single object (`{}` included) | `400 invalid_param` — *`<Prefix>` :: Request body must be a JSON array* |
+| `[]` | `200`, nothing happens |
+| a `POST` element that is not a non-empty object (`null`, `"x"`, `[]`, `{}`) | `400 invalid_param` — *… Element `<i>` :: Invalid payload; expected a non-empty JSON object* |
+| a `DELETE` element of the wrong type | `400 input_invalid` on `field-groups`, `post-types`, `posts`, `taxonomies` and `terms`; `400 invalid_param` on `woocommerce/*` and `media` |
+
+`DELETE /terms` is strict about ids: a positive integer or a string of digits only. `"12abc"`,
+`"1.5"` or `true` are rejected, never cast. The full rules are in
+[API.md: Request bodies](../API.md#request-bodies).
 
 Four exceptions:
 
@@ -216,12 +233,12 @@ Each endpoint loops over the payload and throws on the first failure. As a resul
 
 Within a single element there is a partial rollback. The *create* path of `POST /posts` and
 `POST /woocommerce/products` wraps its work in `try`/`catch`. On failure it hard-deletes the rows
-it just created, then re-throws (`src/Services/Post.php:1807-1813`). So a failed element usually
-leaves nothing behind. Earlier elements of the same batch stay.
+it just created, translations included, then re-throws (`src/Services/Post.php:1909-1915`). So a
+failed element usually leaves nothing behind. Earlier elements of the same batch stay.
 
 Most per-element errors carry `Element <i>`: the 0-based position in your array. That index is the
-only machine-usable locator. Some errors omit it, including the post integrity errors
-`duplicate_title` and `duplicate_local_key` (`src/Services/Post.php:502`, `:506`). When the index
+only machine-usable locator. Some errors omit it, including the post insert errors
+`duplicate_title` and `duplicate_local_key` (`src/Services/Post.php:573`, `:577`). When the index
 is absent, match on the message instead.
 
 Re-running the same batch is safe. That is why partial state is acceptable.
@@ -247,8 +264,8 @@ JSON. A bare `500 There has been a critical error` is a bug, not a contract viol
 | --- | --- |
 | content `POST` | `200` with the list of created or updated ids, in payload order |
 | `POST /media`, `POST /media/link` | one result object per file or field |
-| `POST /migration` | an object of counters |
-| any `DELETE` | `200` with a `null` body |
+| `POST /migration`, `DELETE /indexes` | an object of counters |
+| any other `DELETE` | `200` with a `null` body |
 
 ### `?ignore` on DELETE
 
@@ -256,9 +273,14 @@ JSON. A bare `500 There has been a critical error` is a bug, not a contract viol
 
 - It is a **presence-only** flag, read strictly from the query string. `?ignore`, `?ignore=0` and
   `?ignore=false` all enable it.
-- It is honoured by 12 DELETE routes: `field-groups`, `post-types`, `posts`, `taxonomies`, `media`
-  and all seven `woocommerce/*`.
-- It is **not** honoured by `DELETE /terms` or `DELETE /indexes`.
+- It is honoured by 13 DELETE routes: `field-groups`, `post-types`, `posts`, `taxonomies`,
+  `terms`, `media` and all seven `woocommerce/*`.
+- It is **not** honoured by `DELETE /indexes`, which has no body.
+- It skips only what is **missing**: an id, `local_key`, title, key or slug that matches nothing.
+  A malformed element is still a `400`, and a real delete failure is still a `500`.
+- On `DELETE /taxonomies`, a slug that is not one of the plugin's ACF taxonomies (e.g.
+  `product_cat`) is skipped and nothing is touched. On `DELETE /posts`, a post type string that is
+  not registered is skipped the same way.
 
 ### Pagination
 
@@ -311,6 +333,12 @@ other keys:
   `onpage_wc_attribute_local_key_{attribute_id}`.
 - **WPML**: every translation in a group shares the same `local_key`. The key identifies the
   object, not the language.
+- **Trash**: a trashed post still owns its `local_key`. `POST /posts` finds it, restores it and
+  updates it, instead of creating a second post with the same key. If a live post also holds the
+  key, the live post is updated and the trashed one stays in the trash. Without a `status` in the
+  payload the restored post is a `draft`. Reads leave the trash out: `GET /posts?local_key=` and
+  `GET /posts/{id}?keyfield=local_key` do not return a trashed post (the latter answers
+  `404 no_post`).
 
 ### Which value to use
 
@@ -374,11 +402,13 @@ What happens when you break the order:
 | --- | --- |
 | taxonomy and its terms in the **same** HTTP request | `404 not_found` — *Taxonomy '…' not found*. WordPress registers taxonomies on `init`, so a new taxonomy is addressable only from the next request |
 | `acf_fields` key with no field group carrying it | `400 invalid_param` — *ACF field '…' not found for post '…'* |
-| `POST /posts` for an unknown post type | **no error on insert**. The create path never calls `post_type_exists()`, so the post is written with an unregistered type and is invisible in the admin. The `404 not_found` — *PostType '…' not found* — appears only on the update path, on `GET /posts?type=` and on `DELETE /posts` |
+| `POST /posts` for an unknown post type | `404 not_found` — *Post :: PostType '…' not found*, on insert and on update |
+| post type sent with a key that is not already clean (`"Catalog"`, `"my type"`) | `400 invalid_param` from `POST /post-types`. Send the lowercase key you will use in `POST /posts` |
 | term reference that resolves to nothing | `404` with code `input_invalid` — *Term reference '…' not found in taxonomy '…'* |
 | child term before its parent | `404 not_found` — *Parent local_key '…' not found for taxonomy '…'* |
 | variation before its parent, or parent not `variable` | `400 invalid_param` / `404 not_found` on the parent lookup |
 | variation option that is not an existing attribute term | `404 not_found` — *Attribute '…' option '…' was not found* |
+| two variations of one parent with the same attributes | `409 duplicate_variation` — *Parent product … already has variation … with attributes […]* |
 | language map on a site without WPML | `500 wpml_required`, naming the exact field path |
 | `/woocommerce/*` without WooCommerce | `500 woocommerce_required` |
 
@@ -438,7 +468,7 @@ function wp(string $path, array $payload): array
     curl_close($ch);
 
     // Most messages carry "Element <i>": the 0-based position in $payload.
-    // POST /post-types and POST /field-groups do not report an index.
+    // POST /post-types and POST /field-groups report one only for a malformed element.
     if ($status < 200 || $status >= 300) {
         throw new RuntimeException("POST $path -> $status :: $body");
     }
@@ -465,6 +495,7 @@ These calls are idempotent: sending them again updates in place.
 ```php
 // 1. Custom Post Type.
 //    post_type, singular_label and plural_label are required.
+//    post_type must already be a clean key: lowercase letters, digits, "_" or "-".
 wp('/post-types', [[
     'post_type'      => 'catalog',
     'singular_label' => 'Catalogue',
@@ -496,7 +527,8 @@ wp('/field-groups', [[
     ],
     'fields'    => [
         // NOTE: fields[].key becomes the ACF field NAME — it is the key you
-        // will use in acf_fields, not an ACF "field_..." key.
+        // will use in acf_fields, not an ACF "field_..." key. It is stored
+        // lowercased (sanitize_key); acf_fields keys match it case-insensitively.
         // Do NOT name it local_key: that meta key is owned by the plugin.
         ['key' => 'onpage_id', 'label' => 'On Page® ID', 'type' => 'text'],
         ['key' => 'pdf_link',  'label' => 'PDF',        'type' => 'file'],
@@ -556,7 +588,12 @@ $schema->query('catalogs')
 
 Notes on the post payload:
 
-- `local_key`, `type` and `title` are required on insert.
+- `local_key`, `type` and `title` are required on insert (`400 invalid_param`). `type` must be a
+  registered post type (`404 not_found`).
+- On update, `type` may be omitted. If you send it, it must match the post's current type: the
+  plugin never retypes a post (`400 invalid_param`).
+- If you send an explicit `id`, its `local_key` must not belong to another post of the same type
+  (`409 duplicate_local_key`). Without `id` the key simply selects the post.
 - `description` is stored in `post_excerpt`, not in a meta field. GET responses do not return it.
 - `term` is the canonical key. `terms` is a legacy alias, used only when `term` is absent.
 
@@ -625,7 +662,9 @@ $schema->query('brand')
                         ->toArray(),
 
                     // Native WooCommerce downloads, replaced wholesale.
-                    // Keep the ids stable: WooCommerce indexes the list by download id.
+                    // WooCommerce keys buyers' permissions by download id, so ids must stay
+                    // stable. "id" is optional: without it the plugin reuses the id of the
+                    // same file, or derives one from the file's source.
                     'downloads'         => [[
                         'id'      => 'datasheet',
                         'name'    => multiLang(fn ($l) => $product->val('datasheet_name', $l)),
@@ -681,11 +720,19 @@ Variation rules:
 - The variation `status` is aliased:
   - `draft`, `pending` and `disabled` become `private`;
   - `enabled` becomes `publish`.
+- Each attribute combination may exist only once per parent. A second variation with the same
+  values (case-insensitive; an unset attribute counts as "any") is `409 duplicate_variation`.
+- With a language map, each translated variation is found by `local_key` under its own
+  translated parent, or created there.
+- If a later parent save drops an option that a variation still uses, the plugin makes that
+  variation `private` and holds its status in the `_onpage_held_status` meta. The next
+  variation save with valid attributes puts the status back. Nothing is deleted.
 
 > **`attributes` and `terms` are two different mechanisms.**
 >
 > - `attributes` creates **custom** product attributes, even when the name you send looks like
->   `pa_colour`. Attributes drive variations.
+>   `pa_colour`. Attributes drive variations. Global `pa_*` attributes already on the product
+>   (added in the WooCommerce admin) are kept, unless you send the same key.
 > - `terms` links a product to the **terms of a global attribute**, e.g.
 >   `"terms": {"pa_colour": [5101]}`. Terms drive taxonomy archives and filters.
 
@@ -773,7 +820,7 @@ Every file slot, except the multipart upload, accepts **either** an existing att
 remote URL.
 
 Inside `acf_fields` this covers only the ACF types `image` and `file`, including as `repeater`
-sub-fields. Values of `gallery` and `flexible_content` fields are stored verbatim and never
+and `group` sub-fields. Values of `gallery` and `flexible_content` fields are stored verbatim and never
 imported.
 
 ### Attachment ids vs URLs
@@ -782,8 +829,11 @@ imported.
 - A numeric string falls through to the URL branch. It is then rejected with `400` by
   `POST /media/link`, `POST /posts` (`files`), `image`, `gallery`, `thumbnail` and
   `downloads[].file`.
-- Inside `acf_fields` it is **not** rejected. An `image`/`file` value that is neither an attachment
-  id nor a valid URL is written into the field verbatim, and the call still answers `200`.
+- Inside `acf_fields` a string of digits **is** accepted as an attachment id. An `image`/`file`
+  value that is neither an existing attachment id nor a valid URL is rejected with
+  `400 input_invalid` (*Field '…' in acf_fields must be an existing attachment ID or a valid URL*).
+  Inside a repeater or a group the message names the path, e.g. `gallery_rows[0][photo]` or
+  `datasheet[photo]`.
 - These places *do* accept numeric strings:
   - `POST /media`'s own `attachment_id` / `attachment_ids` form fields;
   - the id list in the `DELETE /media` body;
@@ -792,19 +842,35 @@ imported.
 
 ### Deduplication
 
-Remote imports are keyed by the `_onpage_source_url` attachment meta. The same URL is never
-downloaded twice:
+The same remote file is never downloaded twice. The lookup order is:
+
+1. the On Page® storage segment (`_onpage_file_token` meta), when the URL carries one;
+2. the exact URL (`_onpage_source_url` meta).
+
+Only On Page® URLs carry a segment: `https://storage.onpage.it/<segment>/<name>` and
+`https://<subdomain>.onpage.it/api/storage/<segment>/<name>`, on `onpage.it` or its subdomains.
+The segment identifies the content, so a file renamed on On Page® is still reused. Any other URL
+is matched by exact URL only.
+
+When a match is found:
 
 - the existing attachment is reused (`action: "linked"`);
 - if its file has vanished from disk, the stale row is dropped and the import self-heals
   (`action: "created"`).
+
+### File types
+
+Remote imports force-allow a fixed list of media, document, text and archive extensions, even on
+sites that restrict uploads. Anything else (`html`, `js`, `exe`, …) follows WordPress' own upload
+rules and usually fails with `500 request_failed` — *Sorry, you are not allowed to upload this
+file type*. The full list is in [API.md: Remote file imports](../API.md#remote-file-imports).
 
 ### Refreshing
 
 Two paths replace the bytes behind an existing attachment in place:
 
 - `downloads[].refresh` on `POST /woocommerce/products`. It re-downloads the remote URL over the
-  attachment matched by `_onpage_source_url`.
+  attachment matched by the lookup above.
 - `POST /media` with `attachment_id` / `attachment_ids`. It uploads new bytes over the attachment
   you name and answers `action: "replaced"`.
 
@@ -812,9 +878,13 @@ Everywhere else, the same URL means the same file.
 
 ### SVG
 
-Remote SVGs are sanitised on import. The `image/svg+xml` MIME is enabled only for the duration of
-that single sideload. The refresh path does not do this: refreshing an `.svg` fails with
+Remote SVGs are sanitised on import, and on `refresh` too. The `image/svg+xml` MIME is enabled
+only for the duration of that single sideload. A file that cannot be sanitised fails with
 `500 request_failed`.
+
+An `.svg` sent to `POST /media` is sanitised the same way before WordPress stores it. The MIME is
+**not** enabled there: WordPress still refuses the upload (`500 upload_failed`) unless another plugin
+allows SVG.
 
 ### Two upload paths
 
@@ -900,8 +970,10 @@ About message formats:
 
 - Most messages are prefixed with the entity.
 - Batch endpoints that track the element add `Element <i>`.
-- `POST /field-groups` and `POST /post-types` report no index.
-- `invalid_keyfield` and `acf_error` carry no entity prefix.
+- `POST /field-groups` and `POST /post-types` report an index only for a malformed element.
+- `invalid_keyfield` carries no entity prefix, and neither does the `acf_error` raised while
+  writing `acf_fields` (*Failed to assign ACF field '…'*). The `acf_error` of `POST /field-groups`,
+  `POST /post-types` and `POST /taxonomies` does have one.
 
 Parse the `code`, not the message shape.
 
@@ -911,24 +983,25 @@ Parse the `code`, not the message shape.
 | `onpage_auth_invalid_token` | 403 | token regenerated, truncated or mis-copied | copy it again from the **On Page®** page |
 | `onpage_auth_not_configured` | 500 | no token generated on the site | open the **On Page®** page and generate one |
 | `rest_no_route` | 404 | a WordPress core code, not a plugin one. While ACF is inactive the plugin registers no routes at all | activate ACF. If you get WordPress' HTML 404 page instead of a JSON `code`, permalinks are on **Plain**: switch to **Post name** or call `?rest_route=/onpage/v1/…` |
-| `invalid_param` | 400 | a required key is missing, or a value has the wrong type/shape | read the message: it names the parameter and the element index |
+| `invalid_param` | 400 | the body is not a JSON array; an element is not a non-empty object; a required key is missing; or a value has the wrong type/shape | read the message: it names the parameter and the element index |
 | `invalid_keyfield` | 400 | `?keyfield=` outside the allowed set | use `id`, `local_key` or `id_or_post_type`, as documented per route |
 | `missing_title` | 400 | `POST /field-groups` without `title` | send a non-empty `title` |
 | `upload_failed` | 400 / 500 | rejected or unwritable upload | check MIME, size and filesystem permissions |
-| `not_found` | 404 | one of two cases. (a) The object the call targets is missing: any DELETE, and id/`local_key` lookups on `/woocommerce/*`, `/field-groups`, `/post-types`, `/taxonomies`, `/media`. (b) Something the payload references does not exist: post type, taxonomy, term, parent, attribute, attachment | (a) send `?ignore`, or fix the id/`local_key`. (b) respect the call order in [§6](#6-call-order) |
-| `input_invalid` | 404 | a term reference in the payload resolves to nothing | sync terms before the content that references them |
-| `input_invalid` | 400 | a `DELETE /posts` body element is neither an int id nor a string slug/`local_key`; or a `files` value is neither an existing attachment id nor a valid URL | read the message: it names the element index or the field key |
-| `no_post` | 404 | the target post does not exist | check `id` / `local_key` |
+| `not_found` | 404 | one of two cases. (a) The object the call targets is missing: any DELETE without `?ignore`, the id/`local_key` lookups of the `GET /woocommerce/*` routes, and an explicit `id` on `POST /terms`, `POST /woocommerce/products` or `POST /woocommerce/attributes`. (b) Something the payload references does not exist: post type, taxonomy, parent, attribute, attachment | (a) send `?ignore`, or fix the id/`local_key`. (b) respect the call order in [§6](#6-call-order) |
+| `input_invalid` | 404 | a term reference in the payload of `POST /posts` or `POST /woocommerce/products` resolves to nothing | sync terms before the content that references them |
+| `input_invalid` | 400 | a DELETE body element of the wrong type on `field-groups`, `post-types`, `posts`, `taxonomies` or `terms`; a `files` value, or an `image`/`file` value in `acf_fields`, that is neither an existing attachment id nor a valid URL | read the message: it names the element index or the field key |
+| `no_post` | 404 | the target post does not exist: `GET /posts/{id}`, `GET /posts?id=`, or an explicit `id` on `POST /posts` | check `id` / `local_key` |
 | `duplicate_title` | 409 | an **unkeyed** post of that post type has the exact same title and is outside this object's WPML translation group. A post that already carries a *different* `local_key` is a distinct On Page® element and never conflicts, so two elements with the same name import fine | give the existing unkeyed post the `local_key`, so the request updates it instead of inserting; or change the title |
-| `duplicate_local_key` | 409 | the `local_key` is already held by a different object. On `POST /woocommerce/products` and `POST /terms` this needs an explicit `id` in the payload. On `/posts`, `/woocommerce/attributes` and `/woocommerce/variant-products` it fires without an `id` too | if you sent `id`, drop it and let `local_key` resolve. Otherwise the key belongs to another object: re-key it, or clear the stale key |
+| `duplicate_local_key` | 409 | the `local_key` is already held by a different object. On `POST /posts`, `POST /woocommerce/products`, `POST /terms` and the WooCommerce term routes this needs an explicit `id` in the payload. On `/woocommerce/attributes` and `/woocommerce/variant-products` it fires without an `id` too | if you sent `id`, drop it and let `local_key` resolve. Otherwise the key belongs to another object: re-key it, or clear the stale key |
+| `duplicate_variation` | 409 | another variation of the same parent already has this attribute combination | give each variation a distinct combination, or delete the old variation |
 | `ambiguous_local_key` | 409 | the same `local_key` exists on posts of more than one post type, and the request did not scope it | pass the type: `?type=` on `GET /posts/{id}` and `DELETE /posts`, or the `type` key in the `POST /posts` element |
 | `parent_mismatch` | 409 | `parent_id` and `parent` point at different parents | send only one of the two |
 | `wpml_required` | 500 | language map sent to a site without WPML | install WPML, or send scalars |
 | `woocommerce_required` | 500 | `/woocommerce/*` with WooCommerce inactive | activate WooCommerce |
 | `wpml_error` / `acf_error` | 500 | WPML or ACF refused a write | check the message. Usually a field-group or language misconfiguration |
-| `request_failed` | 500 | a WordPress query or write failed | check the message and the site error log |
+| `request_failed` | 500 | a WordPress query or write failed, or a remote file could not be downloaded, sanitised or imported (a refused file type included) | check the message and the site error log |
 | `migration_failed` | 500 | `POST /migration` could not read or rewrite meta | check DB permissions, then re-run. It is idempotent |
-| `delete_failed` | 500 | a DELETE whose underlying WordPress/ACF delete call returned false (field group, post type, taxonomy, term, attachment, product, variation, attribute), or `DELETE /indexes` failed to remove meta | read the message: it names the entity and id. Check filesystem/DB permissions and anything hooked on the delete |
+| `delete_failed` | 500 | a DELETE whose underlying WordPress/ACF delete call failed (field group, post type, taxonomy, term, attachment, product, variation, attribute), or `DELETE /indexes` failed to remove meta. For terms, the WordPress error message is appended | read the message: it names the entity and id. Check filesystem/DB permissions and anything hooked on the delete |
 
 `POST /woocommerce/attributes` is the only route that can answer with a code outside this table.
 If `wc_create_attribute()` / `wc_update_attribute()` fails, the error is re-thrown with
@@ -944,7 +1017,8 @@ WooCommerce's own error code and HTTP status (500 when WooCommerce sets none). T
 - **`fields[].key` is the ACF field *name*.** It is what you put in `acf_fields`. The plugin
   manages the internal ACF `field_...` key and preserves it across updates.
 - **`attributes`, `gallery` and `downloads` are replaced wholesale**, not merged. `null` or `[]`
-  clears them.
+  clears them. For `attributes` this means the custom attributes: global `pa_*` attributes
+  already on the product stay.
 - **`props` has a fixed key list.** Unrecognised keys are silently ignored. A typo in
   `regular_price` fails quietly, with no error.
 - **Slugs are stable by design.** A product slug is written on insert and then left alone. To
@@ -957,6 +1031,12 @@ WooCommerce's own error code and HTTP status (500 when WooCommerce sets none). T
   means top level everywhere. Prefer that.
 - **Deletions do not propagate.** An item removed from On Page® stays published until the
   client calls the matching `DELETE`.
+- **The trash does not free a `local_key`.** A post trashed in the admin still holds its key.
+  The next import restores it rather than creating a new one. To drop it for good, call
+  `DELETE /posts`, which deletes permanently.
+- **A term slug owned by another element is not taken.** If the `slug` you send already belongs
+  to a different element's term, your term is updated but keeps its current slug, with no error.
+  Check the slug in the `GET` response if it matters.
 - **The plugin has no dry-run.** Test against the Docker environment in [CONTRIBUTING.md](../../CONTRIBUTING.md)
   before pointing a client at a live site.
 
@@ -969,7 +1049,9 @@ WooCommerce's own error code and HTTP status (500 when WooCommerce sets none). T
 - WordPress on <http://localhost:8040>;
 - Adminer on <http://localhost:8041>.
 
-Control it with `./start`, `./stop` and `./restart`.
+Both ports are bound to `127.0.0.1` only, so they are not reachable from other machines.
+
+Control it with `./start`, `./stop` and `./restart`. The scripts work from any directory.
 
 Setup steps:
 

@@ -30,7 +30,7 @@ Base REST namespace:
 
 Every endpoint at a glance. Paths are relative to the base namespace `/wp-json/onpage/v1`. Click an endpoint to open its full specification.
 
-In the **Notes** column, *Paginated* marks the only two endpoints that paginate. `?ignore` marks the `DELETE` endpoints that accept the [`?ignore` flag](#general-conventions).
+In the **Notes** column, *Paginated* marks the only two endpoints that paginate. `?ignore` marks the `DELETE` endpoints that accept the [`?ignore` flag](#ignore-on-delete).
 
 | Area | Method | Endpoint | Description | Notes |
 | --- | --- | --- | --- | --- |
@@ -74,7 +74,7 @@ In the **Notes** column, *Paginated* marks the only two endpoints that paginate.
 | Taxonomies | `DELETE` | [`/taxonomies`](#delete-taxonomies) | Delete taxonomies by ID or slug | `?ignore` |
 | Terms | `GET` | [`/terms`](#get-terms) | List or search terms of a taxonomy | |
 | Terms | `POST` | [`/terms`](#post-terms) | Create or update terms in batch | |
-| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID | |
+| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID | `?ignore` |
 | Maintenance | `DELETE` | [`/indexes`](#delete-indexes) | Remove all `local_key` associations | |
 | Maintenance | `POST` | [`/migration`](#post-migration) | Run the plugin's data migrations | |
 
@@ -93,23 +93,45 @@ Required header:
 Authorization: Bearer <token>
 ```
 
-| Status | When |
+| Error | When |
 | --- | --- |
-| `500` | No API token is configured in the WordPress options (`onpage_auth_token`). |
-| `401` | The `Authorization` header is missing or does not contain a valid Bearer token. |
-| `403` | The token sent does not match the configured one. |
+| `500 onpage_auth_not_configured` | No API token is configured in the WordPress options (`onpage_auth_token`). |
+| `401 onpage_auth_missing_token` | The `Authorization` header is missing or does not contain a valid Bearer token. |
+| `403 onpage_auth_invalid_token` | The token sent does not match the configured one. |
 
 The token is generated from the **On Page®** page in the WordPress admin. Only administrators can access that page (capability `manage_options`). Generating and regenerating the token is also protected by a CSRF nonce. No REST endpoint can read or write the token: it is managed exclusively from the admin UI.
 
 ## General conventions
 
-- **Batch writes.** Almost every write endpoint works in batch: the expected JSON body is an array.
-- **Exception: `POST /media`.** It uses `multipart/form-data` and accepts one or more files in the same request.
+- **Batch writes.** Almost every write endpoint works in batch: the expected JSON body is an array. See [Request bodies](#request-bodies).
+- **Exceptions.** `POST /media` uses `multipart/form-data` and accepts one or more files in the same request. `POST /media/link` takes a single JSON object. `POST /migration` and `DELETE /indexes` take no body.
 - **Fail fast.** If one element of a batch fails, the request stops immediately and returns a `WP_Error`.
-- **`?ignore=1` on DELETE.** The `DELETE` endpoints of `field-groups`, `post-types`, `posts`, `taxonomies`, the WooCommerce resources and `media` accept the query string `?ignore=1` to skip elements that are not found. The flag is enabled by the mere presence of the `ignore` parameter, whatever its value. `DELETE /terms` and `DELETE /indexes` do not support it.
+- **`?ignore` on DELETE.** Most `DELETE` endpoints accept `?ignore` to skip elements that are not found. See [`?ignore` on DELETE](#ignore-on-delete).
 - **Taxonomy identifier.** The term endpoints identify the taxonomy with the `taxonomy` parameter (query string on `GET`/`DELETE /terms`, body field on `POST /terms`). It accepts either the **taxonomy slug** (e.g. `product_cat`, `brand`, `pa_color`) or the **numeric ACF ID** of the taxonomy. The slug takes precedence and is recommended: it is stable across environments (the ACF ID depends on creation order) and it also covers non-ACF taxonomies (WooCommerce `product_cat`/`product_tag`/`pa_*`). The numeric ID is still supported for backward compatibility.
 - **Multilingual values.** When WPML is active, some fields can be sent as a language map `{ "<lang>": <value> }`.
 - **Exact post types.** `/posts` and `/post-types` use the exact post type sent in the payload. No prefix is added.
+
+### Request bodies
+
+These rules apply to the `POST` and `DELETE` endpoints of `field-groups`, `post-types`, `posts`, `taxonomies`, `terms` and every `woocommerce/*` resource, and to `DELETE /media`. They do not apply to `POST /media` (multipart), `/media/link`, `/migration` or `/indexes`.
+
+- **The body must be a JSON array.** A missing body, a body that is not JSON, a scalar or an object (named keys, or the empty object `{}`) returns `400 invalid_param` with the message `<Prefix> :: Request body must be a JSON array`.
+- **Send `Content-Type: application/json`.** WordPress parses the body as JSON only with that header. Without it the body counts as missing, so the request also fails with `400 invalid_param`.
+- **An empty array is valid.** `[]` does nothing and returns `200` (`[]` on `POST`, `null` on `DELETE`).
+- **Every `POST` element must be a non-empty JSON object.** A scalar, `null`, a list or `{}` returns `400 invalid_param` with the message `<Prefix> :: Element N :: Invalid payload; expected a non-empty JSON object`.
+- **Every `DELETE` element is validated.** An element of the wrong type returns `400` before anything is looked up. The accepted types and the error code are listed under each `DELETE` endpoint.
+
+`<Prefix>` names the resource: `FieldGroup`, `PostType`, `Post`, `Media`, `Taxonomy`, `Term`, `WooCommerce Brand`, `WooCommerce Attribute`, `WooCommerce Attribute Term`, `WooCommerce Category`, `WooCommerce Tag`, `WooCommerce Product` or `WooCommerce Variant Product`. `N` is the 0-based position of the element in the array.
+
+### `?ignore` on DELETE
+
+`?ignore` makes a `DELETE` skip elements that are not found, instead of failing with `404 not_found`.
+
+- It is enabled by the mere presence of the `ignore` query parameter, whatever its value. `?ignore`, `?ignore=1` and `?ignore=0` all enable it.
+- It is supported by `DELETE /field-groups`, `/post-types`, `/posts`, `/taxonomies`, `/terms`, `/media` and every `DELETE /woocommerce/*`.
+- It is not supported by `DELETE /indexes`, which has no body.
+- It only skips **missing** elements. An element of the wrong type still returns `400`, and a real delete failure still returns `500`.
+- Examples of what it skips: an integer ID that matches nothing, a `local_key` held by no object, a title, key or slug that matches nothing. On `DELETE /taxonomies` a slug that is not an ACF taxonomy of this plugin (for example `product_cat`) is skipped and nothing is changed. On `DELETE /posts` a post type string that is not registered is skipped and nothing is deleted.
 
 ### `local_key`
 
@@ -117,7 +139,7 @@ The token is generated from the **On Page®** page in the WordPress admin. Only 
 
 - **Input** (payload and query string):
   - The value is trimmed.
-  - Only the empty string, `"0"` and non-scalar types are rejected, with `400 invalid_param`.
+  - Only the empty string, `"0"` and non-scalar types are rejected, with `400 invalid_param` (`400 input_invalid` on `DELETE /posts`).
   - Integers and numeric strings are **equivalent** (`123` ≡ `"123"`; this is how WordPress stores meta values). The same object is resolved whatever type you send.
   - A text key (e.g. `"SKU-ABC"`) is kept as is, except for surrounding whitespace.
 - **Output** (HTTP response):
@@ -141,7 +163,7 @@ The destination then holds two terms with the same name and different `local_key
 
 ### Media values: URL or `attachment_id`
 
-Every field that accepts a remote file URL also accepts the `attachment_id` of a file already in the Media Library, for example one uploaded earlier with `POST /media`. It must be a JSON integer, not a string.
+Every field that accepts a remote file URL also accepts the `attachment_id` of a file already in the Media Library, for example one uploaded earlier with `POST /media`. It must be a JSON integer, not a string. The one exception is `acf_fields`, where a string of digits (`"123"`) is also read as an `attachment_id`.
 
 With an `attachment_id` the plugin downloads nothing. It only checks that the ID matches an existing attachment and assigns it directly. If the field has a parent post, product or variation, the attachment is also attached to that parent, as with a URL import.
 
@@ -151,7 +173,34 @@ This applies to:
 - `thumbnail` of `POST /woocommerce/brands` and `POST /woocommerce/categories`;
 - `downloads[].file`/`downloads[].url` of `POST /woocommerce/products`;
 - `files` of `POST /posts` and `POST /media/link`;
-- every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or `group`).
+- every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or a `group`).
+
+A value that is neither an existing `attachment_id` nor a valid URL is rejected with `400`. The error code depends on the field: `input_invalid` for `files` of `POST /posts` and for `acf_fields`, `invalid_param` everywhere else.
+
+### Remote file imports
+
+These rules apply to every URL the plugin downloads: the fields listed above and `POST /media/link`.
+
+**Deduplication.** A URL already imported is not downloaded again. The existing attachment is reused.
+
+- For an **On Page® storage URL** the plugin also extracts the storage segment (`<token>[.<format>]`) and saves it in the `_onpage_file_token` meta. The lookup tries the segment first, then the exact URL. A file renamed on On Page® changes URL but not segment, so it is reused too.
+- Only two URL shapes carry a segment, and only on the host `onpage.it` or one of its subdomains:
+  - `https://storage.onpage.it/<token>[.<format>]/<name>`;
+  - `https://<subdomain>.onpage.it/api/storage/<token>[.<format>]/<name>`, for example `https://app.onpage.it/api/storage/…`.
+- Every other URL has no segment. It is reused by exact URL only (`_onpage_source_url` meta).
+
+**Allowed file types.** A remote import is always allowed for these extensions, even when the site restricts uploads:
+
+- images: `jpg`, `jpeg`, `jpe`, `gif`, `png`, `bmp`, `tif`, `tiff`, `webp`, `avif`, `heic`, `heif`, `ico`;
+- video: `mp4`, `m4v`, `mov`, `qt`, `wmv`, `avi`, `mpeg`, `mpg`, `mpe`, `ogv`, `webm`, `3gp`, `3gpp`, `3g2`, `3gp2`;
+- audio: `mp3`, `m4a`, `m4b`, `aac`, `wav`, `ogg`, `oga`, `flac`, `wma`, `mka`;
+- documents: `pdf`, `rtf`, Microsoft Office (`doc`, `docx`, `xls`, `xlsx`, `ppt`, `pptx` and their variants), OpenDocument (`odt`, `ods`, `odp`, …), Apple (`key`, `numbers`, `pages`);
+- text: `txt`, `csv`, `tsv`;
+- archives: `zip`, `7z`, `rar`, `tar`, `gz`, `gzip`.
+
+SVG files are sanitized before import and allowed as `image/svg+xml`. If sanitizing fails, the import fails with `500 request_failed`.
+
+Any other extension (for example `html`, `js` or `exe`) follows the site's normal WordPress upload rules. It is usually rejected with `500 request_failed` and the WordPress message `Sorry, you are not allowed to upload this file type`.
 
 ### Pagination
 
@@ -236,6 +285,8 @@ These write endpoints accept an `acf_fields` object:
 
 They all share the same assignment logic, centralized in `Acf::updateFieldValue`. For each key inside `acf_fields`, the behaviour depends on the ACF field type.
 
+**Field names are case-insensitive.** `POST /field-groups` stores field names through `sanitize_key()`, which lowercases them. A key in `acf_fields` is matched against the exact stored name first, then against its `sanitize_key()` form. So `"SKU"` finds a field stored as `sku`. The same rule applies to the sub-field names inside `repeater` rows and `group` objects.
+
 **Simple fields** (`text`, `textarea`, `select`, `number`, `url`, `email`, …)
 
 - The value is passed to ACF unchanged.
@@ -243,11 +294,11 @@ They all share the same assignment logic, centralized in `Acf::updateFieldValue`
 **`image` / `file`**
 
 - The value can be a valid URL string (imported into, or reused from, the Media Library).
-- It can also be the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`).
+- It can also be the `attachment_id` of a file already in the Media Library (e.g. uploaded with `POST /media`). A JSON integer or a string of digits (`"123"`) both work.
 - In both cases the field stores the resulting `attachment_id`.
 - In the `post` context the attachment is also attached to the parent post. For a URL this happens through the download. For an `attachment_id` there is no download: the attachment is only verified and re-attached.
-- To clear the field, pass `null` or an empty string.
-- An `attachment_id` that does not match an existing attachment is ignored: the original value is passed to ACF unchanged.
+- To clear the field, pass `null`, an empty string, `0` or `"0"`.
+- Any other value returns `400 input_invalid` with the message `Field '<name>' in acf_fields must be an existing attachment ID or a valid URL`. This covers an `attachment_id` that matches no attachment and a malformed URL. Inside a repeater or a group, `<name>` is the path of the sub-field, for example `certifications[0][attachment]` or `datasheet[attachment]`.
 
 **`tab`**
 
@@ -256,17 +307,20 @@ They all share the same assignment logic, centralized in `Acf::updateFieldValue`
 
 **`repeater`**
 
-- The value must be a list of objects, one per row. Each object contains the row's sub-fields. Example: `"certifications": [{"nome": "Marcatura CE", "anno": 2024}, {"nome": "VOC A+"}]`.
-- `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields.
-- Nested `repeater` sub-fields are supported recursively.
+- The value must be a list of objects, one per row. Each object contains the row's sub-fields. Example: `"certifications": [{"name": "CE marking", "year": 2024}, {"name": "VOC A+"}]`.
+- `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields, `400 input_invalid` included.
+- Nested `repeater` and `group` sub-fields are supported recursively.
 - `tab` sub-fields are ignored.
 - A WPML language map must be applied to the whole repeater (`"certifications": {"it": [...rows...], "en": [...rows...]}`), not to individual sub-fields. Language maps inside a row are not supported.
 - If a repeater payload is not a list of objects, the endpoint returns `400 invalid_param` with the message `Repeater '<name>' must be a list of rows` or `Repeater '<name>' row N must be an object`.
 
 **`group`**
 
-- The value is an object with the group's sub-fields, for example `"scheda": {"titolo": "…", "allegato": "https://…pdf"}`.
-- `image`/`file` sub-fields with a URL or `attachment_id` are converted/resolved to an `attachment_id`.
+- The value is an object with the group's sub-fields, for example `"datasheet": {"title": "…", "attachment": 1234}`.
+- Sub-fields are handled like the sub-fields of a repeater row: `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields, `400 input_invalid` included (the message names the path, for example `datasheet[attachment]`).
+- Nested `repeater` and `group` sub-fields are supported recursively. `tab` sub-fields are ignored. Other sub-field values are passed to ACF unchanged.
+- To clear the group, pass `null` or an empty string.
+- If the value is not an object (a string, a number, a non-empty list), the endpoint returns `400 invalid_param` with the message `Group '<name>' must be an object`.
 - A WPML language map must be applied to the whole group.
 
 **`group` whose sub-fields all have two- or three-letter names**
@@ -285,8 +339,8 @@ Any value in `acf_fields` can be sent as a WPML language map `{ "<lang>": <value
 "acf_fields": {
   "product_subtitle": { "it": "Sottotitolo", "en": null },
   "certifications": {
-    "it": [ { "nome": "Marcatura CE", "anno": 2024 } ],
-    "en": [ { "nome": "CE marking", "anno": 2024 } ]
+    "it": [ { "name": "Marcatura CE", "year": 2024 } ],
+    "en": [ { "name": "CE marking", "year": 2024 } ]
   }
 }
 ```
@@ -296,6 +350,7 @@ Consistency with the ACF type is still checked after the language is resolved:
 - For a `repeater` field, the resolved value of every language must still be a list of objects. A single object or a string for that language returns `400 invalid_param`.
 - For `image`/`file`, the URL → `attachment_id` conversion applies.
 - `tab` fields are still ignored.
+- On `POST /posts`, the `acf_fields`, `files` and `terms` of each translation are written in that translation's WPML language context, on insert as on update. Term slugs therefore resolve to the term of the translation's language.
 
 The language map always goes at field level (or on the whole repeater/group), never on individual sub-fields.
 
@@ -378,7 +433,7 @@ Group fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `title` | yes | Group title. Missing or empty → `400 missing_title`. |
+| `title` | yes | Group title. Missing, empty or not a string → `400 missing_title`. |
 | `key` | no | ACF group key (convention `group_...`). If missing, it is generated from `title` (`group_` + title slug). |
 | `locations` | no | ACF location rules. |
 | `description` | no | Group description. |
@@ -408,7 +463,7 @@ Response `200`:
 Main errors:
 
 - `400 missing_title`
-- `400 invalid_param`
+- `400 invalid_param` if the body is not a JSON array, an element is not a non-empty object, or a field has no `key`/`name`
 - `500 acf_error`
 - `500 delete_failed`
 
@@ -428,11 +483,22 @@ Optional query:
 ?ignore=1
 ```
 
+- An integer is a field group ID. A string is an exact field group title.
+- Any other element (`null`, a float, an object, a list) returns `400 input_invalid` with the message `FieldGroup :: Element N :: Invalid delete value; expected field group ID (int) or title (string)`.
+- With `?ignore`, an ID or title that matches nothing is skipped.
+
 Response `200`:
 
 ```json
 null
 ```
+
+Main errors:
+
+- `400 invalid_param` if the body is not a JSON array
+- `400 input_invalid` for an element that is neither an integer nor a string
+- `404 not_found` if an ID or title does not exist and `ignore` is not set
+- `500 delete_failed`
 
 ## Post Types
 
@@ -465,9 +531,9 @@ Body:
 
 | Field | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `post_type` | yes | | |
-| `singular_label` | yes | | |
-| `plural_label` | yes | | |
+| `post_type` | yes | | Must already be a valid key: lowercase letters, digits, `_` or `-`. See below. |
+| `singular_label` | yes | | Non-empty string. |
+| `plural_label` | yes | | Non-empty string. |
 | `hierarchical` | no | `false` | |
 | `icon` | no | `dashicons-admin-post` | |
 | `supports` | no | `["title", "editor", "thumbnail", "revisions"]` | |
@@ -476,9 +542,11 @@ Body:
 
 Behaviour:
 
-- **Upsert.** If a post type with the same key (`sanitize_key(post_type)`) exists, its values are updated; otherwise it is created. A duplicate never returns an error.
+- **Key validation.** `post_type` must be non-empty and must not change under `sanitize_key()`. A value with uppercase letters, spaces or accents (e.g. `"Product"`) returns `400 invalid_param` with the message `PostType :: Parameter 'post_type' must be a non-empty key of lowercase letters, digits, '_' or '-', got 'Product'`. This keeps the ACF key and the registered post type identical.
+- **Required labels.** A missing or empty `singular_label` or `plural_label` returns `400 invalid_param` with the message `PostType :: Element N :: Parameter 'singular_label' is required` (or `'plural_label'`).
+- **Upsert.** If a post type with the same key exists, its values are updated; otherwise it is created. A duplicate never returns an error.
 - **Payload as source of truth.** Every call fully overwrites the ACF fields. Optional properties missing from the payload go back to their default. For example, a previously set `rewrite_slug` is removed if the key is no longer sent.
-- The ACF key of the post type is `sanitize_key(post_type)`.
+- The ACF key of the post type is the value of `post_type`.
 - The WordPress slug is `rewrite_slug` if provided, otherwise the exact value of `post_type`. No `post_` prefix is added.
 - `flush_rewrite_rules()` runs once per batch.
 
@@ -490,6 +558,7 @@ Response `200`:
 
 Main errors:
 
+- `400 invalid_param` if the body is not a JSON array, an element is not a non-empty object, `post_type` is not a valid key, or `singular_label`/`plural_label` is missing or empty
 - `500 acf_error`
 
 ### DELETE `/post-types`
@@ -510,8 +579,23 @@ Optional query:
 
 Notes:
 
-- String values are sanitized with `sanitize_key`.
-- `flush_rewrite_rules()` runs after each deletion.
+- An integer is an ACF post type ID. A string is a post type key; it is sanitized with `sanitize_key`.
+- Any other element returns `400 input_invalid` with the message `PostType :: Element N :: Invalid delete value; expected post type ID (int) or key (string)`.
+- With `?ignore`, an ID or key that matches nothing is skipped.
+- `flush_rewrite_rules()` runs once per batch, also when the batch fails.
+
+Response `200`:
+
+```json
+null
+```
+
+Main errors:
+
+- `400 invalid_param` if the body is not a JSON array
+- `400 input_invalid` for an element that is neither an integer nor a string
+- `404 not_found` if an ID or key does not exist and `ignore` is not set
+- `500 delete_failed`
 
 ## Posts
 
@@ -538,9 +622,9 @@ Optional query:
 
 | Parameter | Description |
 | --- | --- |
-| `id` | Returns the single matching post (as a one-element list). |
+| `id` | Returns the single matching post (as a one-element list). A missing post returns `404 no_post`. |
 | `type` | Exact post type. Default `any`. In the normal listing an unknown `type` is not an error (empty list). Combined with `title`, an unknown `type` returns `404 not_found`. |
-| `local_key` | Filters on the `onpage_local_key` post meta. |
+| `local_key` | Filters on the `onpage_local_key` post meta. The `status` filter still applies, so trashed posts are left out unless `status=trashed`. |
 | `status` | Default `any`, which **excludes** trashed posts and auto-drafts. `trashed` (alias of the WP status `trash`) returns **only** trashed items. Any other value (`publish`, `draft`, `pending`, `private`, …) is passed to WordPress unchanged. |
 | `updated_after` | Filters on `post_modified_gmt`. An invalid date/time returns `400 invalid_param`. |
 | `per_page` | Default `100`, maximum `100`. |
@@ -580,6 +664,7 @@ Response `200`:
     "content": "Body",
     "type": "product",
     "status": "publish",
+    "local_key": 1001,
     "translations": {
       "it": 321,
       "en": 322
@@ -592,6 +677,8 @@ Response `200`:
 ]
 ```
 
+- `local_key` is always present: an integer, a string, or `null` when the post has no key (see [`local_key`](#local_key)).
+- `terms` lists the post's terms as WordPress term objects (`term_id`, `name`, `slug`, `taxonomy`, `parent`, `count`, …).
 - `translations` maps each language code to the ID of the post in that language (WPML translation group). Without WPML it is an empty map. It is present in every post response (single, list and `title` search).
 
 > **Note:** there is no `GET /post-types/{post_type}/posts` endpoint. To list or search the posts of a specific post type, use `GET /posts?type={post_type}` (add `&title=...` for exact-title search).
@@ -612,6 +699,8 @@ Optional query:
 - With `keyfield=id`, `{id}` is the numeric post ID.
 - With `keyfield=local_key`, `{id}` is the `local_key` value (an invalid value returns `400 invalid_param`).
 - With `keyfield=local_key`, if several posts share the key (WPML translations), the post in the group's **default language** is returned. The other languages are in the `translations` map.
+- With `keyfield=local_key`, trashed posts are left out, as in `GET /posts?local_key=`: a `local_key` held only by trashed posts returns `404 no_post`. (Upserts and deletes by `local_key` still see the trash; see [Trashed posts](#trashed-posts).) With `keyfield=id` a trashed post is returned; check `status` in the response.
+- Without `type`, a `local_key` held by posts of more than one post type returns `409 ambiguous_local_key`.
 
 Example:
 
@@ -629,6 +718,7 @@ Response `200`:
   "content": "Body",
   "type": "post_product",
   "status": "publish",
+  "local_key": 1001,
   "translations": {
     "it": 321,
     "en": 322
@@ -647,9 +737,14 @@ Response `200`:
 }
 ```
 
+The `terms` entries are abridged: they are full WordPress term objects.
+
 Errors:
 
-- `404 no_post`
+- `400 invalid_keyfield` if `keyfield` is neither `id` nor `local_key`
+- `400 invalid_param` if `keyfield=local_key` and `{id}` is not a valid `local_key`
+- `404 no_post` if no post matches
+- `409 ambiguous_local_key` if `keyfield=local_key`, no `type` is given and the key exists on several post types
 
 ### POST `/posts`
 
@@ -657,8 +752,8 @@ Creates or updates posts in batch.
 
 How the target post is resolved:
 
-1. If the element has an `id` that exists in WordPress, that post is updated (`id` takes precedence, as in `POST /woocommerce/products`).
-2. Otherwise the upsert is driven by `local_key`: if the `local_key` already exists, that post is updated.
+1. If the element has an `id`, that post is updated (`id` takes precedence, as in `POST /woocommerce/products`). The post must exist, otherwise `404 no_post`.
+2. Otherwise the upsert is driven by `local_key`: if the `local_key` already exists (on a post of `type`, when sent), that post is updated. Trashed posts count: see [Trashed posts](#trashed-posts).
 3. Otherwise a new post is created.
 
 #### Base payload
@@ -672,7 +767,7 @@ How the target post is resolved:
     "status": "publish",
     "local_key": 1001,
     "files": {
-      "image": "https://storage.op.com?file=12345"
+      "image": "https://cdn.example.com/red-chair.jpg"
     },
     "acf_fields": {
       "sku": "CHAIR-RED",
@@ -688,17 +783,18 @@ How the target post is resolved:
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `type` | on insert | On update, defaults to the current post type. Used as the exact post type; no `post_` prefix is added. |
-| `title` | on insert | |
+| `type` | on insert | Used as the exact post type; no `post_` prefix is added. Missing or empty on insert → `400 invalid_param`; not registered → `404 not_found`. On update it can be omitted; if sent, it must equal the post's current type (`400 invalid_param` otherwise). |
+| `title` | on insert | A non-empty string or a WPML language map. Missing or empty on insert → `400 invalid_param`. |
 | `content` | no | |
+| `description` | no | Saved as the post excerpt (`post_excerpt`). GET responses do not return it. |
 | `status` | no | Default `draft` on insert. |
 | `local_key` | yes | Always required, also when updating by `id`. |
 | `files` | no | Map `acf_field_name => URL or attachment_id`. |
 | `acf_fields` | no | See [Handling `acf_fields`](#handling-acf_fields). |
-| `terms` | no | Term assignments per taxonomy. |
-| `term` | no | Legacy alias of `terms`. |
+| `term` | no | Term assignments per taxonomy. |
+| `terms` | no | Alias of `term`. When both are sent, `term` wins and `terms` is ignored. |
 
-Supported `terms` formats:
+Supported `term`/`terms` formats:
 
 - `<taxonomy_slug> => [term_slug, ...]`
 - `<taxonomy_slug> => [lang => term_slug|[term_slug, ...]]`
@@ -706,8 +802,10 @@ Supported `terms` formats:
 
 #### Insert behaviour
 
+- `type`, `title` and `local_key` are required. `type` must be a registered post type (`404 not_found` with the message `Post :: PostType '<type>' not found`).
 - The title must not already exist in the same post type (see `409 duplicate_title` below for the exact rule).
-- The `local_key` must not already exist in the `onpage_local_key` post meta (`409 duplicate_local_key`).
+- The `local_key` must not already exist in the `onpage_local_key` post meta of that post type (`409 duplicate_local_key`).
+- If anything fails after the post was created, the post and every translation created so far are deleted before the error is returned.
 - **`files`:**
   - Each value must be a valid URL reachable by WordPress, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`).
   - Each remote file is downloaded, imported into the Media Library and attached to the new post.
@@ -716,7 +814,6 @@ Supported `terms` formats:
 - **`acf_fields` of type `image`:**
   - A valid URL is imported as remote media, and the field stores the resulting `attachment_id`.
   - `null` or an empty string leaves the field without an image.
-- If an ACF field named `local_key` exists, the controller fills it automatically.
 - **`terms`:**
   - Terms are assigned by reference. Each reference (e.g. `123`, `"SKU-ABC"`) is first looked up as a `local_key`, otherwise it is treated as a slug. Unlike products, slugs are supported here (posts accept an integer/string local_key **or** a slug).
   - For multilingual payloads you can pass a per-language map, for example `{"manufacturer":{"en":"ford-en","it":"ford-it"}}`.
@@ -727,10 +824,11 @@ Supported `terms` formats:
 
 - `local_key` is required (also when updating by `id`). It is written on the resolved post and propagated to **all its WPML translations**.
 - Resolution order:
-  - if the payload has an `id` that **exists** in WordPress, that post is updated (`404 not_found` if the `id` does not exist);
-  - otherwise the post is resolved through `local_key`, and the WordPress ID is looked up internally.
+  - if the payload has an `id`, that post is updated (`404 no_post` if the `id` does not exist);
+  - otherwise the post is resolved through `local_key`, and the WordPress ID is looked up internally. Without `type`, a key held by posts of several post types returns `409 ambiguous_local_key`.
+- **Explicit `id` and `local_key`.** With an `id`, the `local_key` must not be held by another post of the same type outside this post's WPML translation group. Otherwise the request returns `409 duplicate_local_key` with the message `Post :: Element N :: local_key '<key>' already exists for PostType '<type>'`. Without `id` there is no such check: the key is what identifies the post.
+- **`type` cannot change.** `type` identifies the post; it does not retype it. A `type` different from the post's current type returns `400 invalid_param` (`… the post type cannot be changed`).
 - Any of `type`, `title`, `content`, `description`, `acf_fields`, `files`, `terms` or `status` missing from the payload is left unchanged.
-- No uniqueness check is performed on `local_key`.
 - If `title` changes, it is checked for uniqueness against other posts of the same type.
 - `acf_fields` updates only the fields sent.
 - `files` updates only the fields sent.
@@ -740,6 +838,18 @@ Supported `terms` formats:
 - An `attachment_id` in `files` is verified and re-attached to the current post, without download.
 - `terms` overwrites the assignments for the taxonomies sent.
 - In the multilingual `terms` format, the terms of the current post/translation language are used.
+
+#### Trashed posts
+
+A trashed post still owns its `local_key`. Every `local_key` lookup of this endpoint includes the trash. (Reads do not: `GET /posts/{id}?keyfield=local_key` and `GET /posts?local_key=` leave trashed posts out.)
+
+- Re-importing a trashed element updates it instead of creating a second post with the same key.
+- A live post wins: when both a live post and a trashed post hold the key, the live post is updated and the trashed one stays in the trash.
+- The post is restored (`wp_untrash_post()`) together with its trashed translations that hold the same key, then the payload is applied.
+- The restore happens only after the payload passes validation. A rejected request (for example `409 duplicate_title`) leaves the post in the trash.
+- The payload `status` then applies. Without `status`, the post keeps the status WordPress restores it to, which is `draft`.
+- A trashed post of another translation group that holds the same key stays in the trash.
+- A failed restore returns `500 request_failed`.
 
 #### Multilingual support with WPML
 
@@ -780,8 +890,8 @@ Supported `terms` formats:
     },
     "files": {
       "image": {
-        "it": "https://storage.op.com/it/chair.jpg",
-        "en": "https://storage.op.com/en/chair.jpg"
+        "it": "https://cdn.example.com/it/chair.jpg",
+        "en": "https://cdn.example.com/en/chair.jpg"
       }
     }
   }
@@ -797,6 +907,7 @@ Rules:
 - When `files` is multilingual, each translation receives its own `attachment_id`s in the target fields.
 - If the translated title is missing for a language, the shared title or the fallback language is used, without automatic suffixes.
 - For multilingual `terms`, terms are resolved in the target language through WPML.
+- On insert, the translations are written in their own WPML language: term slugs and `acf_fields` resolve in the language of each translation, not in the default language.
 
 Response `200`:
 
@@ -804,15 +915,27 @@ Response `200`:
 [321, 322]
 ```
 
+The response lists one ID per element: the post in the base language. Translation IDs are not listed.
+
 Main errors:
 
-- `400 input_invalid`
-- `400 input_invalid` if a field in `files` contains neither an existing `attachment_id` nor a valid URL
-- `404 not_found`
+- `400 invalid_param` when:
+  - the body is not a JSON array, or an element is not a non-empty object;
+  - `local_key` is missing or invalid;
+  - `type` or `title` is missing on insert;
+  - `type` differs from the type of the post being updated;
+  - an `acf_fields` key is not an ACF field of the post type (`ACF field '<name>' not found for post '<type>'`);
+  - a repeater value is not a list of row objects.
+- `400 input_invalid` if a value in `files` or an `image`/`file` value in `acf_fields` is neither an existing `attachment_id` nor a valid URL
+- `404 no_post` if the `id` sent does not exist
+- `404 not_found` if `type` is not a registered post type
 - `404 input_invalid` if a referenced term does not exist
-- `409 duplicate_local_key` on insert, if the `local_key` already exists for the post type
+- `409 ambiguous_local_key` if no `type` is sent and the `local_key` exists on several post types
+- `409 duplicate_local_key` with an explicit `id`, if the `local_key` belongs to another post of the same type; or on insert, if the `local_key` already exists for the post type
 - `409 duplicate_title` if the title already exists on an object **without a `local_key`**, outside this element's translation group. An object carrying a different `local_key` is another On Page® element and does not conflict, so two elements with the same title are both imported.
+- `500 acf_error` if ACF refuses to save a field
 - `500 request_failed`
+- `500 wpml_error` if WPML cannot resolve the translation group (trid) of the post
 - `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
 
 ### DELETE `/posts`
@@ -839,15 +962,35 @@ Accepted body elements (default mode):
 | integer | Deletes the post with that ID. |
 | string | Interpreted as an exact post type: **all posts of that type** are deleted. |
 | `{"local_key": …, "type": …}` | Deletes by `local_key`; `type` is optional (falls back to the `type` query parameter). |
-| `{"id": …}` | Deletes the post with that ID. |
+| `{"id": …}` | Deletes the post with that ID. `id` must be a JSON integer. |
 | `{"type": …}` | Deletes all posts of that type. |
 
 Notes:
 
 - To delete by `local_key` (integer or non-empty string) with plain values, use `?keyfield=local_key`. `type` is optional but recommended. In this mode every element must be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`.
 - Alternatively, use objects with `local_key` and `type` without changing `keyfield`.
+- Any other element (`null`, a float, a list, an object without a usable `local_key`, `id` or `type`) returns `400 input_invalid` with the message `Post :: Element N :: Invalid delete value; …`.
 - Any other `keyfield` value (besides `local_key` and the default `id_or_post_type`) returns `400 invalid_keyfield`.
 - If a `local_key` not filtered by `type` matches several post types, the request returns `409 ambiguous_local_key`.
+- Deletion is permanent (`wp_delete_post($id, true)`), not a move to the trash.
+- Trashed posts are included: a `local_key` or a post type also deletes the matching posts that are in the trash.
+- A `local_key` deletes every post that holds it, so the whole WPML translation group.
+- With `?ignore`: a missing ID or `local_key` is skipped, and so is a post type that is not registered: nothing is deleted for it. Without `ignore` an unregistered post type returns `404 not_found`.
+
+Response `200`:
+
+```json
+null
+```
+
+Main errors:
+
+- `400 invalid_param` if the body is not a JSON array
+- `400 input_invalid` for an element of an unsupported type
+- `400 invalid_keyfield`
+- `404 not_found` if an ID, `local_key` or post type does not exist and `ignore` is not set
+- `409 ambiguous_local_key`
+- `500 request_failed` if WordPress fails to delete a post
 
 ## WooCommerce
 
@@ -875,6 +1018,16 @@ The list endpoints for brands, categories, tags and attribute terms share the ru
 **`translations`**
 
 - `translations` maps each language code to the term ID in that language. It is present in every response (single, list, search). Without WPML it is an empty map.
+
+### Shared behaviour of DELETE endpoints
+
+Every `DELETE /woocommerce/*` endpoint takes a JSON array of `local_key`s.
+
+- Each element must be a positive integer or a non-empty string. Any other element returns `400 invalid_param` with the message `<Prefix> :: Element N :: Invalid delete value; expected a positive integer or non-empty string local_key`.
+- A `local_key` that matches nothing returns `404 not_found`, or is skipped with [`?ignore`](#ignore-on-delete).
+- A `local_key` shared by several objects (WPML translations) deletes all of them.
+- A failed delete returns `500 delete_failed`.
+- Every endpoint returns `500 woocommerce_required` when WooCommerce is not active.
 
 ### GET `/woocommerce/brands`
 
@@ -1144,9 +1297,12 @@ Optional query:
 ?slug=red
 ?name=Red
 ?name[it]=Rosso&name[en]=Red
+?parent_id=100
+?parent_lk=5100
 ```
 
 - `name`: exact-name search, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
+- `parent_id` / `parent_lk`: direct-children filters, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints). Attribute terms are usually flat, so these filters rarely matter.
 
 Response `200`:
 
@@ -1156,13 +1312,21 @@ Response `200`:
     "id": 101,
     "name": "Red",
     "slug": "red",
-    "description": "",
-    "taxonomy": "pa_color",
     "local_key": 5101,
+    "description": "",
+    "parent": 0,
+    "count": 0,
+    "taxonomy": "pa_color",
+    "translations": {
+      "it": 102,
+      "en": 101
+    },
     "acf_fields": false
   }
 ]
 ```
+
+- `acf_fields` is the value of `get_fields()`, which is `false` when the term has no ACF values.
 
 ### POST `/woocommerce/attributes/{attribute}/terms`
 
@@ -1195,7 +1359,7 @@ Behaviour:
 - `name` is required on create. It can be a string or a WPML language map.
 - If `name` is a string and other fields are language maps, the same name is used unchanged for every translation. If a per-language `slug` is missing, the translations get a distinct technical slug.
 - `slug`, `description` and `acf_fields` support WPML language maps, as for other terms.
-- If the attribute taxonomy has an ACF field group with a `local_key` field, the value is synced there too.
+- A `slug` already used by another element's term is not taken over, as in [`POST /terms`](#post-terms).
 - The response contains the IDs of the created or updated terms in the base language.
 
 Response `200`:
@@ -1203,6 +1367,15 @@ Response `200`:
 ```json
 [101]
 ```
+
+Main errors:
+
+- `400 invalid_param`
+- `404 not_found` if `{attribute}` does not resolve to an attribute
+- `409 duplicate_local_key` only with an explicit `id` that exists, when the `local_key` belongs to another term
+- `500 woocommerce_required`
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
+- `500 request_failed`
 
 ### DELETE `/woocommerce/attributes/{attribute}/terms`
 
@@ -1363,9 +1536,12 @@ Optional query:
 ?slug=featured
 ?name=Featured
 ?name[it]=In evidenza&name[en]=Featured
+?parent_id=21
+?parent_lk=7000
 ```
 
 - `name`: exact-name search, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
+- `parent_id` / `parent_lk`: direct-children filters, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
 
 Response `200`:
 
@@ -1512,14 +1688,16 @@ Response `200`:
       "custom_badge": "New",
       "manual_pdf": 1234,
       "certifications": [
-        { "nome": "Marcatura CE", "anno": 2024 },
-        { "nome": "VOC A+", "anno": 2023 }
+        { "name": "CE marking", "year": 2024 },
+        { "name": "VOC A+", "year": 2023 }
       ]
     },
     "terms": []
   }
 ]
 ```
+
+The example is abridged. `woocommerce` also contains `manage_stock`, `stock_quantity`, `backorders`, `sold_individually`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `featured`, `catalog_visibility`, `tax_status`, `tax_class`, `purchase_note`, `menu_order`, `reviews_allowed`, `downloads` (the native downloadable files) and `permalink`.
 
 Response notes:
 
@@ -1569,10 +1747,10 @@ Body:
       "regular_price": "49.90",
       "stock_status": "instock"
     },
-    "image": "https://storage.example.com/red-chair.jpg",
+    "image": "https://cdn.example.com/red-chair.jpg",
     "gallery": [
-      "https://storage.example.com/red-chair-side.jpg",
-      "https://storage.example.com/red-chair-back.jpg"
+      "https://cdn.example.com/red-chair-side.jpg",
+      "https://cdn.example.com/red-chair-back.jpg"
     ],
     "attributes": {
       "Color": {
@@ -1588,8 +1766,8 @@ Body:
       "custom_badge": "New",
       "manual_pdf": "https://cdn.example.com/manual.pdf",
       "certifications": [
-        { "nome": "Marcatura CE", "anno": 2024, "allegato": "https://cdn.example.com/ce.pdf" },
-        { "nome": "VOC A+", "anno": 2023 }
+        { "name": "CE marking", "year": 2024, "attachment": "https://cdn.example.com/ce.pdf" },
+        { "name": "VOC A+", "year": 2023 }
       ],
       "product_subtitle": {
         "it": "Sigillante monocomponente ad alto modulo",
@@ -1605,21 +1783,20 @@ Body:
           { "lomc_field": "Various colours" }
         ]
       },
-      "scheda": {
-        "it": { "titolo": "Scheda IT", "allegato": "https://cdn.example.com/scheda-it.pdf" },
-        "en": { "titolo": "Datasheet EN", "allegato": "https://cdn.example.com/scheda-en.pdf" }
+      "datasheet": {
+        "it": { "title": "Scheda IT", "attachment": 1301 },
+        "en": { "title": "Datasheet EN", "attachment": 1302 }
       }
     },
     "downloads": [
       {
-        "id": "scheda_tecnica",
-        "name": "Scheda tecnica",
-        "url": "https://cdn.example.com/scheda-tecnica.pdf"
+        "id": "technical_datasheet",
+        "name": "Technical datasheet",
+        "url": "https://cdn.example.com/technical-datasheet.pdf"
       },
       {
-        "id": "scheda_sicurezza",
-        "name": "Scheda di sicurezza",
-        "url": "https://cdn.example.com/scheda-sicurezza.pdf"
+        "name": "Safety datasheet",
+        "url": "https://cdn.example.com/safety-datasheet.pdf"
       }
     ],
     "status": "publish",
@@ -1646,7 +1823,8 @@ Body:
 - `short_description` sets the WooCommerce short description. It can be a string or a WPML language map.
 - `long_description` and `short_description` are top-level product fields, not part of `props` or `acf_fields`.
 - For compatibility, `content` and `description` are still accepted as aliases of `long_description` and `short_description`. If both are present, `long_description` and `short_description` win.
-- `status` is optional; default `publish`.
+- `status` is optional; default `publish`, on create **and** on update. A save without `status` sets every language of the product to `publish`, including a product that was a draft or private. To keep a non-published status, send it on every save.
+- `status` must be a non-empty string, otherwise `400 invalid_param` (`Parameter 'status' must be a string`).
 
 #### Slug
 
@@ -1680,10 +1858,15 @@ Body:
 
 #### `attributes`
 
-- Replaces the product's whole set of custom attributes with the ones sent. A value can be a string/number, a list of values or a WPML language map.
+- Replaces the product's whole set of **custom** attributes with the ones sent. A value can be a string/number, a list of values or a WPML language map.
+- Every key sent creates a custom attribute, even a key that looks like a global one (e.g. `pa_color`).
+- **Global attributes are kept.** Global `pa_*` attributes already on the product (for example added by a site admin in WooCommerce) keep their options, visibility and variation flag. The only exception is a payload key that matches an existing global attribute's key (e.g. `"pa_color"`): the custom attribute sent replaces it.
 - When `product_type` is `variable`, the attributes sent are flagged as usable by variations (`variation=true`).
-- If `attributes` is omitted, existing attributes are not changed. If it is `null` or `{}`, all custom attributes are removed.
+- If `attributes` is omitted, existing attributes are not changed. If it is `null` or `{}`, all custom attributes are removed; global attributes stay.
 - Inside `attributes`, a key whose value is `null` or an empty list is left out of the new set.
+- **Variations left without an option.** On a `variable` product, after a save that sends `attributes`, a plugin-managed variation (one with a `local_key`) that uses a value the parent no longer offers is made `private`. Nothing is deleted. Its previous status is kept in the `_onpage_held_status` meta, and the parent is resynced.
+  - The next `POST /woocommerce/variant-products` of that variation whose attribute values are all offered again (sent in the payload or already stored) applies the payload `status`, or the held one when no `status` is sent, and removes the meta.
+  - If the variation still uses a value the parent does not offer, it stays `private` and the requested status is held instead. Sending `status: "private"` clears the held status.
 
 #### `acf_fields`
 
@@ -1693,15 +1876,24 @@ Body:
 #### `downloads` (native WooCommerce downloadable files)
 
 - Manages native WooCommerce downloadable files, separate from ACF. It can be a list of objects or `null`.
-- Each item accepts `url` or `file` with a valid remote URL, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`). The value can be `null` or an empty string to skip that download in the resolved language. `name` and `id` are optional.
-- For Sigil product PDFs, use stable `id`s: `scheda_tecnica` for the technical datasheet generated by Publisher, and `scheda_sicurezza` for the safety datasheet uploaded by the product team.
-- If `downloads.file` does not already point to a URL inside `wp-content/uploads`, the file is imported/reused in the Media Library and WooCommerce uses the imported local URL (compatible with approved download directories).
+- Each item accepts `url` or `file` with a valid remote URL, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`). `file` wins when both are sent. The value can be `null` or an empty string to skip that download in the resolved language. `name` and `id` are optional.
+- **Download `id`.** WooCommerce keys customers' download permissions by product and download `id`, so the `id` must stay the same across syncs. When `id` is sent, it is used as is. When it is omitted, the plugin picks a stable one:
+  - the `id` of the download the product already has for the same file URL (this also keeps the random ids of earlier plugin versions);
+  - otherwise an id derived from the file's source: a UUID-shaped MD5 of the On Page® storage segment, or of the URL, or of `attachment:<id>`. The same file gets the same id on every sync and in every language.
+  - Two entries of the same payload never share an id: a second entry for the same file gets a different derived id.
+  - With `refresh: true` the local file URL can change. The old id is then replaced once by a derived one.
+- If `downloads.file` does not already point to a URL inside the site's uploads directory, the file is imported/reused in the Media Library and WooCommerce uses the imported local URL.
+- **Approved download directories.** When WooCommerce's approved-directories feature is enabled, the plugin approves the uploads base URL. The remote URL is never approved. A local file served from outside it (for example by a CDN offload plugin) gets an approved-directory rule for its own directory.
 - If `downloads.file` is an `attachment_id`, nothing is downloaded: the plugin only checks that the ID matches an existing attachment and uses its local URL directly.
 - If the remote URL was already imported, the existing attachment is reused without downloading the file again.
 - If a remote PDF changes while keeping the same URL, pass `refresh: true` on the download to replace the attachment in the Media Library, keeping the same attachment ID when possible.
 - Downloads managed by this endpoint are attached to the parent product in the Media Library and shown publicly on the WooCommerce product page.
 - If `downloads` contains at least one valid file, the product is automatically flagged as downloadable (`downloadable=true`).
 - For `variable` products, WooCommerce shows downloads in the admin on individual variations: the endpoint automatically copies the parent's downloads to the existing variations.
+  - Only variations that inherit the parent's downloads are updated. The last copied set is fingerprinted in the `_onpage_inherited_downloads` meta.
+  - A variation whose own non-empty downloads differ from that fingerprint was edited on purpose and is skipped.
+  - A variation without a fingerprint (saved by an earlier plugin version) is overwritten once, then tracked.
+  - A variation already in sync is not saved again.
 - `downloads: []` or `downloads: null` removes all WooCommerce downloadable files from the product.
 - `name`, `url` and `file` inside `downloads` can be WPML language maps. Each translation receives its own resolved value; `null` or empty values are ignored.
 
@@ -1716,11 +1908,11 @@ Body:
 - If `brand`, `categories` or `tags` are omitted, that taxonomy is not changed. `brand: null` removes the brand; `categories: []`, `categories: null`, `tags: []` or `tags: null` remove categories or tags.
 - **`terms`** (optional) assigns terms from **any taxonomy** registered on the product (including ACF/custom taxonomies such as `tipologia`), in addition to brand/categories/tags:
   - it is an object `{"<taxonomy_slug>": <references>}`;
-  - references follow the same rules as `categories`/`tags`: a list of `local_key`s (positive integers), a single value, a WPML language map, or `null`/`[]` to empty that taxonomy;
+  - references follow the same rules as `categories`/`tags`: a list of `local_key`s (positive integers or non-empty strings), a single value, a WPML language map, or `null`/`[]` to empty that taxonomy;
   - each taxonomy sent replaces its whole assigned set;
   - references are resolved by `local_key`, in any taxonomy; slugs are not supported;
   - if a taxonomy in `terms` is `product_cat`/`product_tag`/`product_brand`, the dedicated field (`categories`/`tags`/`brand`) wins when present;
-  - an unknown taxonomy or a term that is not found returns `404`.
+  - an unknown taxonomy returns `404 not_found`; a term that is not found returns `404 input_invalid`.
 
 #### Variations
 
@@ -1790,8 +1982,10 @@ Main errors:
   - `acf_fields` contains ACF fields that do not exist for the product;
   - `downloads` is not a valid list;
   - `categories`/`tags` are not valid lists or language maps;
-  - `terms` is not a valid `taxonomy => references` object.
-- `404 not_found` if a referenced product or term does not exist.
+  - `terms` is not a valid `taxonomy => references` object;
+  - `image`, `gallery` or `downloads[].file` is neither an existing `attachment_id` nor a valid URL.
+- `404 not_found` if the `id` sent or a taxonomy in `terms` does not exist.
+- `404 input_invalid` if a referenced term (`brand`, `categories`, `tags`, `terms`) does not exist.
 - `409 duplicate_local_key` only with an explicit `id` in the payload, when that `local_key` belongs to a different product. Without `id`, the key identifies the product to update and any leftovers are reconciled.
 - `409 duplicate_title` if the title already exists on an object **without a `local_key`**, outside this element's translation group. An object carrying a different `local_key` is another On Page® element and does not conflict, so two elements with the same title are both imported.
 - `500 woocommerce_required` if WooCommerce is not active.
@@ -1868,6 +2062,8 @@ Response `200`:
 ]
 ```
 
+The example is abridged. `woocommerce` also contains `manage_stock`, `stock_quantity`, `backorders`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `tax_class`, `menu_order` and `permalink`.
+
 ### POST `/woocommerce/variant-products`
 
 Creates or updates WooCommerce variations for an existing `variable` parent product.
@@ -1892,7 +2088,7 @@ Body:
     },
     "description": "Red / Small",
     "status": "publish",
-    "image": "https://storage.example.com/shirt-red-s.jpg",
+    "image": "https://cdn.example.com/shirt-red-s.jpg",
     "acf_fields": {
       "material": "cotton",
       "swatch": "https://cdn.example.com/swatch-red.jpg"
@@ -1915,8 +2111,11 @@ Body:
 - Each attribute sent must exist on the parent and be flagged as a variation attribute (`variation=true`).
 - Each variation attribute must resolve to a single scalar option. WPML language maps such as `{ "en": "Red", "it": "Rosso" }` are accepted. Lists such as `["Petrol", "Hybrid"]` are not valid for a single variation.
 - If a variation attribute contains a language map but WPML is not installed or active, the request returns `500 wpml_required`.
-- For global attributes (`pa_color`) the value can be the term slug, name or ID. The variation stores the WooCommerce term slug.
+- For global attributes (`pa_color`) the value can be the term slug, name or ID. The variation stores the WooCommerce term slug. Note that `POST /woocommerce/products` only creates custom attributes: a global attribute on the parent comes from the WooCommerce admin.
 - For custom attributes, the value must be one of the options configured on the parent.
+- **Unique combination.** Two variations of the same parent cannot have the same attribute combination: WooCommerce would always sell the first one. When `attributes` is sent and another variation of the parent (not in the trash) already has the same values, the request returns `409 duplicate_variation`, for example `WooCommerce Variant Product :: Element 0 :: Parent product 501 already has variation 702 with attributes [pa_color=red, size=(any)]`.
+  - Values are compared case-insensitively.
+  - A parent variation attribute that the variation leaves unset counts as "any" (`(any)` in the message).
 
 #### `props`, `status`, `image`
 
@@ -1925,7 +2124,8 @@ Body:
 - `status` on variations:
   - `publish`/`enabled` → enabled variation;
   - `private`/`disabled` → disabled variation;
-  - for compatibility, `draft` and `pending` are saved as `private`, because the WooCommerce admin does not show variations with status `draft`.
+  - for compatibility, `draft` and `pending` are saved as `private`, because the WooCommerce admin does not show variations with status `draft`;
+  - a variation that uses an attribute value the parent no longer offers stays `private`, and the requested status is held until its attributes are valid again (see [`attributes` of products](#attributes)).
 - `image`:
   - a remote URL to import and set as the variation image, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`);
   - `image: null` removes the image;
@@ -1937,17 +2137,17 @@ Body:
 - Keys must be ACF technical names or ACF field keys that exist on the variation's field group. Unknown fields return `400 invalid_param`.
 - An `image` or `file` ACF field with a valid URL is imported or reused from the Media Library, and the field stores the `attachment_id`. To clear an `image` or `file` field, pass `null` or an empty string.
 - Every value in `acf_fields` accepts a WPML language map. Each translated variation receives the value for its language.
-- If the variation's ACF field group defines a `local_key` field, it is filled automatically with the variation's `local_key`.
 
 #### Side effects
 
-- If the variable parent has native WooCommerce downloads, the variation inherits them automatically, so they are visible in the WooCommerce UI.
+- If the variable parent has native WooCommerce downloads, the variation inherits them automatically, so they are visible in the WooCommerce UI. A variation with its own, different downloads is left alone (see [`downloads`](#downloads-native-woocommerce-downloadable-files)).
 - After saving the variation, the endpoint syncs the variable parent and clears the parent's WooCommerce transients.
 
 #### Multilingual behaviour (WPML)
 
 - If `name`, `description`, `short_description`, `long_description`, `image`, `attributes` or `acf_fields` contain language maps, the endpoint updates the variation of the resolved parent. It then creates or updates the variations for the payload languages that already have a translation of the parent.
 - Languages without a translated parent are ignored until that parent translation exists.
+- Each translated variation is looked up by `local_key` under its own translated parent. If it does not exist yet, it is created there and linked to the WPML group. This also works when the payload has an `id`: the `id` names the variation in the parent's language only.
 - The response contains the variation ID in the language of the parent resolved from `parent_id` or `parent`. The other translated variations are created or updated in the same batch.
 
 Response `200`:
@@ -1967,7 +2167,8 @@ Main errors:
   - an attribute is not configured as a variation attribute on the parent;
   - `acf_fields` contains ACF fields that do not exist for the variation.
 - `404 not_found` if the parent, the variation or an attribute term does not exist.
-- `409 duplicate_local_key`
+- `409 duplicate_local_key` if the `local_key` already belongs to another variation of the same parent, or to a variation of a parent outside this parent's translation group.
+- `409 duplicate_variation` if another variation of the parent already has the same attribute combination.
 - `409 parent_mismatch`
 - `500 woocommerce_required` if WooCommerce is not active.
 - `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active.
@@ -2018,7 +2219,7 @@ Optional query:
 | Parameter | Description |
 | --- | --- |
 | `post_id` | Filters by parent post (`post_parent`). |
-| `mime_type` | Filters by the attachment's exact MIME type. |
+| `mime_type` | Filters by MIME type, with WordPress `post_mime_type` rules: a full type (`image/jpeg`) or a main type alone (`image`, which matches every image). |
 | `token` | Filters by On Page® storage segment (`_onpage_file_token`, see `POST /media`). Accepts **several comma-separated tokens**, so files already in the library can be re-adopted in bulk with one request instead of one per file. Empty tokens are ignored; if none is left, the request returns `400 invalid_param`. |
 | `source_url` | Filters by exact source URL (`_onpage_source_url`). Single value. |
 | `per_page` | Default `100`, maximum `100`. |
@@ -2061,13 +2262,14 @@ Response `200`:
 
 Response notes:
 
-- `hash` is the SHA-256 checksum of the physical file's content. It is computed **on the fly on every request** (`hash_file('sha256', ...)` on `get_attached_file()`) and is **not persisted** in `post_meta`. It is `null` if the physical file is missing or unreadable.
-- `token` is the On Page® storage segment indexed on the attachment. It is `null` for media added in other ways (manually in the Media Library, or imported before the segment was indexed; see `POST /migration`).
+- `hash` is the SHA-256 checksum of the physical file's content (`hash_file('sha256', ...)` on `get_attached_file()`). It is cached in the `_onpage_file_hash` attachment meta, together with the file path, size and modification time it was computed for. When one of them changes, the file is hashed again. It is `null` if the physical file is missing or unreadable.
+- `token` is the On Page® storage segment indexed on the attachment. It is `null` for media added in other ways (manually in the Media Library, imported from a URL that is not an On Page® storage URL, or imported before the segment was indexed; see `POST /migration`).
+  - Earlier plugin versions could index a wrong segment for URLs outside `onpage.it`. Such a value is still shown here and can still be found with `?token=`, but the URL imports no longer use it for deduplication.
 - `source_url` is the remote URL the media was imported from. It is `null` for files uploaded directly.
 
 Pagination headers:
 
-- `X-WP-Total`: total number of attachments matching the filters (`post_id`/`mime_type`), regardless of the page.
+- `X-WP-Total`: total number of attachments matching all the filters (`post_id`, `mime_type`, `token`, `source_url`), regardless of the page.
 - `X-WP-TotalPages`: total number of pages, `ceil(X-WP-Total / per_page)`.
 - The client knows from the current response whether it is on the last page (`page >= X-WP-TotalPages`). There is no need to request an extra page and wait for an empty array.
 
@@ -2105,6 +2307,7 @@ Behaviour:
 - The controller accepts both single files and arrays of files in the same field.
 - Files are flattened into one list and processed in order.
 - Each file is saved with `wp_handle_upload()`.
+- **SVG.** A file whose name ends in `.svg` is sanitized in place (`Svg::sanitizeFile()`) before `wp_handle_upload()`, as for remote imports. If sanitizing fails, the request returns `500 request_failed` (`Media :: Element N :: Failed to upload file '<name>' :: <reason>`, or `replace` when an attachment is replaced). WordPress itself still refuses SVG uploads unless another plugin allows the type; in that case the request fails with `500 upload_failed`.
 - If no existing attachment is given, the controller creates a new attachment with `wp_insert_attachment()`.
 - If `attachment_id` or a value in `attachment_ids` is given, the controller keeps the same WordPress attachment and replaces only the physical file and metadata.
 - **Token:**
@@ -2258,16 +2461,18 @@ Behaviour:
 - `post_id` is required and must refer to an existing post.
 - `files` is required and must be a non-empty JSON object.
 - Each key of `files` is the name of the ACF field to update on the post.
-- Each value of `files` must be a valid URL reachable by WordPress, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`).
+- Each value of `files` must be a valid URL reachable by WordPress, the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`), or `null`.
 - Each remote file is downloaded and imported into the Media Library through the WordPress sideload flow. An `attachment_id` is instead verified and re-attached to the requested `post_id`, without download.
+- `null` clears the ACF field. Nothing is downloaded or deleted.
 - If the same URL was already imported by the plugin, the same attachment is reused and re-attached to the requested `post_id`.
 - After the import, reuse or direct link, the controller saves the resulting `attachment_id` in the matching ACF field.
 - For URLs, the controller saves the source URL in the `_onpage_source_url` meta.
-- **On Page® storage URLs** (`https://storage.onpage.it/<token>[.<format>]/<name>` or `https://app.onpage.it/api/storage/<token>[.<format>]/<name>`):
+- **On Page® storage URLs** (`https://storage.onpage.it/<token>[.<format>]/<name>`, or `https://<subdomain>.onpage.it/api/storage/<token>[.<format>]/<name>` such as `https://app.onpage.it/api/storage/…`):
   - the controller extracts the segment and also saves it in the `_onpage_file_token` meta, the same index used by `POST /media`;
   - reuse looks up the segment **first**, then the exact URL. A file renamed on On Page® changes URL but not segment, so it is neither downloaded again nor duplicated;
-  - URLs from other sources produce no segment and are still reused by exact URL.
-- The response returns one item per entry in `files`, including the original field name. An item resolved from an `attachment_id` has no `source_url` in the response.
+  - URLs from other hosts produce no segment, even when their path looks the same, and are reused by exact URL only.
+- The allowed file types are listed in [Remote file imports](#remote-file-imports).
+- The response returns one item per entry in `files`, in payload order.
 
 Example:
 
@@ -2292,36 +2497,53 @@ Response `200`:
   {
     "field": "image",
     "action": "created",
-    "attachment_id": 601,
-    "filename": "image-1.jpg",
-    "title": "image-1",
-    "url": "https://example.com/wp-content/uploads/2026/04/image-1.jpg",
-    "mime_type": "image/jpeg",
-    "post_id": 321,
-    "source_url": "https://cdn.example.com/image-1.jpg"
+    "attachment": {
+      "action": "created",
+      "attachment_id": 601,
+      "filename": "image-1.jpg",
+      "title": "image-1",
+      "url": "https://example.com/wp-content/uploads/2026/04/image-1.jpg",
+      "mime_type": "image/jpeg",
+      "post_id": 321,
+      "source_url": "https://cdn.example.com/image-1.jpg"
+    }
   },
   {
     "field": "image_2",
     "action": "linked",
-    "attachment_id": 455,
-    "filename": "image-2.jpg",
-    "title": "image-2",
-    "url": "https://example.com/wp-content/uploads/2026/03/image-2.jpg",
-    "mime_type": "image/jpeg",
-    "post_id": 321,
-    "source_url": "https://cdn.example.com/image-2.jpg"
+    "attachment": {
+      "action": "linked",
+      "attachment_id": 455,
+      "filename": "image-2.jpg",
+      "title": "image-2",
+      "url": "https://example.com/wp-content/uploads/2026/03/image-2.jpg",
+      "mime_type": "image/jpeg",
+      "post_id": 321,
+      "source_url": "https://cdn.example.com/image-2.jpg"
+    }
   }
 ]
 ```
+
+Response notes:
+
+- `field` is the key of `files`, i.e. the ACF field name.
+- `action` is:
+  - `created` when the URL was downloaded into a new attachment;
+  - `linked` when an existing attachment was reused: a URL already imported, or an `attachment_id`;
+  - `cleared` when the value was `null`.
+- `attachment` describes the attachment now stored in the field. It has the same `action`. `source_url` is present only for URL values.
+- For `cleared`, `attachment` is `null`: `{"field": "image", "action": "cleared", "attachment": null}`.
 
 Main errors:
 
 - `400 invalid_param` if the body is not a valid JSON object.
 - `400 invalid_param` if `post_id` is not a positive integer.
 - `400 invalid_param` if `files` is not a non-empty object.
-- `400 invalid_param` if a value in `files` is neither an existing `attachment_id` nor a valid URL.
+- `400 invalid_param` if a value in `files` is neither an existing `attachment_id`, a valid URL nor `null`.
 - `404 not_found` if `post_id` does not exist.
-- `500 request_failed` if downloading or importing the remote file fails.
+- `500 request_failed` if downloading or importing the remote file fails, including a file type WordPress refuses (see [Remote file imports](#remote-file-imports)).
+- `500 acf_error` if ACF cannot save the field.
 
 ### DELETE `/media`
 
@@ -2341,7 +2563,7 @@ Optional query:
 
 Behaviour:
 
-- The body must be a non-empty JSON array.
+- The body must be a JSON array (see [Request bodies](#request-bodies)). `[]` does nothing and returns `200` with `null`.
 - Each element must be a positive numeric ID.
 - Only posts of type `attachment` are deleted.
 - Deletion uses `wp_delete_attachment($id, true)`, so it is forced. It also removes the physical file and all associated metadata, including the On Page® index (`_onpage_file_token` and `_onpage_source_url`). After deletion the media can no longer be re-adopted by token.
@@ -2366,7 +2588,7 @@ null
 
 Main errors:
 
-- `400 invalid_param` if the body is not a valid JSON array or contains invalid IDs.
+- `400 invalid_param` if the body is not a JSON array (`Media :: Request body must be a JSON array`) or contains invalid IDs.
 - `404 not_found` if an attachment does not exist and `ignore` is not set.
 - `500 delete_failed` if WordPress fails to delete an attachment.
 
@@ -2425,18 +2647,23 @@ Example payload:
 ]
 ```
 
-| Field | Required |
-| --- | --- |
-| `key` | yes |
-| `singular_label` | yes |
-| `plural_label` | yes |
-| `description` | no |
-| `hierarchical` | no |
+| Field | Required | Notes |
+| --- | --- | --- |
+| `key` | yes | Non-empty string. |
+| `singular_label` | yes | |
+| `plural_label` | yes | |
+| `description` | no | |
+| `hierarchical` | no | Default `false`. |
+| `object_type` | no | List of post types the taxonomy is attached to. Default `[]`. |
+| `capabilities` | no | Object with `manage_terms`, `edit_terms`, `delete_terms` and `assign_terms`. Defaults: `manage_categories` for the first three, `edit_posts` for `assign_terms`. The legacy key `deleteTerms` is still read when `delete_terms` is absent. |
+
+Other ACF taxonomy settings are also accepted with their ACF names, for example `public`, `show_ui`, `show_in_rest`, `show_admin_column`, `rewrite` and `default_term`.
 
 Behaviour:
 
 - **Idempotent upsert.** If a taxonomy with the same `key` exists, it is updated in place (same ACF ID); otherwise it is created. Sending the same payload again converges on the same record, with no duplicate errors.
 - The `key` is the stable identifier of the taxonomy (also used as its slug). There is no separate `local_key`.
+- A missing or empty `key` returns `400 invalid_param` with the message `Taxonomy :: Element N :: Parameter 'key' is required`.
 - Labels can be plain strings or per-language maps.
 - If labels are per-language maps but WPML is not installed or active, the request returns `500 wpml_required`.
 - If labels are multilingual, the service saves a custom map in an option (`onpage_taxonomy_label_translations`) and also tries to register them in ACFML.
@@ -2451,6 +2678,7 @@ Response `200`:
 
 Main errors:
 
+- `400 invalid_param` if the body is not a JSON array, an element is not a non-empty object, or `key` is missing or empty
 - `500 acf_error`
 - `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
 
@@ -2478,6 +2706,26 @@ Steps performed, in order:
 4. Removes the saved translated labels.
 5. Removes the taxonomy from WPML's list of translatable taxonomies.
 6. Runs `flush_rewrite_rules()`.
+
+Notes:
+
+- An integer is an ACF taxonomy ID. A string is a taxonomy slug; it is sanitized with `sanitize_key`.
+- Any other element returns `400 input_invalid` with the message `Taxonomy :: Element N :: Invalid delete value; expected taxonomy ID (int) or slug (string)`.
+- Only ACF taxonomies are deleted. With `?ignore`, a slug that is not an ACF taxonomy (for example `product_cat`) is skipped: its terms, field groups and WPML settings stay untouched.
+
+Response `200`:
+
+```json
+null
+```
+
+Main errors:
+
+- `400 invalid_param` if the body is not a JSON array
+- `400 input_invalid` for an element that is neither an integer nor a string
+- `404 not_found` if an ID or slug is not an ACF taxonomy and `ignore` is not set
+- `500 delete_failed` if a term, a field group or the taxonomy cannot be deleted; a WordPress error on a term is appended to the message
+- `500 request_failed` if the terms of the taxonomy cannot be listed
 
 ## Terms
 
@@ -2582,8 +2830,8 @@ Simple payload:
 | `name` | yes | |
 | `slug` | no | |
 | `description` | no | |
-| `local_key` | no | Stable external identifier. |
-| `parent` | no | Default `0`. |
+| `local_key` | no | Stable external identifier. If sent, it must be a positive integer or a non-empty string (`400 invalid_param`). |
+| `parent` | no | WordPress term ID of the parent. Default `0` (top level). |
 | `acf_fields` | no | Associative object `field_name => value`. |
 
 `acf_fields` behaviour (see also [Handling `acf_fields`](#handling-acf_fields)):
@@ -2597,13 +2845,19 @@ Resolving the term to update:
 
 1. `id` first, if present (it must exist, otherwise `404 not_found`).
 2. Otherwise, a term with the same `local_key`.
+3. Otherwise, a term with the payload `slug` that has no `local_key` or the same one; otherwise a new term.
+
+Slugs owned by another element:
+
+- When the term is already resolved (by `id` or `local_key`), a term found by the payload `slug` replaces it only if it belongs to the same element: the same term, a member of the same WPML translation group, or a term with the same `local_key`.
+- If the slug belongs to another element, the element's own term is updated and **keeps its current slug**. The other term is not touched. The request still returns `200`.
+- A new translation adopts an existing same-language term with its slug only if no other `local_key` owns that term.
 
 `local_key` behaviour:
 
 - Saved as the `onpage_local_key` term meta.
 - Written on the **whole WPML translation group** of the resolved term. When a term is updated (even by `id` only), the `local_key` is also applied to translations not included in the payload.
-- If the term has an ACF field named `local_key`, it is filled automatically.
-- If the `local_key` already exists on another translation group of the same taxonomy, the request returns `409 duplicate_local_key`.
+- `409 duplicate_local_key` is returned only when the request sends an explicit `id` and the `local_key` already exists on another translation group of the same taxonomy. Without `id`, the `local_key` identifies the term to update.
 
 #### Multilingual support with WPML
 
@@ -2656,7 +2910,7 @@ Rules:
   - The request fails with `400 invalid_param` (`Name is required`) **only** if no language in the map has a non-empty name.
 - **Languages not active in WPML.** If the payload includes language codes not configured in WPML (e.g. the site only has `it` active but receives `{"it": "...", "en": null, "es": null}`), the map is not recognized as multilingual. The plugin still uses the name of the active language present (here `it`) to create the term, and ignores inactive codes. At least one language must have a name, otherwise `400 invalid_param`.
 - Translations are created or updated in the same WPML group as the base term.
-- `local_key` is propagated to the translated terms too, both as term meta and as an ACF field if present.
+- `local_key` is propagated to the translated terms too, as term meta.
 
 Response `200`:
 
@@ -2666,9 +2920,10 @@ Response `200`:
 
 Main errors:
 
-- `400 invalid_param`
-- `404 not_found`
-- `409 duplicate_local_key`
+- `400 invalid_param` if the body is not a JSON array, an element is not a non-empty object, `taxonomy` is missing, `local_key` is invalid, or no language has a name
+- `400 input_invalid` if an `image`/`file` value in `acf_fields` is neither an existing `attachment_id` nor a valid URL
+- `404 not_found` if `taxonomy`, the `id` sent or the parent cannot be resolved
+- `409 duplicate_local_key` only with an explicit `id` (see above)
 - `500 request_failed`
 - `500 acf_error`
 - `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
@@ -2688,11 +2943,14 @@ Optional query:
 
 ```text
 ?taxonomy=brand
+?ignore=1
 ```
 
+- Each element must be a term ID: a positive JSON integer, or a string of digits only (`"10"`). Anything else (`"12abc"`, `"1.5"`, `" 12"`, `0`, `true`, `null`, a list, an object) returns `400 input_invalid` with the message `Term :: Element N :: Invalid delete value; expected a term ID (positive integer)`. Nothing is cast, so a malformed value never deletes an unrelated term.
 - `taxonomy` (**optional**) restricts deletion to one taxonomy (slug or numeric ACF ID). If it cannot be resolved → `404 not_found`.
 - If **omitted**, each term's taxonomy is taken from the term itself, so a single request can delete terms of different taxonomies.
-- `?ignore=1` is not supported: a missing term always returns `404`.
+- A term that does not exist, or that is not in the `taxonomy` given, returns `404 not_found` with the message `Term :: Element N :: Term <id> not found`.
+- With `?ignore`, such a term is skipped.
 
 Response `200`:
 
@@ -2702,8 +2960,10 @@ null
 
 Errors:
 
-- `404 not_found` if `taxonomy` is sent but cannot be resolved, or if a term does not exist
-- `500 delete_failed` if WordPress fails to delete the term
+- `400 invalid_param` if the body is not a JSON array
+- `400 input_invalid` if an element is not a valid term ID
+- `404 not_found` if `taxonomy` is sent but cannot be resolved, or if a term does not exist (without `?ignore`)
+- `500 delete_failed` if WordPress fails to delete an existing term. A WordPress error message is appended to the message (`Term :: Unable to delete :: <WordPress error>`).
 
 ## Maintenance
 
@@ -2753,14 +3013,19 @@ curl -X POST https://<host>/wp-json/onpage/v1/migration \
 
 What it does, in order:
 
-1. **Renames the `local_key`** (`local_key` → `onpage_local_key`). The On Page® key of posts used to be written implicitly by an ACF field under `local_key`; the canonical meta is now `onpage_local_key`. The migration renames the rows in `wp_postmeta`, deletes the orphaned ACF reference meta `_local_key`, and deletes the legacy copies in `wp_termmeta` (terms already stored the canonical key, so those were duplicates).
-2. **Backfills the On Page® storage segment** (`_onpage_file_token`). Attachments imported by URL before the segment was indexed only have `_onpage_source_url`. Without the segment, nothing can recognize them when the same file arrives on `POST /media`, so they get duplicated. The segment is extracted from the source URL and written on the attachment. Attachments that already have it, and URLs that are not On Page® storage URLs, are skipped.
+1. **Renames the `local_key`** (`local_key` → `onpage_local_key`). The On Page® key of posts used to be written implicitly by an ACF field under `local_key`; the canonical meta is now `onpage_local_key`.
+   - A post that already has `onpage_local_key` keeps it: its legacy `local_key` row is deleted instead of renamed, so no post ends up with two key rows.
+   - The other legacy rows in `wp_postmeta` are renamed.
+   - The orphaned ACF reference meta `_local_key` is deleted.
+   - The legacy copies in `wp_termmeta` are deleted (terms already stored the canonical key, so those were duplicates).
+2. **Backfills the On Page® storage segment** (`_onpage_file_token`). Attachments imported by URL before the segment was indexed only have `_onpage_source_url`. Without the segment, nothing can recognize them when the same file arrives on `POST /media`, so they get duplicated. The segment is extracted from the source URL and written on the attachment. Attachments that already have it, and URLs that are not On Page® storage URLs (see [Remote file imports](#remote-file-imports)), are skipped.
 
 Response `200`:
 
 ```json
 {
-  "renamed": 1240,
+  "renamed": 1236,
+  "duplicates_removed": 4,
   "acf_reference_removed": 1240,
   "term_legacy_removed": 312,
   "items": [
@@ -2776,8 +3041,10 @@ Response `200`:
 
 Response notes:
 
-- `renamed` is the number of `wp_postmeta` rows renamed. `acf_reference_removed` and `term_legacy_removed` are the number of legacy rows deleted from `wp_postmeta` and `wp_termmeta` respectively.
-- `items` lists the posts affected by the rename, with the key found, for verification. It is captured **before** the rename and can be long on a large site. The `local_key` here is the raw meta value, so it is always a string (unlike other endpoints, which return an integer when the key is a canonical integer).
+- `renamed` is the number of `wp_postmeta` rows renamed. It counts only the renamed rows.
+- `duplicates_removed` is the number of legacy `local_key` rows deleted because their post already had `onpage_local_key`.
+- `acf_reference_removed` and `term_legacy_removed` are the number of legacy rows deleted from `wp_postmeta` and `wp_termmeta` respectively.
+- `items` lists every post that had a legacy `local_key` row (renamed or removed as a duplicate), with the key found, for verification. It is captured **before** the migration and can be long on a large site. The `local_key` here is the raw meta value, so it is always a string (unlike other endpoints, which return an integer when the key is a canonical integer).
 - `media_tokens.scanned` is the number of attachments examined (those with `_onpage_source_url` and no segment). `media_tokens.written` is the number that received a segment. The difference is media imported from non-On Page® URLs: they have no segment and remain de-duplicated by exact URL.
 - On a second run every counter is `0`.
 

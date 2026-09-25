@@ -6,6 +6,7 @@ namespace OnPage\Controllers;
 
 
 
+use OnPage\Services\Input;
 use OnPage\Services\Taxonomy as TaxonomyService;
 
 
@@ -29,8 +30,8 @@ class Taxonomy
     public function save(\WP_REST_Request $request): \WP_REST_Response
     {
         $ids = [];
-        foreach ($request->get_json_params() as $i => $params) {
-            $ids[] = TaxonomyService::saveFromParams($params, $i);
+        foreach (Input::requireJsonList($request, 'Taxonomy') as $i => $params) {
+            $ids[] = TaxonomyService::saveFromParams(Input::requireObjectElement($params, 'Taxonomy', $i), $i);
         }
 
         \flush_rewrite_rules();
@@ -45,13 +46,15 @@ class Taxonomy
      */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
-        $ignore_missing = shouldIgnoreMissing($request);
+        $ignore_missing = onpage_should_ignore_missing($request);
 
-        foreach ($request->get_json_params() as $i => $value) {
+        foreach (Input::requireJsonList($request, 'Taxonomy') as $i => $value) {
             if (is_int($value)) {
                 TaxonomyService::deleteById($value, $ignore_missing);
             } elseif (is_string($value)) {
                 TaxonomyService::deleteBySlug($value, $ignore_missing);
+            } else {
+                throw onpage_http_exception("Taxonomy :: Element $i :: Invalid delete value; expected taxonomy ID (int) or slug (string)", 400, 'input_invalid');
             }
         }
 

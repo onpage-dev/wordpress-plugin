@@ -1,7 +1,7 @@
 <?php
 
 // Namespace con le graffe come in `MultiLangResolveFields.php`: gli stub di WordPress,
-// di ACF e di `httpException()` devono stare nel namespace globale, perche' e' li' che
+// di ACF e di `onpage_http_exception()` devono stare nel namespace globale, perche' e' li' che
 // `FieldGroup` li cerca quando non c'e' nessun WordPress intorno.
 
 namespace {
@@ -36,9 +36,9 @@ namespace {
         }
     }
 
-    if (!function_exists('isWpmlActive')) {
+    if (!function_exists('onpage_is_wpml_active')) {
         /** Sito senza WPML: la preferenza di traduzione non viene applicata. */
-        function isWpmlActive(): bool
+        function onpage_is_wpml_active(): bool
         {
             return false;
         }
@@ -69,8 +69,8 @@ namespace {
         }
     }
 
-    if (!function_exists('httpException')) {
-        function httpException(string $message = '', int $status_code = 500, string $error_code = 'onpage_api_error'): HttpException
+    if (!function_exists('onpage_http_exception')) {
+        function onpage_http_exception(string $message = '', int $status_code = 500, string $error_code = 'onpage_api_error'): HttpException
         {
             return new HttpException($message, $status_code, $error_code);
         }

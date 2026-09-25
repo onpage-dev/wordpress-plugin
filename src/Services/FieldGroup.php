@@ -234,7 +234,7 @@ class FieldGroup
     {
         $field_name = $field['key'] ?? $field['name'] ?? null;
         if (!is_scalar($field_name) || trim((string) $field_name) === '') {
-            throw httpException("FieldGroup :: Field key is required", 400, 'invalid_param');
+            throw onpage_http_exception("FieldGroup :: Field key is required", 400, 'invalid_param');
         }
 
         $field_data = $field;
@@ -247,7 +247,7 @@ class FieldGroup
         $field_data['parent'] = $parent;
         $field_data['menu_order'] = $menu_order;
 
-        if (isWpmlActive()) {
+        if (onpage_is_wpml_active()) {
             $field_data = self::applyTranslationPreference($field_data);
         }
 
@@ -289,7 +289,7 @@ class FieldGroup
 
         foreach ($fields as $index => $field) {
             if (!is_array($field)) {
-                throw httpException(
+                throw onpage_http_exception(
                     "FieldGroup :: Field $index must be an object",
                     400,
                     'invalid_param'
@@ -314,7 +314,7 @@ class FieldGroup
         foreach ($prepared as $entry) {
             $saved_field = \acf_update_field($entry['data']);
             if (!$saved_field) {
-                throw httpException(
+                throw onpage_http_exception(
                     "FieldGroup :: Failed to save field with name '{$entry['data']['name']}'",
                     500,
                     'acf_error'
@@ -337,7 +337,7 @@ class FieldGroup
             if (!is_numeric($field_id) || (int) $field_id <= 0) continue;
 
             if (!\acf_delete_field((int) $field_id)) {
-                throw httpException(
+                throw onpage_http_exception(
                     "FieldGroup :: Failed to delete field with name '$field_name'",
                     500,
                     'delete_failed'
@@ -368,7 +368,7 @@ class FieldGroup
             $data['ID'] = (int) $existing_field_group['ID'];
         }
 
-        if (isWpmlActive()) {
+        if (onpage_is_wpml_active()) {
             $data['acfml_field_group_mode'] = self::ACFML_FIELD_GROUP_MODE;
         }
 
@@ -386,7 +386,7 @@ class FieldGroup
     {
         $title = $params['title'] ?? null;
         if (!is_string($title) || $title === '') {
-            throw httpException("FieldGroup :: 'title' is required", 400, 'missing_title');
+            throw onpage_http_exception("FieldGroup :: 'title' is required", 400, 'missing_title');
         }
 
         $key = $params['key'] ?? null;
@@ -403,13 +403,13 @@ class FieldGroup
 
         $result = \acf_update_field_group(self::buildFieldGroup($params, $title, $key, $existing_field_group));
         if (!$result) {
-            throw httpException("FieldGroup :: Failed to save Field Group", 500, 'acf_error');
+            throw onpage_http_exception("FieldGroup :: Failed to save Field Group", 500, 'acf_error');
         }
 
         $group_id = (int) $result['ID'];
         self::persistFields($group_id, is_array($params['fields'] ?? null) ? $params['fields'] : []);
 
-        if (isWpmlActive()) {
+        if (onpage_is_wpml_active()) {
             self::syncTranslationPreferences($group_id);
         }
 
@@ -419,15 +419,14 @@ class FieldGroup
     /** Deletes a field group by numeric ID. */
     public static function deleteById(int $id, bool $ignore_missing): void
     {
-        if (!$ignore_missing) {
-            $field_group = \acf_get_field_group($id);
-            if (!$field_group) {
-                throw httpException("FieldGroup :: ID $id not found", 404, 'not_found');
-            }
+        if (!\acf_get_field_group($id)) {
+            if ($ignore_missing) return;
+
+            throw onpage_http_exception("FieldGroup :: ID $id not found", 404, 'not_found');
         }
 
         if (!\acf_delete_field_group($id)) {
-            throw httpException("FieldGroup :: Failed to delete ID $id", 500, 'delete_failed');
+            throw onpage_http_exception("FieldGroup :: Failed to delete ID $id", 500, 'delete_failed');
         }
     }
 
@@ -438,11 +437,11 @@ class FieldGroup
         if (!$field_group) {
             if ($ignore_missing) return;
 
-            throw httpException("FieldGroup :: Title '$title' not found", 404, 'not_found');
+            throw onpage_http_exception("FieldGroup :: Title '$title' not found", 404, 'not_found');
         }
 
         if (!\acf_delete_field_group($field_group['ID'])) {
-            throw httpException("FieldGroup :: Failed to delete FieldGroup with title '$title'", 500, 'delete_failed');
+            throw onpage_http_exception("FieldGroup :: Failed to delete FieldGroup with title '$title'", 500, 'delete_failed');
         }
     }
 }

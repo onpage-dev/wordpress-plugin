@@ -31,8 +31,10 @@ content. The areas that matter most are:
   option. A way to call an endpoint without a valid token is a vulnerability.
 - **Token management.** Only users with the `manage_options` capability can generate or view the
   token, and no REST endpoint can read or write it.
-- **Remote media.** The plugin downloads files from URLs sent in the payload. Problems such as
-  server-side request forgery or unsafe file types are in scope.
+- **Remote media.** The plugin downloads files from URLs sent in the payload. It widens the
+  site's upload rules only for a fixed list of media and document types, and it sanitizes SVG
+  files before storing them. Problems such as server-side request forgery, a file type that gets
+  past that list, or an SVG that keeps script-capable content after sanitizing are in scope.
 
 A caller that holds a valid token is trusted to write content. Actions that a valid token already
 allows are not vulnerabilities on their own.

@@ -1,1 +1,5 @@
+#!/bin/sh
+# Starts the local WordPress stack. Works from any directory.
+set -eu
+cd "$(dirname "$0")"
 docker compose up -d
