@@ -18,6 +18,7 @@ use OnPage\Controllers\Term as TermController;
 use OnPage\Controllers\Media as MediaController;
 use OnPage\Controllers\Migration as MigrationController;
 use OnPage\Controllers\Index as IndexController;
+use OnPage\Controllers\Language as LanguageController;
 use OnPage\Controllers\WooCommerce\Attribute as WooCommerceAttributeController;
 use OnPage\Controllers\WooCommerce\AttributeTerm as WooCommerceAttributeTermController;
 use OnPage\Controllers\WooCommerce\Brand as WooCommerceBrandController;
@@ -60,6 +61,8 @@ $router->bind('POST', '/media/link', [MediaController::class, 'link'], AuthMiddl
 $router->bind('POST', '/migration', [MigrationController::class, 'run'], AuthMiddleware::class);
 
 $router->bind('DELETE', '/indexes', [IndexController::class, 'delete'], AuthMiddleware::class);
+
+$router->bind('GET', '/languages', [LanguageController::class, 'list'], AuthMiddleware::class);
 
 $router->bind('GET', '/woocommerce/brands', [WooCommerceBrandController::class, 'list'], AuthMiddleware::class);
 $router->bind('POST', '/woocommerce/brands', [WooCommerceBrandController::class, 'save'], AuthMiddleware::class);

@@ -804,6 +804,9 @@ sub-objects at least one key longer than three letters.
   code must not hide the real translations.
 - Sending a language map to a site without WPML is a hard `500 wpml_required`. The message names
   the exact field path.
+- Call `GET /languages` before the import to check your codes against the site. It returns the
+  active languages (default first) and `wpml_active`. A dropped code otherwise looks exactly like a
+  missing translation. See [API.md](../API.md#get-languages).
 
 All translations of an object share one `local_key`. Send every language in a single element. The
 plugin then:

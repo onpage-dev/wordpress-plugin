@@ -22,6 +22,7 @@ Base REST namespace:
 - [Media](#media)
 - [Taxonomies](#taxonomies)
 - [Terms](#terms)
+- [Languages](#languages)
 - [Maintenance](#maintenance)
 - [cURL examples](#curl-examples)
 - [Implementation notes](#implementation-notes)
@@ -75,6 +76,7 @@ In the **Notes** column, *Paginated* marks the only two endpoints that paginate.
 | Terms | `GET` | [`/terms`](#get-terms) | List or search terms of a taxonomy | |
 | Terms | `POST` | [`/terms`](#post-terms) | Create or update terms in batch | |
 | Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID | `?ignore` |
+| Languages | `GET` | [`/languages`](#get-languages) | List the active WPML languages and the default one | |
 | Maintenance | `DELETE` | [`/indexes`](#delete-indexes) | Remove all `local_key` associations | |
 | Maintenance | `POST` | [`/migration`](#post-migration) | Run the plugin's data migrations | |
 
@@ -2964,6 +2966,50 @@ Errors:
 - `400 input_invalid` if an element is not a valid term ID
 - `404 not_found` if `taxonomy` is sent but cannot be resolved, or if a term does not exist (without `?ignore`)
 - `500 delete_failed` if WordPress fails to delete an existing term. A WordPress error message is appended to the message (`Term :: Unable to delete :: <WordPress error>`).
+
+## Languages
+
+### GET `/languages`
+
+Returns the WPML languages active on the site and which one is the default.
+
+Use it to **check your language codes before you send them**. No write endpoint takes a list of languages. The plugin works out which translations to create from the codes it finds in the payload's language maps. A code the site does not have is dropped silently, on purpose: a payload may legitimately carry a language that is not active here. Without this endpoint, a misconfigured language code looked exactly like a missing translation. The elements in that language never appeared, and no error was returned.
+
+`languages` always lists the default language first. The order of `wpml_active_languages` is the site's display order and says nothing about the default. The default matters because it is the language of the source element: every other language is a translation of it.
+
+`wpml_active` tells apart the two reasons `languages` can hold a single entry or none:
+
+- WPML is installed with a single language;
+- the site has **no** WPML. There, a language map is not ignored: it is rejected with `500 wpml_required`.
+
+No payload. **Pagination:** no.
+
+```bash
+curl https://<host>/wp-json/onpage/v1/languages \
+  -H "Authorization: Bearer <token>"
+```
+
+Response `200`:
+
+```json
+{
+  "wpml_active": true,
+  "default": "en",
+  "languages": ["en", "it", "es"]
+}
+```
+
+On a site without WPML:
+
+```json
+{
+  "wpml_active": false,
+  "default": null,
+  "languages": []
+}
+```
+
+Errors: only the [authentication](#authentication) errors.
 
 ## Maintenance
 

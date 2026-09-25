@@ -38,6 +38,7 @@ element to a service in `src/Services/`.
 | `Media.php` | Media Library | List attachments, upload files, link remote files to ACF fields, delete attachments. |
 | `Migration.php` | `POST /migration` | One-off data upgrades for sites that ran an earlier installation. |
 | `Index.php` | `DELETE /indexes` | Remove every `local_key` association from posts and terms. |
+| `Language.php` | `GET /languages` | List the active WPML languages, default first, and whether WPML is active. Read-only. |
 | `WooCommerce/*.php` | WooCommerce entities | See [woocommerce.md](woocommerce.md). |
 
 ## Request conventions
