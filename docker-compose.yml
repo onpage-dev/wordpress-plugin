@@ -1,0 +1,51 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: wp_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./mysql:/var/lib/mysql
+    networks:
+      - wordpress_plugin_net
+
+  wordpress:
+    depends_on:
+      - mysql
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wp_site
+    ports:
+      - "8040:80"
+    restart: always
+    environment:
+      HOST_UID: ${HOST_UID:-1000}
+      HOST_GID: ${HOST_GID:-1000}
+      WORDPRESS_DB_HOST: mysql:3306
+      WORDPRESS_DB_USER: ${MYSQL_USER}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
+    volumes:
+      - ./wp-content:/var/www/html/wp-content
+      - ./config/.htaccess:/var/www/html/.htaccess
+    networks:
+      - wordpress_plugin_net
+
+  adminer:
+    image: adminer:latest
+    container_name: wp_adminer
+    restart: always
+    ports:
+      - "8041:8080"
+    networks:
+      - wordpress_plugin_net
+
+networks:
+  wordpress_plugin_net:
+    name: wordpress_plugin_net
+    driver: bridge

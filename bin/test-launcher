@@ -1,0 +1,136 @@
+#!/bin/sh
+# Esegue i test degli endpoint in src/Tests, uno per uno, e si ferma al primo che
+# fallisce: quello che rompe e' quasi sempre la causa di cio' che romperebbe dopo,
+# e i test condividono lo stesso sito, quindi proseguire su uno stato gia' sporco
+# produrrebbe solo errori derivati.
+#
+#   ./bin/test-launcher              tutti i test
+#   ./bin/test-launcher AcfShared    solo quelli il cui nome contiene "AcfShared"
+#
+# Ogni corsa riscrive ./logs/audit.log con la conversazione HTTP completa: una riga
+# [req] e una [res] per ogni chiamata, divise per test. Il file riparte da zero a ogni
+# corsa, cosi' quello che si legge e' sempre e solo l'ultima esecuzione.
+#
+# I test leggono WP_TEST_URL e WP_TEST_TOKEN dal file .env (vedi .env.example) e
+# creano e cancellano i propri dati: puntarli a un sito di prova, mai alla produzione.
+set -eu
+
+FILTER="${1:-}"
+cd "$(git rev-parse --show-toplevel)"
+
+command -v php >/dev/null 2>&1 || {
+    echo "php non e' disponibile nel PATH" >&2
+    exit 1
+}
+
+# La lista viene raccolta prima di partire, cosi' il totale e' noto fin dalla prima riga.
+TESTS=""
+COUNT=0
+for TEST in src/Tests/*.php; do
+    [ -f "$TEST" ] || continue
+
+    NAME=$(basename "$TEST" .php)
+    case "$NAME" in
+        *"$FILTER"*) ;;
+        *) continue ;;
+    esac
+
+    TESTS="$TESTS $TEST"
+    COUNT=$((COUNT + 1))
+done
+
+[ "$COUNT" -gt 0 ] || {
+    if [ -n "$FILTER" ]; then
+        echo "nessun test in src/Tests corrisponde a '$FILTER'" >&2
+    else
+        echo "nessun test in src/Tests" >&2
+    fi
+    exit 1
+}
+
+# Il .env e' letto sia da docker compose sia dal plugin, che usa parse_ini_file. I due
+# non concordano sui commenti: se un commento '#' contiene ( ) " ! & | $ { } [ ] o ~,
+# PHP scarta l'INTERO file e ogni variabile risulta vuota, senza che nulla lo segnali.
+# Controllarlo qui trasforma un "token non valorizzato" incomprensibile in una diagnosi.
+if [ -f .env ]; then
+    php -r 'exit(@parse_ini_file($argv[1], false, INI_SCANNER_RAW) === false ? 1 : 0);' .env 2>/dev/null || {
+        echo "il file .env esiste ma PHP non riesce a leggerlo, quindi i test lo vedrebbero vuoto." >&2
+        echo "Di solito e' un commento che contiene uno tra:  ( ) \" ! & | \$ { } [ ] ~" >&2
+        echo "Toglierli dai commenti e riprovare. Vedi .env.example." >&2
+        exit 1
+    }
+else
+    echo "avviso: manca il file .env, i test non sapranno a quale sito puntare. Vedi .env.example"
+fi
+
+# Il log di audit e' scritto dai test, che ricevono la destinazione da qui. Il launcher
+# lo azzera una volta sola e ci mette le intestazioni, cosi' le chiamate di ogni test
+# restano sotto il nome del test che le ha fatte.
+AUDIT_LOG="$PWD/logs/audit.log"
+mkdir -p "$(dirname "$AUDIT_LOG")"
+: > "$AUDIT_LOG"
+export ONPAGE_TEST_AUDIT_LOG="$AUDIT_LOG"
+# PHP usa UTC quando date.timezone non e' configurato: senza questo, le righe
+# scritte dai test e le intestazioni scritte qui finirebbero nello stesso file
+# con due orologi diversi.
+ONPAGE_TEST_TZ=$(date +%z)
+export ONPAGE_TEST_TZ
+
+{
+    echo "=========================================================================="
+    echo "corsa del $(date '+%Y-%m-%d %H:%M:%S %z')"
+    echo "test in programma: $COUNT${FILTER:+, filtro '$FILTER'}"
+    echo "=========================================================================="
+} >> "$AUDIT_LOG"
+
+echo "test-launcher :: $COUNT test da src/Tests"
+echo "audit         :: logs/audit.log"
+
+INDEX=0
+for TEST in $TESTS; do
+    INDEX=$((INDEX + 1))
+    NAME=$(basename "$TEST" .php)
+
+    echo
+    echo "[$INDEX/$COUNT] $NAME"
+    echo "--------------------------------------------------------------------------"
+
+    {
+        echo
+        echo "===== [$INDEX/$COUNT] $NAME ====="
+        echo
+    } >> "$AUDIT_LOG"
+
+    STARTED=$(date +%s)
+    if php "$TEST"; then
+        STATUS=0
+    else
+        STATUS=$?
+    fi
+    ELAPSED=$(($(date +%s) - STARTED))
+
+    if [ "$STATUS" -ne 0 ]; then
+        echo "[esito] FALLITO, uscita $STATUS, ${ELAPSED}s" >> "$AUDIT_LOG"
+        echo "[corsa] interrotta al test $INDEX di $COUNT" >> "$AUDIT_LOG"
+
+        echo "--------------------------------------------------------------------------"
+        echo "ESITO: FALLITO (uscita $STATUS, ${ELAPSED}s)"
+        echo
+        echo "dettaglio delle chiamate HTTP in logs/audit.log"
+        echo "fermato al primo test fallito: $NAME ($INDEX di $COUNT)" >&2
+        exit "$STATUS"
+    fi
+
+    echo "[esito] passato, ${ELAPSED}s" >> "$AUDIT_LOG"
+
+    echo "--------------------------------------------------------------------------"
+    echo "ESITO: passato (${ELAPSED}s)"
+done
+
+{
+    echo
+    echo "[corsa] tutti i test passati, $COUNT su $COUNT"
+} >> "$AUDIT_LOG"
+
+echo
+echo "tutti i test passati ($COUNT/$COUNT)"
