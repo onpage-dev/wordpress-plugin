@@ -85,6 +85,9 @@ For the end-to-end tests, set these in `.env` (see `.env.example`):
   `http://localhost:8040`
 - `WP_TEST_TOKEN`: the token generated on the **On Page®** admin page of the test site (the value
   of the `onpage_auth_token` option)
+- `ONPAGE_TEST_KEEP` (optional): set it to `1` to keep the data the tests create on the site, so
+  you can inspect it in wp-admin after the run. You can also set it for one run only:
+  `ONPAGE_TEST_KEEP=1 ./bin/test-launcher`. The process environment wins over `.env`.
 
 Then run:
 
@@ -121,6 +124,9 @@ Good to know:
   groups, content), runs its checks and removes everything, even when an assertion fails. Cleanup
   also runs before the fixture, so an interrupted run does not block the next one. Cleanup always
   uses `?ignore=1`.
+- With `ONPAGE_TEST_KEEP=1` the final cleanup is skipped and the data stays on the site. The
+  cleanup before the fixture and the gate still run, so the next run starts clean. The flag is read
+  by `src/Tests/Support/Keep.php`.
 
 ### Audit log
 

@@ -8,11 +8,13 @@ namespace OnPage\Tests;
 
 use OnPage\Env;
 use OnPage\Tests\Support\Audit;
+use OnPage\Tests\Support\Keep;
 
 
 
 require_once dirname(__DIR__) . '/Env.php';
 require_once __DIR__ . '/Support/Audit.php';
+require_once __DIR__ . '/Support/Keep.php';
 
 
 
@@ -42,7 +44,8 @@ require_once __DIR__ . '/Support/Audit.php';
  * Create-and-delete flow: everything created here is removed again at the end, including
  * when an assertion fails. Every teardown call uses `?ignore=1`, so a leftover from an
  * interrupted run never masks a real failure; the same teardown also runs before the
- * fixture is built.
+ * fixture is built. With `ONPAGE_TEST_KEEP=1` the final teardown is skipped and the data
+ * stays on the site (see `Support/Keep.php`).
  *
  * Configuration comes from the plugin `.env` (see `.env.example`):
  *
@@ -793,8 +796,12 @@ class WooCommerceCatalog
                 $this->assertSimpleProductPersisted();
                 $this->assertVariantsPersisted();
             } finally {
-                $this->teardown();
-                echo "  pulizia  prodotti, termini, attributo, tassonomia e field group rimossi\n";
+                if (Keep::enabled()) {
+                    echo "  pulizia  saltata, ONPAGE_TEST_KEEP attivo: i dati restano sul sito\n";
+                } else {
+                    $this->teardown();
+                    echo "  pulizia  prodotti, termini, attributo, tassonomia e field group rimossi\n";
+                }
             }
         } catch (\RuntimeException $exception) {
             $this->failures[] = $exception->getMessage();

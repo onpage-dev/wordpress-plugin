@@ -17,6 +17,8 @@
 #
 # The tests read WP_TEST_URL and WP_TEST_TOKEN from the .env file (see .env.example)
 # and create and delete their own data: point them at a test site, never at production.
+# With ONPAGE_TEST_KEEP=1, in .env or in the environment, the tests skip their final
+# cleanup and leave their data on the site; the gate and the initial cleanup still run.
 set -eu
 
 FILTER="${1:-}"
