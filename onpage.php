@@ -5,7 +5,7 @@
 /**
  * Plugin Name:       On Page®
  * Description:       Riceve e sincronizza in WordPress i dati strutturati provenienti da On Page®, esponendo le API REST sotto /wp-json/onpage/v1.
- * Version:           2.1.4
+ * Version:           1.0.0
  * Requires at least: 7.1
  * Requires PHP:      8.2
  * Author:            On Page®

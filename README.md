@@ -9,6 +9,21 @@ In sintesi, il plugin:
 - supporta la pubblicazione in WordPress di raccolte gestite centralmente su On Page®
 - puo' integrarsi con WPML per progetti multilingua
 
+## Versione
+
+Versione corrente: **1.0.0**. Il progetto segue il [Semantic Versioning](https://semver.org/lang/it/):
+le modifiche di ogni versione sono in [CHANGELOG.md](CHANGELOG.md), la procedura di rilascio in
+[RELEASE.md](RELEASE.md). Le versioni pubblicate sono nelle
+[Release della repo GitHub](https://github.com/onpage-dev/wordpress-plugin/releases).
+
+## Requisiti
+
+- WordPress 7.1 o superiore
+- PHP 8.2 o superiore
+- [Advanced Custom Fields](https://wordpress.org/plugins/advanced-custom-fields/) attivo: senza ACF
+  le API REST restano disattivate
+- WooCommerce e WPML sono opzionali, necessari solo per i rispettivi endpoint e per il multilingua
+
 ## Documentazione
 
 Per scrivere una integrazione parti da **[docs/DEVELOPER.md](docs/DEVELOPER.md)**: contratto REST,

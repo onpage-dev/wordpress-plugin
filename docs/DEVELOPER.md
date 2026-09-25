@@ -269,7 +269,7 @@ so the next import re-establishes them from scratch. It does **not** touch the g
 keys in the `onpage_wc_attribute_local_key_{attribute_id}` options, which survive the wipe.
 
 `POST /migration` is not part of a new integration: it exists only to upgrade a site that ran a
-pre-2.0 build of the plugin, and does nothing on a site keyed by this version.
+legacy build of the plugin, and does nothing on a site keyed by this version.
 
 ---
 
@@ -340,7 +340,7 @@ Two constraints worth repeating, because they are the ones that bite:
 | `/terms` | GET POST DELETE | `taxonomy` `name` `parent_id` `parent_lk` | terms of any taxonomy, per-element `taxonomy` |
 | `/media` | GET `P` POST DELETE `I` | `page` `per_page` `post_id` `mime_type` `attachment_id` `attachment_ids` `ignore` | Media Library, multipart upload |
 | `/media/link` | POST | — | write ACF file/image fields: import a remote URL, attach an existing `attachment_id` (int), or clear the field (`null`) |
-| `/migration` | POST | — | one-off upgrade of a pre-2.0 installation; not used by a new integration |
+| `/migration` | POST | — | one-off upgrade of a legacy installation; not used by a new integration |
 | `/indexes` | DELETE | — | wipe every `local_key` |
 | `/woocommerce/attributes` | GET POST DELETE `I` | `id` `slug` `local_key` `name` `ignore` | global `pa_*` attributes |
 | `/woocommerce/attributes/{attribute}/terms` | GET POST DELETE `I` | `id` `local_key` `slug` `name` `parent_id` `parent_lk` `ignore` | attribute options |

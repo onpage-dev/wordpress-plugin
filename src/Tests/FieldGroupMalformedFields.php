@@ -89,12 +89,12 @@ namespace OnPage\Tests {
      * Offline check for `FieldGroup::persistFields()`: a malformed `fields` payload must
      * never reach the cleanup pass.
      *
-     * The regression this pins down shipped in 2.1.2 and was fixed in 2.1.4. Entries that
-     * were not arrays used to be skipped in silence; since a skipped entry never lands in
-     * `$saved_field_names`, the cleanup at the end of the method read every existing field
-     * as "dropped from the payload" and deleted it — answering `200`. Sending
+     * The regression this pins down: if entries that are not arrays were skipped in
+     * silence, a skipped entry would never land in `$saved_field_names`, and the cleanup
+     * at the end of the method would read every existing field as "dropped from the
+     * payload" and delete it — answering `200`. Sending
      * `"fields": ["nome", "cognome"]` instead of a list of objects, a plain client mistake,
-     * therefore wiped the group's schema and left the values already written in the posts
+     * would then wipe the group's schema and leave the values already written in the posts
      * unreadable by ACF.
      *
      * Needs no WordPress, no site and no `.env`: ACF is replaced by the double above.

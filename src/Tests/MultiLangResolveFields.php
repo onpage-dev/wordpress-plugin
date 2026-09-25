@@ -79,8 +79,8 @@ namespace OnPage\Tests {
         /**
          * Everything else: these must reach the field write untouched.
          *
-         * This is the regression fixed in 2.1.2 — before it, every array here resolved
-         * to `null` and the field was silently cleared while the request answered 200.
+         * If the rule regresses, every array here resolves to `null` and the field is
+         * silently cleared while the request answers 200.
          *
          * @return array<string, array{mixed, mixed}> caso => [valore inviato, atteso]
          */

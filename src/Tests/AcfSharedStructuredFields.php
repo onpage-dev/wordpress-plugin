@@ -66,9 +66,9 @@ class AcfSharedStructuredFields
      * None of these is a language map: that is the whole point of the test.
      *
      * The `group` covers the one shape the others do not, an associative object rather
-     * than a list, and it doubles as the regression test for the sub-field persistence
-     * fixed in 2.1.2: before that, a `group` created through `POST /field-groups` read
-     * back with every sub-field collapsed onto an empty key.
+     * than a list, and it doubles as the regression test for the sub-field persistence:
+     * if it breaks, a `group` created through `POST /field-groups` reads back with every
+     * sub-field collapsed onto an empty key.
      */
     private static function sharedFieldValues(): array
     {
