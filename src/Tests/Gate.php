@@ -35,11 +35,16 @@ require_once __DIR__ . '/Support/Audit.php';
  * Everything goes through the On Page® REST API, because the WooCommerce `DELETE`
  * endpoints only accept `local_key`s and a manually created element has none:
  *
- *   - products and variations are deleted by post type through `DELETE /posts`, plus
- *     every ID `GET /woocommerce/products` lists in its `translations` maps;
+ *   - products and variations are listed page by page through `GET /posts?type=`, trash
+ *     included, and deleted by ID through `DELETE /posts`, translations included;
  *   - attributes without a `local_key` get a temporary one (`POST /woocommerce/attributes`
  *     with `id`), so that `DELETE /woocommerce/attributes` can reach them;
  *   - terms are deleted by ID through `DELETE /terms`, translations included.
+ *
+ * Every delete goes in small batches. The test site sits behind a proxy that cuts any
+ * request after 60 seconds (`504`), and one call for a whole catalogue never finishes in
+ * time. A batch cut off anyway is not fatal: PHP usually finishes it behind the proxy,
+ * and the next pass lists again whatever is left.
  *
  * After the wipe every listing is read again: anything still there fails the gate.
  *
@@ -54,8 +59,20 @@ require_once __DIR__ . '/Support/Audit.php';
  */
 class Gate
 {
-    /** Post types removed wholesale; variations first, so no parent is deleted under them. */
+    /** Post types to empty; variations first, so no parent is deleted under them. */
     private const POST_TYPES = ['product_variation', 'product'];
+
+    /** `?status=` values that together cover every post: `any` leaves the trash out. */
+    private const POST_STATUSES = ['any', 'trashed'];
+
+    /** Posts per `DELETE /posts` call: a product with variations and translations is slow to delete. */
+    private const POST_BATCH = 10;
+
+    /** Terms per `DELETE /terms` call. */
+    private const TERM_BATCH = 50;
+
+    /** Listing-and-delete passes on posts before the leftovers are left to verify(). */
+    private const POST_PASSES = 3;
 
     /** Term taxonomies emptied through `DELETE /terms`; `product_cat` last, see wipeCategories(). */
     private const FLAT_TAXONOMIES = ['product_tag', 'product_brand'];
@@ -184,6 +201,29 @@ class Gate
     }
 
     /**
+     * IDs of every post of a type, in any status, trash included.
+     *
+     * `GET /posts` is paginated at 100 items at most; a short page is the last one.
+     *
+     * @return list<int>
+     */
+    private function listPostIds(string $post_type): array
+    {
+        $items = [];
+        foreach (self::POST_STATUSES as $status) {
+            for ($page = 1; ; $page++) {
+                $query = 'type=' . rawurlencode($post_type) . "&status=$status&per_page=100&page=$page";
+                $batch = $this->requireList('/posts', $query);
+                array_push($items, ...$batch);
+
+                if (count($batch) < 100) break;
+            }
+        }
+
+        return self::idsWithTranslations($items);
+    }
+
+    /**
      * IDs of every listed element and of all its WPML translations.
      *
      * The listings return one object per translation group, so without the `translations`
@@ -231,21 +271,42 @@ class Gate
     }
 
     /**
-     * Deletes every product and variation.
+     * Deletes every product and variation, a few IDs per call.
      *
-     * The post type strings catch every status, trash included; the listed IDs catch the
-     * WPML translations the post type query, filtered on the current language, would miss.
-     * Deleting a product also deletes its variations, hence `?ignore=1`.
+     * A `504` from the proxy only ends the pass early: the next one lists again what is
+     * left. Deleting a product also deletes its variations, hence `?ignore=1`.
      */
     private function wipeProducts(): void
     {
-        $ids = array_merge(
-            self::idsWithTranslations($this->requireList('/woocommerce/variant-products')),
-            self::idsWithTranslations($this->requireList('/woocommerce/products'))
-        );
+        $deleted = 0;
+        for ($pass = 1; $pass <= self::POST_PASSES; $pass++) {
+            $ids = [];
+            foreach (self::POST_TYPES as $post_type) {
+                array_push($ids, ...$this->listPostIds($post_type));
+            }
 
-        $this->requireOk('DELETE', '/posts', array_merge(self::POST_TYPES, $ids), 'ignore=1');
-        echo "  prodotti   prodotti e varianti rimossi\n";
+            if ($ids === []) break;
+
+            foreach (array_chunk($ids, self::POST_BATCH) as $batch) {
+                $response = $this->request('DELETE', '/posts', $batch, 'ignore=1');
+                if ($response['status'] === 504) {
+                    echo "  prodotti   passata $pass interrotta dal proxy (504), si riparte dalla lista\n";
+
+                    continue 2;
+                }
+
+                if ($response['status'] !== 200) {
+                    throw new \RuntimeException(
+                        "DELETE /posts ha risposto {$response['status']}: "
+                        . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    );
+                }
+
+                $deleted += count($batch);
+            }
+        }
+
+        echo "  prodotti   $deleted tra prodotti e varianti rimossi\n";
     }
 
     /**
@@ -282,7 +343,11 @@ class Gate
             $this->requireOk('POST', '/woocommerce/attributes', $to_key);
         }
 
-        $this->requireOk('DELETE', '/woocommerce/attributes', array_values(array_unique($local_keys)), 'ignore=1');
+        // One attribute per call: deleting one also deletes every term of its taxonomy.
+        foreach (array_values(array_unique($local_keys)) as $local_key) {
+            $this->requireOk('DELETE', '/woocommerce/attributes', [$local_key], 'ignore=1');
+        }
+
         echo '  attributi  ' . count($attributes) . " attributo/i rimosso/i con i loro termini\n";
     }
 
@@ -298,8 +363,8 @@ class Gate
             }
 
             $ids = self::idsWithTranslations($terms);
-            if ($ids !== []) {
-                $this->requireOk('DELETE', '/terms', $ids, 'taxonomy=' . rawurlencode($taxonomy) . '&ignore=1');
+            foreach (array_chunk($ids, self::TERM_BATCH) as $batch) {
+                $this->requireOk('DELETE', '/terms', $batch, 'taxonomy=' . rawurlencode($taxonomy) . '&ignore=1');
             }
 
             echo "  $taxonomy  " . count($ids) . " termine/i rimosso/i\n";
@@ -344,9 +409,11 @@ class Gate
     /** Reads every listing again and records whatever survived the wipe. */
     private function verify(): void
     {
+        $as_items = static fn(array $ids): array => array_map(static fn(int $id): array => ['id' => $id], $ids);
+
         $leftovers = [
-            'prodotti' => $this->requireList('/woocommerce/products'),
-            'varianti' => $this->requireList('/woocommerce/variant-products'),
+            'varianti' => $as_items($this->listPostIds('product_variation')),
+            'prodotti' => $as_items($this->listPostIds('product')),
             'attributi' => $this->requireList('/woocommerce/attributes'),
         ];
 

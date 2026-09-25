@@ -109,7 +109,8 @@ site, so each run starts from an empty catalogue:
 
 It deletes everything, not only what the tests create. The only survivor is the default product
 category, which WordPress does not allow to delete. The gate then reads every listing again and
-fails if anything else is left. **If the gate fails, no test runs.** You can also run it on its own
+fails if anything else is left. It deletes in small batches, so that no call runs into the proxy
+timeout of the test site. **If the gate fails, no test runs.** You can also run it on its own
 with `php src/Tests/Gate.php`.
 
 Good to know:
