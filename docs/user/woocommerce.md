@@ -3,7 +3,7 @@
 This guide is for site admins who run a WooCommerce shop. It explains, in plain terms, what the
 **On Page®** plugin does with your shop data.
 
-WooCommerce is optional. You only need it if your integration syncs products.
+WooCommerce is optional. You only need it if your client syncs products.
 
 ## What gets synced
 
@@ -39,7 +39,7 @@ reused, not copied again.
 The plugin adds a **Documents** section to the product page. It lists the product's downloadable
 files, such as a data sheet or a safety sheet.
 
-Only files sent by the integration are shown there. Files you add by hand in WooCommerce are
+Only files sent by the client are shown there. Files you add by hand in WooCommerce are
 not listed in that section.
 
 For variable products, the files are also copied to each variation. This keeps the WooCommerce
@@ -49,14 +49,14 @@ admin consistent.
 
 If WPML is active, each product can have its own name, description and files per language. The
 plugin creates or updates the translations for you. Translations are not generated automatically:
-the plugin uses the text sent by the integration.
+the plugin uses the text sent by the client.
 
 ## Good to know
 
-- Syncs are driven by the integration. You don't need to press anything in the admin.
+- Syncs are driven by the client. You don't need to press anything in the admin.
 - Products are matched by a stable On Page® identifier. Running a sync again updates the same
   product instead of creating a copy.
-- If you see two categories with the same name, the identifiers are out of sync. Ask the team
-  that maintains your integration to run a clean re-import.
+- If you see two categories with the same name, the identifiers are out of sync. Ask whoever
+  maintains your client to run a clean re-import.
 
 For the technical details, see [../dev/woocommerce.md](../dev/woocommerce.md).

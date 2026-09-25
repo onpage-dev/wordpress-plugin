@@ -9,7 +9,7 @@ The **On Page®** plugin syncs data from the On Page® PIM into WordPress.
 Here is how the pieces fit together:
 
 - **On Page®** holds the source data.
-- A **custom integration built for your project** sends that data to WordPress.
+- A **client** sends that data to WordPress. A client is any program that calls the plugin's API, whoever wrote it.
 - The **On Page®** plugin receives the data through its **REST API**.
 - WordPress stores it as structured content.
 
@@ -38,7 +38,7 @@ A practical example:
 | **WordPress 7.1+** | Required | |
 | **PHP 8.2+** | Required | |
 | **Advanced Custom Fields (ACF)** | **Required** | Creates and manages the structured custom fields attached to the imported content, so the data can be shown and organized in the WordPress admin and in your site templates. |
-| **WooCommerce** | Optional | Only needed if the integration syncs products, categories, brands or other e-commerce data. |
+| **WooCommerce** | Optional | Only needed if the client syncs products, categories, brands or other e-commerce data. |
 | **WPML** | Optional | Only needed if the site manages synced multilingual content. It links content, terms, labels and translated data to the languages configured in WordPress. |
 
 Important notes:
@@ -51,14 +51,14 @@ Important notes:
 ## How syncing works
 
 1. The data is prepared in **On Page®**.
-2. The **custom integration** calls the plugin's REST API on your WordPress site.
+2. The **client** calls the plugin's REST API on your WordPress site.
 3. The plugin creates or updates:
    - **Post Types**
    - **ACF fields**, if the configuration includes them
    - **taxonomies**
    - **terms**
    - **content**
-   - **WooCommerce products and data**, if the e-commerce integration is active
+   - **WooCommerce products and data**, if WooCommerce is active
 4. The data becomes available in the WordPress admin and on the site.
 
 ## How On Page® maps to WordPress
@@ -69,7 +69,7 @@ Important notes:
 | Item | A piece of content in that Post Type |
 | Field | ACF custom field (when the project uses ACF) |
 | Classification | Taxonomy |
-| Product | WooCommerce product (when the e-commerce integration is active) |
+| Product | WooCommerce product (when WooCommerce is active) |
 
 Example:
 
@@ -106,14 +106,14 @@ Also make sure that:
 - WPML is installed and active, if the project uses multiple languages
 - WooCommerce is installed and active, if the project syncs e-commerce data
 - the On Page® plugin is installed and active
-- the **custom integration** is configured to call the plugin's REST API
-- your WordPress site can be reached by the **custom integration**
+- the **client** is configured to call the plugin's REST API
+- your WordPress site can be reached by the **client**
 
 ## API security
 
 The plugin's REST API is protected by an **authentication token**. This means:
 
-- only the authorized **custom integration** can send data to WordPress
+- only an authorized **client** can send data to WordPress
 - outside users cannot use the API without a valid token
 
 You manage the token from the WordPress admin.
@@ -125,7 +125,7 @@ Only **administrators** (WordPress capability `manage_options`) can open the **O
 1. Install and activate the **On Page®** plugin (upload the .zip file under **Plugins** in WordPress).
 2. Open the **On Page®** menu item in the WordPress admin.
 3. Click **Genera token** ("Generate token"). If a token already exists, the button reads **Rigenera token** ("Regenerate token").
-4. Copy the token shown under **Token corrente** ("Current token") and give it to the On Page® team that will build your **custom integration**.
+4. Copy the token shown under **Token corrente** ("Current token") and give it to whoever runs your **client**.
 5. REST calls are sent with the header `Authorization: Bearer <token>`.
 
 Good to know:
@@ -153,13 +153,13 @@ Its main job is to:
 
 - **receive structured data**
 - **map that data into WordPress**
-- **keep it in sync with On Page® through the custom integration**
+- **keep it in sync with On Page®**
 
 ## Summary
 
 The **On Page®** plugin connects On Page® to WordPress. It lets you:
 
-- receive data from the **custom integration**
+- receive data from any **client**
 - turn collections into **Post Types**
 - turn fields into **ACF custom fields**
 - sync e-commerce data with **WooCommerce** (optional; WPML is not needed for this; see [woocommerce.md](woocommerce.md))

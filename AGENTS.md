@@ -42,7 +42,7 @@ Update every document that describes the code you touched. Use this table to fin
 | If you change… | Update |
 | --- | --- |
 | an endpoint: route, parameters, response shape or error codes | [docs/API.md](docs/API.md), including the endpoint index at the top |
-| the order of calls or the rules an integration must follow | [docs/dev/integration-guide.md](docs/dev/integration-guide.md) |
+| the order of calls or the rules a client must follow | [docs/dev/integration-guide.md](docs/dev/integration-guide.md) |
 | how a controller or service works | [docs/dev/internals.md](docs/dev/internals.md) |
 | how WooCommerce products, variations or downloads are saved | [docs/dev/woocommerce.md](docs/dev/woocommerce.md) |
 | a design decision or a cross-cutting convention | [docs/dev/architecture.md](docs/dev/architecture.md) |

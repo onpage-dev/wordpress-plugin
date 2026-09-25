@@ -12,8 +12,9 @@ The project ships a Docker Compose environment with MySQL, WordPress and Adminer
 1. Copy `.env.example` to `.env` and fill in the values.
 2. Start the containers with `./start`. Stop them with `./stop`, or restart them with `./restart`.
 3. Open WordPress and complete the installation.
-4. Install and activate **Advanced Custom Fields** and this plugin. Add WooCommerce and WPML if
-   your change touches them.
+4. Install and activate **Advanced Custom Fields**. Add WooCommerce and WPML if your change
+   touches them.
+5. Activate **On Page®** under **Plugins**. You do not need to copy or install it: see below.
 
 | Service | URL |
 | --- | --- |
@@ -21,6 +22,21 @@ The project ships a Docker Compose environment with MySQL, WordPress and Adminer
 | Adminer (database) | http://localhost:8041/?server=mysql&db=wordpress |
 
 In Adminer, log in with the `MYSQL_USER` and `MYSQL_PASSWORD` values from `.env`.
+
+### How the plugin gets into WordPress
+
+The container mounts two things from the repository:
+
+- `./wp-content` becomes the site's `wp-content`. It holds the other plugins, themes and uploads.
+  Docker creates it on the first start. It is not versioned.
+- `plugin.php`, `routes.php` and `src/` are mounted into `wp-content/plugins/onpage/`.
+
+So the plugin runs straight from your working copy. Edits to the code are live on the next request,
+with no copy or rebuild. The mounts are listed in [docker-compose.yml](docker-compose.yml).
+
+If you add a new file or folder at the root of the plugin, add a mount for it too. Do not mount
+the whole repository: it contains `mysql/`, and the container changes the owner of everything
+under `wp-content` on start, which would break the database files.
 
 ### Comments in `.env`
 

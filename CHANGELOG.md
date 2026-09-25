@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-09-25
 
 ### Added
-- REST API under `/wp-json/onpage/v1` that receives structured data from On Page® through Exporter. Requests authenticate with a token generated on the plugin's settings page.
+- REST API under `/wp-json/onpage/v1` that receives structured data from On Page® from any client. Requests authenticate with a token generated on the plugin's settings page.
 - Creation and update of post types, ACF field groups, taxonomies, terms, posts and media, as idempotent upserts keyed by `local_key`.
 - WooCommerce integration: products, variations, global attributes and their terms, categories, tags and brands.
 - WPML integration for multilingual sites. Per-language values are sent as `{"<lang>": …}` maps.

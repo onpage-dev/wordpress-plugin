@@ -1,15 +1,15 @@
-# Building an integration
+# Building a client
 
-This guide is for developers who write an **integration** against this plugin. An integration is an
-external program. It reads data from On Page® and pushes structure and content into a WordPress
-site through the plugin's REST API.
+This guide is for developers who write a **client** for this plugin. A client is any program that
+pushes structure and content into a WordPress site through the plugin's REST API. The plugin does
+not depend on who writes the client or how it runs.
 
 The plugin never pulls data. It only receives it. This guide covers everything the caller has to
 get right.
 
 | You want | Read |
 | --- | --- |
-| how to write an integration, with working examples | this file |
+| how to write a client, with working examples | this file |
 | the full payload reference, endpoint by endpoint | [API.md](../API.md) |
 | how the plugin works inside, service by service | [internals.md](internals.md) |
 | the architectural decisions and their trade-offs | [architecture.md](architecture.md) |
@@ -20,12 +20,12 @@ get right.
 
 ---
 
-## 1. The shape of an integration
+## 1. The shape of a client
 
-An integration always runs three steps, in this order:
+A typical client runs three steps, in this order:
 
 ```text
-On Page® (PIM)  ──SDK read──▶  your integration  ──authenticated HTTP──▶  WordPress plugin
+On Page® (PIM)  ──SDK read──▶  your client  ──authenticated HTTP──▶  WordPress plugin
 ```
 
 1. **Read** from On Page® with an official SDK (PHP or JS/TS).
@@ -33,9 +33,6 @@ On Page® (PIM)  ──SDK read──▶  your integration  ──authenticated 
 3. **Write** to the plugin with plain authenticated `POST`/`DELETE` calls.
 
 Step 3 has no SDK, and it does not need one. The write side is JSON over HTTP with a bearer token.
-
-Do not reuse the internal `Op\WordPress` manager from the exporter project. It depends on Laravel,
-Eloquent and a `request_cache` table, and it is not distributable.
 
 ### Reading with the On Page® SDKs
 
@@ -95,7 +92,7 @@ for (const product of products) {
 ```
 
 Files are the key hand-off. `link()` returns a public URL, and the plugin accepts exactly that.
-**The integration never downloads binaries.** It passes the URL. The WordPress side handles the
+**The client never downloads binaries.** It passes the URL. The WordPress side handles the
 download, the Media Library import and the deduplication.
 
 ---
@@ -339,7 +336,7 @@ A failed element therefore leaves nothing keyed.
 them from scratch. It does **not** touch the global attribute keys in the
 `onpage_wc_attribute_local_key_{attribute_id}` options. Those survive the wipe.
 
-`POST /migration` is not part of a new integration. It only upgrades a site that ran a legacy build
+`POST /migration` is not part of a new client. It only upgrades a site that ran a legacy build
 of the plugin. On a site keyed by this version it does nothing.
 
 ---
@@ -890,7 +887,7 @@ the current signatures.
 The same principle applies to editorial labels and single-choice options. Keep them as data in
 On Page®, not as strings in code. This moves control to where the content lives.
 
-There is a trade-off: the field folder becomes a **prerequisite** of the integration, and renaming
+There is a trade-off: the field folder becomes a **prerequisite** of the client, and renaming
 it breaks the code.
 
 ---
@@ -959,9 +956,9 @@ WooCommerce's own error code and HTTP status (500 when WooCommerce sets none). T
   `parent` is a raw WordPress term id, so `0` does mean top level. `null`, or omitting the key,
   means top level everywhere. Prefer that.
 - **Deletions do not propagate.** An item removed from On Page® stays published until the
-  integration calls the matching `DELETE`.
-- **The plugin has no dry-run.** Test against the Docker environment in [README](../../README.md)
-  before pointing an integration at a live site.
+  client calls the matching `DELETE`.
+- **The plugin has no dry-run.** Test against the Docker environment in [CONTRIBUTING.md](../../CONTRIBUTING.md)
+  before pointing a client at a live site.
 
 ---
 

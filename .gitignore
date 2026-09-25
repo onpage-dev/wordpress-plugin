@@ -1,5 +1,6 @@
 .env
 mysql
+/wp-content/
 
 wp-content/languages/wpml/*
 

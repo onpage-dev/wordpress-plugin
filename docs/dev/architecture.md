@@ -13,14 +13,16 @@ It is not:
 ## 1. Context and goal
 
 The plugin is the WordPress side of an **On Page® → WordPress** sync. It receives structured data from
-the On Page® *Exporter* service and turns it into:
+a *client*, any program that calls the plugin's REST API (see
+[integration-guide.md](integration-guide.md)). The plugin never pulls data. It turns what it
+receives into:
 
 - WordPress content: posts/CPTs, taxonomies, terms, ACF field groups;
 - WooCommerce entities: products, variations, categories, tags, brands, global attributes and their terms.
 
 Multilingual support via **WPML** is optional.
 
-The caller is a machine, not a person. The plugin is therefore an **integration backend**, not a UI.
+The caller is a machine, not a person. The plugin is therefore a **backend**, not a UI.
 This leads to the first design principle: expose an **idempotent REST contract**. Requests can be
 re-run without duplicating data, and an external identifier (`local_key`) drives the matching.
 

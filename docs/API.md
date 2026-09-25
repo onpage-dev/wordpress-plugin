@@ -2726,12 +2726,15 @@ Response `200`:
 
 It deletes the canonical `onpage_local_key` meta and the legacy copies `local_key` / `_local_key`, from both `wp_postmeta` and `wp_termmeta`. It is idempotent.
 
+It does **not** clear the keys of WooCommerce **global attributes**. Those live in the `onpage_wc_attribute_local_key_{attribute_id}` options, not in meta, and survive the call. The terms of an attribute (`pa_*`) are term meta, so they are cleared like any other term.
+
 Important operational notes:
 
 - **Terms.** After clearing, terms become "unowned". The re-import **re-adopts** them by structural identity (name/slug + parent) and writes the new `local_key`, without creating duplicates.
 - **Top-down order.** The re-import must process **parents before children**. Right after clearing, a category's `parent` is resolved by `local_key`; if the parent has not been re-imported yet, the request returns `404 not_found`.
 - **Pre-existing duplicates.** Duplicate terms created by failed imports remain (orphaned, without a key). For deterministic adoption, send the real `slug` in the payload or clean up the empty duplicates.
 - **Products.** Products have **no** structural adoption. After clearing, a product whose title already exists but has no `local_key` is rejected with `409 duplicate_title`. Such products must be **re-imported** (by existing `id`, or by recreating the link). Keep this in mind before clearing the `postmeta` too.
+- **Global attributes.** Their old keys are still stored. When you re-import them with regenerated keys, send the existing `slug` (or the attribute `id`): `POST /woocommerce/attributes` then finds the attribute by slug and overwrites its key. Without a slug the plugin tries to create a new attribute, and WooCommerce rejects it if the generated slug is already taken. A new key that equals the old key of a *different* attribute fails with `409 duplicate_local_key`.
 
 Errors:
 
