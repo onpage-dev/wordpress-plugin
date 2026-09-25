@@ -1,18 +1,22 @@
 #!/bin/sh
-# Esegue i test degli endpoint in src/Tests, uno per uno, e si ferma al primo che
-# fallisce: quello che rompe e' quasi sempre la causa di cio' che romperebbe dopo,
-# e i test condividono lo stesso sito, quindi proseguire su uno stato gia' sporco
-# produrrebbe solo errori derivati.
+# Runs the endpoint tests in src/Tests one at a time and stops at the first failure:
+# the test that breaks is almost always the cause of whatever would break next, and the
+# tests share the same site, so carrying on over a dirty state would only produce
+# follow-on errors.
 #
-#   ./bin/test-launcher              tutti i test
-#   ./bin/test-launcher AcfShared    solo quelli il cui nome contiene "AcfShared"
+#   ./bin/test-launcher              every test
+#   ./bin/test-launcher AcfShared    only the tests whose name contains "AcfShared"
 #
-# Ogni corsa riscrive ./logs/audit.log con la conversazione HTTP completa: una riga
-# [req] e una [res] per ogni chiamata, divise per test. Il file riparte da zero a ogni
-# corsa, cosi' quello che si legge e' sempre e solo l'ultima esecuzione.
+# Before any test, src/Tests/Gate.php runs, even with a filter: it empties the test site
+# of WooCommerce products, variations, attributes, categories, tags and brands, so every
+# run starts from an empty catalogue. If the gate fails, no test runs.
 #
-# I test leggono WP_TEST_URL e WP_TEST_TOKEN dal file .env (vedi .env.example) e
-# creano e cancellano i propri dati: puntarli a un sito di prova, mai alla produzione.
+# Every run rewrites ./logs/audit.log with the full HTTP conversation: one [req] line
+# and one [res] line per call, grouped by test. The file starts from scratch on every
+# run, so what you read is always the last run and nothing else.
+#
+# The tests read WP_TEST_URL and WP_TEST_TOKEN from the .env file (see .env.example)
+# and create and delete their own data: point them at a test site, never at production.
 set -eu
 
 FILTER="${1:-}"
@@ -23,11 +27,19 @@ command -v php >/dev/null 2>&1 || {
     exit 1
 }
 
-# La lista viene raccolta prima di partire, cosi' il totale e' noto fin dalla prima riga.
+# The gate is not a test like the others: it always runs, first, and ignores the filter.
+GATE=src/Tests/Gate.php
+[ -f "$GATE" ] || {
+    echo "manca $GATE, il gate che ripulisce il sito prima dei test" >&2
+    exit 1
+}
+
+# The list is collected before starting, so the total is known from the very first line.
 TESTS=""
 COUNT=0
 for TEST in src/Tests/*.php; do
     [ -f "$TEST" ] || continue
+    [ "$TEST" = "$GATE" ] && continue
 
     NAME=$(basename "$TEST" .php)
     case "$NAME" in
@@ -48,10 +60,10 @@ done
     exit 1
 }
 
-# Il .env e' letto sia da docker compose sia dal plugin, che usa parse_ini_file. I due
-# non concordano sui commenti: se un commento '#' contiene ( ) " ! & | $ { } [ ] o ~,
-# PHP scarta l'INTERO file e ogni variabile risulta vuota, senza che nulla lo segnali.
-# Controllarlo qui trasforma un "token non valorizzato" incomprensibile in una diagnosi.
+# The .env is read both by docker compose and by the plugin, which uses parse_ini_file.
+# The two disagree on comments: if a '#' comment contains ( ) " ! & | $ { } [ ] or ~,
+# PHP discards the WHOLE file and every variable reads as empty, with nothing reporting
+# it. Checking it here turns an obscure "token not set" into a clear diagnosis.
 if [ -f .env ]; then
     php -r 'exit(@parse_ini_file($argv[1], false, INI_SCANNER_RAW) === false ? 1 : 0);' .env 2>/dev/null || {
         echo "il file .env esiste ma PHP non riesce a leggerlo, quindi i test lo vedrebbero vuoto." >&2
@@ -63,16 +75,16 @@ else
     echo "avviso: manca il file .env, i test non sapranno a quale sito puntare. Vedi .env.example"
 fi
 
-# Il log di audit e' scritto dai test, che ricevono la destinazione da qui. Il launcher
-# lo azzera una volta sola e ci mette le intestazioni, cosi' le chiamate di ogni test
-# restano sotto il nome del test che le ha fatte.
+# The audit log is written by the tests, which get its path from here. The launcher
+# truncates it once and writes the headers, so each test's calls stay under the name
+# of the test that made them.
 AUDIT_LOG="$PWD/logs/audit.log"
 mkdir -p "$(dirname "$AUDIT_LOG")"
 : > "$AUDIT_LOG"
 export ONPAGE_TEST_AUDIT_LOG="$AUDIT_LOG"
-# PHP usa UTC quando date.timezone non e' configurato: senza questo, le righe
-# scritte dai test e le intestazioni scritte qui finirebbero nello stesso file
-# con due orologi diversi.
+# PHP uses UTC when date.timezone is not configured: without this, the lines written
+# by the tests and the headers written here would end up in the same file with two
+# different clocks.
 ONPAGE_TEST_TZ=$(date +%z)
 export ONPAGE_TEST_TZ
 
@@ -85,6 +97,41 @@ export ONPAGE_TEST_TZ
 
 echo "test-launcher :: $COUNT test da src/Tests"
 echo "audit         :: logs/audit.log"
+
+echo
+echo "[gate] Gate"
+echo "--------------------------------------------------------------------------"
+
+{
+    echo
+    echo "===== [gate] Gate ====="
+    echo
+} >> "$AUDIT_LOG"
+
+STARTED=$(date +%s)
+if php "$GATE"; then
+    STATUS=0
+else
+    STATUS=$?
+fi
+ELAPSED=$(($(date +%s) - STARTED))
+
+if [ "$STATUS" -ne 0 ]; then
+    echo "[esito] FALLITO, uscita $STATUS, ${ELAPSED}s" >> "$AUDIT_LOG"
+    echo "[corsa] interrotta al gate, nessun test eseguito" >> "$AUDIT_LOG"
+
+    echo "--------------------------------------------------------------------------"
+    echo "ESITO: FALLITO (uscita $STATUS, ${ELAPSED}s)"
+    echo
+    echo "dettaglio delle chiamate HTTP in logs/audit.log"
+    echo "il gate non e' riuscito a ripulire il sito: nessun test eseguito" >&2
+    exit "$STATUS"
+fi
+
+echo "[esito] passato, ${ELAPSED}s" >> "$AUDIT_LOG"
+
+echo "--------------------------------------------------------------------------"
+echo "ESITO: passato (${ELAPSED}s)"
 
 INDEX=0
 for TEST in $TESTS; do

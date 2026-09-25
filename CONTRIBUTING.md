@@ -99,9 +99,23 @@ alphabetical order, and shows each result. It **stops at the first failure** and
 test's exit code. Rationale: the tests share the same site, so continuing on a dirty state would
 only produce follow-on errors.
 
+Before any test, the launcher runs **`src/Tests/Gate.php`**. It always runs first, even with a
+filter, and it is not counted among the tests. It wipes every WooCommerce entity from the test
+site, so each run starts from an empty catalogue:
+
+- products and variations, of any status, trash included
+- global attributes, with the terms of their `pa_*` taxonomies
+- every term of `product_cat`, `product_tag` and `product_brand`
+
+It deletes everything, not only what the tests create. The only survivor is the default product
+category, which WordPress does not allow to delete. The gate then reads every listing again and
+fails if anything else is left. **If the gate fails, no test runs.** You can also run it on its own
+with `php src/Tests/Gate.php`.
+
 Good to know:
 
-- The end-to-end tests create and delete their own data. **Never point them at a production site.**
+- The end-to-end tests create and delete their own data, and the gate empties the whole WooCommerce
+  catalogue. **Never point them at a production site.**
 - Every end-to-end test follows a create-delete flow: it builds its own fixture (post type, field
   groups, content), runs its checks and removes everything, even when an assertion fails. Cleanup
   also runs before the fixture, so an interrupted run does not block the next one. Cleanup always
