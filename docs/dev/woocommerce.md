@@ -1,48 +1,14 @@
-# WooCommerce
+# WooCommerce internals
 
-This document describes how the On Page® plugin integrates with WooCommerce through its internal REST API. It focuses on how a product's downloadable files (`downloads`) are handled and saved.
+This document explains how the plugin writes WooCommerce data: how a product is saved, and how its downloadable files (`downloads`) are stored and shown.
 
-## REST base
-
-All WooCommerce routes are registered under this namespace:
-
-```text
-/wp-json/onpage/v1
-```
-
-The routes are protected by the plugin's authentication middleware, like every other On Page® API.
-
-## Managed WooCommerce resources
-
-The plugin exposes dedicated endpoints for the main WooCommerce entities:
-
-| Endpoint | Resource |
-| --- | --- |
-| `GET\|POST\|DELETE /woocommerce/products` | Simple and variable products |
-| `GET\|POST\|DELETE /woocommerce/variant-products` | Product variations |
-| `GET\|POST\|DELETE /woocommerce/categories` | Product categories (`product_cat`) |
-| `GET\|POST\|DELETE /woocommerce/tags` | Product tags (`product_tag`) |
-| `GET\|POST\|DELETE /woocommerce/brands` | Product brands (`product_brand`) |
-| `GET\|POST\|DELETE /woocommerce/attributes` | Global WooCommerce attributes |
-| `GET\|POST\|DELETE /woocommerce/attributes/{attribute}/terms` | Terms of global attributes |
+It covers internals only. For the request and response contract of each endpoint, see the [WooCommerce section of API.md](../API.md#woocommerce). The list of endpoints is in the [endpoint index](../API.md#endpoint-index).
 
 Whenever WooCommerce provides an official method, the plugin uses the native WooCommerce CRUD classes (`WC_Product_Simple`, `WC_Product_Variable`, `WC_Product_Variation`, `WC_Product_Download`). It does not write directly to meta in those cases.
 
-**Pagination:** none of the WooCommerce `GET` endpoints above are paginated. Every call returns **all** items matching the given filters; there is no `per_page`/`page`. On very large catalogs (especially `products` and `variant-products`) the response can be heavy. See [pagination.md](pagination.md) for the full table of the plugin's GET endpoints (WooCommerce and others).
-
-## Categories and tags
-
-`POST /woocommerce/categories` and `POST /woocommerce/tags` use the term payload: `local_key`, `name`, `slug`, `description` and `acf_fields`.
-
-If `name` is a plain string while other fields are WPML language maps, the same name is reused unchanged on every translation created. If no per-language `slug` is given, each translation gets a distinct technical slug, while the visible name stays shared.
-
-An existing term with the same name under the same parent but a different `local_key` is left untouched. This avoids overwriting a category that comes from another source. In WordPress, two sibling terms cannot share a name unless one has an explicit, free slug. So the plugin creates a separate term with a technical slug (`<slug-base>-<language>`, plus a numeric suffix if already taken).
-
-Ending up with two terms of the same name is the typical symptom of `local_key` values that are out of sync between source and destination. To fix it, call `DELETE /indexes` and then re-import top-down (see [API.md](../API.md)).
-
 ## Product save flow
 
-`POST /woocommerce/products` accepts a JSON list of products. Each item is normalized, then created or updated.
+`POST /woocommerce/products` accepts a JSON list of products. Each item is normalized, then created or updated. The payload fields are documented in [`POST /woocommerce/products`](../API.md#post-woocommerceproducts).
 
 The target product is resolved as follows:
 
@@ -50,23 +16,7 @@ The target product is resolved as follows:
 2. Otherwise, if a product with the same `local_key` already exists, that product is updated.
 3. Otherwise, a new WooCommerce product is created.
 
-`local_key` is the external identifier used by On Page®. It can be a **positive integer or a non-empty string**; integers and numeric strings are equivalent. For products it is stored in the `onpage_local_key` post meta. It must be unique across products, except for products in the same WPML translation group.
-
-### Product payload fields
-
-| Field | Description |
-| --- | --- |
-| `local_key` | Required. Integer or non-empty string. |
-| `name` | Required. A string or a WPML language map. If it is a string, it is reused unchanged on every translation created from other multilingual fields. |
-| `status` | Optional. Defaults to `publish`. |
-| `long_description`, `short_description` | WooCommerce long and short description. |
-| `props` | Native WooCommerce fields, e.g. prices, stock, SKU, weight, dimensions, visibility, `product_type`. |
-| `image` | Sets or removes the main image. Accepts a remote URL (imported into the Media Library), the `attachment_id` (integer) of a file already in the Media Library (e.g. uploaded earlier with `POST /media`), or `null` to remove it. |
-| `gallery` | Replaces the product gallery. A list of remote URLs and/or `attachment_id`s, or a WPML language map of lists. Gallery order follows array order. Duplicates are ignored; the first occurrence wins. An empty list or `null` clears the gallery. |
-| `attributes` | Replaces the product's custom attributes. |
-| `acf_fields` | Updates ACF fields. |
-| `brand`, `categories`, `tags` | Assign the product taxonomies. |
-| `downloads` | Native WooCommerce downloadable files. |
+For products, `local_key` is stored in the `onpage_local_key` post meta. It must be unique across products, except for products in the same WPML translation group.
 
 ### Save steps
 
@@ -88,44 +38,7 @@ When saving, the service:
 - values sent in `downloads` go into WooCommerce's download structure;
 - files in `acf_fields` are saved in their respective ACF fields.
 
-Example:
-
-```json
-[
-  {
-    "local_key": 1001,
-    "name": "Sedia rossa",
-    "props": {
-      "product_type": "simple",
-      "regular_price": "49.90"
-    },
-    "downloads": [
-      {
-        "id": "scheda_tecnica",
-        "name": "Scheda tecnica",
-        "url": "https://cdn.example.com/prod-001/scheda-tecnica.pdf"
-      },
-      {
-        "id": "scheda_sicurezza",
-        "name": "Scheda di sicurezza",
-        "file": "https://cdn.example.com/prod-001/scheda-sicurezza.pdf",
-        "refresh": true
-      }
-    ]
-  }
-]
-```
-
-Each `downloads` item accepts:
-
-| Field | Description |
-| --- | --- |
-| `file` or `url` | URL of the downloadable file, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`). `url` is an accepted alias and is normalized internally to `file`. The value can be `null` or an empty string to skip this download for the resolved language. |
-| `name` | Name shown by WooCommerce and on the frontend. If omitted, the file name taken from the URL is used. |
-| `id` | Stable download identifier. If omitted, a WordPress UUID is generated. |
-| `refresh` | Optional boolean. If `true`, forces a refresh of the file imported into the Media Library when the remote URL is unchanged but its content has changed. |
-
-`file`, `url` and `name` can also be WPML language maps. Each product translation then gets the value resolved for its own language, with fallback where the multilingual service provides one. `null` or empty values in `file`/`url` are ignored for that language.
+The accepted payload is documented in [`downloads`](../API.md#downloads-native-woocommerce-downloadable-files) in API.md.
 
 ## How downloads are saved
 
@@ -183,19 +96,7 @@ If the remote file is not already inside `wp-content/uploads`, the plugin import
 
 If the remote file has already been imported, the existing attachment is reused. If the remote content changes but the URL stays the same, use `refresh: true` to force replacement of the imported file where possible.
 
-### Using an existing `attachment_id`
-
-Image/file fields that accept a remote URL also accept the `attachment_id` of a file already in the Media Library, for example one uploaded earlier with `POST /media`. It must be a JSON integer, not a string.
-
-In this case the plugin downloads nothing. It only checks that the ID matches an existing attachment and assigns it directly. If the field has a parent post/product/variation, the attachment is also attached to that parent, consistent with URL import.
-
-This applies to:
-
-- `image` and `gallery` of `POST /woocommerce/products` and `POST /woocommerce/variant-products`;
-- `thumbnail` of `POST /woocommerce/brands` and `POST /woocommerce/categories` (`product_cat` taxonomy);
-- `downloads[].file`/`downloads[].url` of `POST /woocommerce/products`;
-- `files` of `POST /posts` and `POST /media/link`;
-- every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or `group`).
+The same rules apply when a field receives the `attachment_id` of a file already in the Media Library: nothing is downloaded. See [Media values](../API.md#media-values-url-or-attachment_id) in API.md for every field that accepts one.
 
 ## Removing downloads
 

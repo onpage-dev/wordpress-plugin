@@ -1,4 +1,4 @@
-# Developer Guide
+# Plugin internals
 
 This guide explains what each controller does. Its main focus is the business logic in `Post.php` and `Term.php`: how they decide when to create, update and link multilingual content.
 

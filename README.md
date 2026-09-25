@@ -40,15 +40,11 @@ It covers the REST contract, the order of calls, complete PHP examples and the e
 | [docs/dev/](docs/dev/) | plugin and integration developers: internals, design, technical analysis |
 | [docs/API.md](docs/API.md) | full REST API reference, endpoint by endpoint |
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the local environment, the tests and how to send a
+change. To report a security problem, follow [SECURITY.md](SECURITY.md).
+
 ## License
 
 [GPL-2.0-or-later](LICENSE), same as WordPress.
-
-## Local environment
-
-The project ships a Docker Compose environment with MySQL, WordPress and Adminer.
-
-| Service | URL |
-| --- | --- |
-| WordPress | http://localhost:8040 |
-| Adminer (database) | http://localhost:8041/?server=mysql&username=wp_user&db=wordpress |

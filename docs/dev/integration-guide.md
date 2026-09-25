@@ -14,8 +14,9 @@ get right.
 | how the plugin works inside, service by service | [internals.md](internals.md) |
 | the architectural decisions and their trade-offs | [architecture.md](architecture.md) |
 | how to install and configure the plugin as a site admin | [user/guide.md](../user/guide.md) |
-| WooCommerce specifics | [woocommerce.md](woocommerce.md) |
-| pagination details | [pagination.md](pagination.md) |
+| the list of every endpoint | [API.md: Endpoint index](../API.md#endpoint-index) |
+| how WooCommerce products and downloads are saved | [woocommerce.md](woocommerce.md) |
+| pagination details | [API.md: Pagination](../API.md#pagination) |
 
 ---
 
@@ -265,15 +266,10 @@ JSON. A bare `500 There has been a critical error` is a bug, not a contract viol
 ### Pagination
 
 Only two routes paginate: `GET /posts` and `GET /media`. Every other route returns the complete
-set.
+set. Read the `X-WP-TotalPages` header to know when to stop. On `GET /posts`, the `?id=` and
+`?title=` lookups return no pagination headers at all.
 
-- `per_page` defaults to **100** and is capped at **100**.
-- `page` defaults to 1.
-- Invalid values, `0` and negatives fall back to the defaults.
-- Responses carry `X-WP-Total` and `X-WP-TotalPages`.
-- On `GET /posts` these headers are **conditional**. The `?id=` and `?title=` branches are lookups,
-  not listings, and return no headers. A missing `X-WP-Total` there means "you are on a lookup
-  branch", not "the list is empty".
+The full rules are in [API.md: Pagination](../API.md#pagination).
 
 ### Send large batches
 
@@ -404,34 +400,9 @@ Two constraints cause most problems:
 
 ## 7. Route map
 
-There are 43 routes, all authenticated. `P` marks the two routes that paginate. `I` marks the
-DELETEs that honour `?ignore`.
-
-| Route | Methods | Query params | Purpose |
-| --- | --- | --- | --- |
-| `/field-groups` | GET POST DELETE `I` | `ignore` | ACF field groups |
-| `/post-types` | GET POST DELETE `I` | `ignore` | Custom Post Types |
-| `/posts` | GET `P` POST DELETE `I` | `id` `type` `title` `local_key` `status` `updated_after` `page` `per_page` `keyfield` `ignore` | content, ACF values, term assignment |
-| `/posts/{id}` | GET | `keyfield` `type` | single post by id or `local_key` |
-| `/taxonomies` | GET POST DELETE `I` | `ignore` | taxonomies |
-| `/terms` | GET POST DELETE | `taxonomy` `name` `parent_id` `parent_lk` | terms of any taxonomy, with `taxonomy` set per element |
-| `/media` | GET `P` POST DELETE `I` | `page` `per_page` `post_id` `mime_type` `attachment_id` `attachment_ids` `ignore` | Media Library, multipart upload |
-| `/media/link` | POST | — | write ACF file/image fields: import a remote URL, attach an existing `attachment_id` (int), or clear the field (`null`) |
-| `/migration` | POST | — | one-off upgrade of a legacy installation; not used by a new integration |
-| `/indexes` | DELETE | — | wipe every `local_key` |
-| `/woocommerce/attributes` | GET POST DELETE `I` | `id` `slug` `local_key` `name` `ignore` | global `pa_*` attributes |
-| `/woocommerce/attributes/{attribute}/terms` | GET POST DELETE `I` | `id` `local_key` `slug` `name` `parent_id` `parent_lk` `ignore` | attribute options |
-| `/woocommerce/brands` | GET POST DELETE `I` | `id` `local_key` `slug` `name` `parent_id` `parent_lk` `ignore` | `product_brand`, hierarchical |
-| `/woocommerce/categories` | GET POST DELETE `I` | same as brands | `product_cat` |
-| `/woocommerce/tags` | GET POST DELETE `I` | same as brands | `product_tag` |
-| `/woocommerce/products` | GET POST DELETE `I` | `id` `local_key` `name` `ignore` | simple and variable products |
-| `/woocommerce/variant-products` | GET POST DELETE `I` | `id` `local_key` `parent_id` `parent` `ignore` | variations |
-
-Path parameters:
-
-- `{id}` and `{attribute}` each match a single path segment (no `/`).
-- `{attribute}` accepts an attribute id, or a slug with or without the `pa_` prefix. `color` and
-  `pa_color` both work.
+There are 43 routes, all authenticated. The [endpoint index](../API.md#endpoint-index) in API.md
+lists them all. It also marks the two routes that paginate and the DELETEs that honour `?ignore`.
+Each row links to the full specification, query parameters included.
 
 ---
 

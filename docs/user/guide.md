@@ -1,4 +1,4 @@
-# User Guide
+# User guide
 
 This guide is for WordPress site administrators. It explains what the **On Page®** plugin does, what it needs, and how to set it up.
 
@@ -43,7 +43,7 @@ A practical example:
 
 Important notes:
 
-- **ACF is always required.** The plugin checks ACF on every API call, so it must be active even if you don't need any custom fields. Without ACF, the plugin's API responds with a critical error (`500`). This applies to WooCommerce-only syncs too, and even if products need no custom fields.
+- **ACF is always required**, even if you don't need any custom fields. Without ACF, the plugin turns its API off and shows a red notice in the WordPress admin. This applies to WooCommerce-only syncs too, and even if products need no custom fields.
 - **ACF PRO** is only needed for advanced field types (repeater, flexible content, gallery).
 - **WPML** is only needed for multilingual syncs. It is a **paid plugin**.
 - Without WPML, the multilingual features are not available.
@@ -166,3 +166,5 @@ The **On Page®** plugin connects On Page® to WordPress. It lets you:
 - support complex and multilingual data structures, if WPML is configured
 
 It is built for WordPress sites that need to publish structured data coming from an external system.
+
+Something not working? See [troubleshooting.md](troubleshooting.md).

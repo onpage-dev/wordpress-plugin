@@ -1,4 +1,4 @@
-# On Page® Plugin Architecture
+# Architecture
 
 This document describes the plugin's **software architecture** and explains the reasoning behind the
 main decisions. It covers **how the code is organized and why**.
@@ -6,7 +6,7 @@ main decisions. It covers **how the code is organized and why**.
 It is not:
 
 - a usage guide — see [user/guide.md](../user/guide.md) and [API.md](../API.md);
-- a performance analysis — see [woocommerce-performance.md](woocommerce-performance.md).
+- a performance analysis — see [notes/woocommerce-performance-2026-09.md](notes/woocommerce-performance-2026-09.md).
 
 ---
 
@@ -242,7 +242,7 @@ They then resolve the final value for each language through a fallback chain.
 The WPML helpers ([helpers.php:75-155](../../src/helpers.php#L75-L155)) are **memoized per request**.
 `isWpmlActive`, `getWpmlDefaultLanguage` and `getWpmlLanguages` are called dozens of times per item,
 and the set of languages does not change during an import. This is the cheapest, highest-impact
-memoization in the plugin (see the WPML memoization notes in [woocommerce-performance.md](woocommerce-performance.md)).
+memoization in the plugin (see the WPML memoization notes in [the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.md)).
 
 ### 4.7 WooCommerce as a specialization of WordPress primitives
 
@@ -287,7 +287,7 @@ service:
   Services.
 
 Downloads are currently synchronous and are the main known bottleneck (see the media download notes
-in [woocommerce-performance.md](woocommerce-performance.md)).
+in [the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.md)).
 
 ### 4.10 Repositories for critical lookups
 
@@ -370,7 +370,7 @@ Deliberate choices and their rationale:
   the Repositories for critical lookups (section 4.10).
 - **Imperative validation, not a declarative schema.** Validation is spread across the Services as
   chains of checks. It is repetitive and walks the payload several times (see the validation notes in
-  [woocommerce-performance.md](woocommerce-performance.md)). A normalized, single-pass DTO is the most natural refactor if validation cost
+  [the WooCommerce performance analysis](notes/woocommerce-performance-2026-09.md)). A normalized, single-pass DTO is the most natural refactor if validation cost
   ever becomes dominant.
 
 ---

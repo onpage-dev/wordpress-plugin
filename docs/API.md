@@ -1,4 +1,4 @@
-# On Page® plugin REST API
+# REST API reference
 
 This document describes the REST API exposed by the plugin. It is based on `routes.php` and on the logic actually implemented in the controllers.
 
@@ -30,51 +30,58 @@ Base REST namespace:
 
 Every endpoint at a glance. Paths are relative to the base namespace `/wp-json/onpage/v1`. Click an endpoint to open its full specification.
 
-| Area | Method | Endpoint | Description |
-| --- | --- | --- | --- |
-| Field Groups | `GET` | [`/field-groups`](#get-field-groups) | List all ACF field groups |
-| Field Groups | `POST` | [`/field-groups`](#post-field-groups) | Create or update ACF field groups |
-| Field Groups | `DELETE` | [`/field-groups`](#delete-field-groups) | Delete field groups by ID or title |
-| Post Types | `GET` | [`/post-types`](#get-post-types) | List all ACF post types |
-| Post Types | `POST` | [`/post-types`](#post-post-types) | Create or update ACF post types |
-| Post Types | `DELETE` | [`/post-types`](#delete-post-types) | Delete post types by ID or key |
-| Posts | `GET` | [`/posts`](#get-posts) | List posts, with filters and exact-title search |
-| Posts | `GET` | [`/posts/{id}`](#get-postsid) | Get a single post |
-| Posts | `POST` | [`/posts`](#post-posts) | Create or update posts in batch |
-| Posts | `DELETE` | [`/posts`](#delete-posts) | Delete posts by ID, `local_key` or post type |
-| WooCommerce | `GET` | [`/woocommerce/brands`](#get-woocommercebrands) | List WooCommerce brands |
-| WooCommerce | `POST` | [`/woocommerce/brands`](#post-woocommercebrands) | Create or update brands |
-| WooCommerce | `DELETE` | [`/woocommerce/brands`](#delete-woocommercebrands) | Delete brands by `local_key` |
-| WooCommerce | `GET` | [`/woocommerce/attributes`](#get-woocommerceattributes) | List global product attributes |
-| WooCommerce | `POST` | [`/woocommerce/attributes`](#post-woocommerceattributes) | Create or update global product attributes |
-| WooCommerce | `DELETE` | [`/woocommerce/attributes`](#delete-woocommerceattributes) | Delete global product attributes by `local_key` |
-| WooCommerce | `GET` | [`/woocommerce/attributes/{attribute}/terms`](#get-woocommerceattributesattributeterms) | List the terms of an attribute |
-| WooCommerce | `POST` | [`/woocommerce/attributes/{attribute}/terms`](#post-woocommerceattributesattributeterms) | Create or update the terms of an attribute |
-| WooCommerce | `DELETE` | [`/woocommerce/attributes/{attribute}/terms`](#delete-woocommerceattributesattributeterms) | Delete attribute terms by `local_key` |
-| WooCommerce | `GET` | [`/woocommerce/categories`](#get-woocommercecategories) | List product categories |
-| WooCommerce | `POST` | [`/woocommerce/categories`](#post-woocommercecategories) | Create or update product categories |
-| WooCommerce | `DELETE` | [`/woocommerce/categories`](#delete-woocommercecategories) | Delete product categories by `local_key` |
-| WooCommerce | `GET` | [`/woocommerce/tags`](#get-woocommercetags) | List product tags |
-| WooCommerce | `POST` | [`/woocommerce/tags`](#post-woocommercetags) | Create or update product tags |
-| WooCommerce | `DELETE` | [`/woocommerce/tags`](#delete-woocommercetags) | Delete product tags by `local_key` |
-| WooCommerce | `GET` | [`/woocommerce/products`](#get-woocommerceproducts) | List WooCommerce products |
-| WooCommerce | `POST` | [`/woocommerce/products`](#post-woocommerceproducts) | Create or update products |
-| WooCommerce | `DELETE` | [`/woocommerce/products`](#delete-woocommerceproducts) | Delete products by `local_key` |
-| WooCommerce | `GET` | [`/woocommerce/variant-products`](#get-woocommercevariant-products) | List product variations |
-| WooCommerce | `POST` | [`/woocommerce/variant-products`](#post-woocommercevariant-products) | Create or update variations of a variable product |
-| WooCommerce | `DELETE` | [`/woocommerce/variant-products`](#delete-woocommercevariant-products) | Delete variations by `local_key` |
-| Media | `GET` | [`/media`](#get-media) | List Media Library attachments |
-| Media | `POST` | [`/media`](#post-media) | Upload files (`multipart/form-data`) |
-| Media | `POST` | [`/media/link`](#post-medialink) | Import files by URL and link them to a post's ACF field |
-| Media | `DELETE` | [`/media`](#delete-media) | Delete attachments by ID |
-| Taxonomies | `GET` | [`/taxonomies`](#get-taxonomies) | List all ACF taxonomies |
-| Taxonomies | `POST` | [`/taxonomies`](#post-taxonomies) | Create or update ACF taxonomies |
-| Taxonomies | `DELETE` | [`/taxonomies`](#delete-taxonomies) | Delete taxonomies by ID or slug |
-| Terms | `GET` | [`/terms`](#get-terms) | List or search terms of a taxonomy |
-| Terms | `POST` | [`/terms`](#post-terms) | Create or update terms in batch |
-| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID |
-| Maintenance | `DELETE` | [`/indexes`](#delete-indexes) | Remove all `local_key` associations |
-| Maintenance | `POST` | [`/migration`](#post-migration) | Run the plugin's data migrations |
+In the **Notes** column, *Paginated* marks the only two endpoints that paginate. `?ignore` marks the `DELETE` endpoints that accept the [`?ignore` flag](#general-conventions).
+
+| Area | Method | Endpoint | Description | Notes |
+| --- | --- | --- | --- | --- |
+| Field Groups | `GET` | [`/field-groups`](#get-field-groups) | List all ACF field groups | |
+| Field Groups | `POST` | [`/field-groups`](#post-field-groups) | Create or update ACF field groups | |
+| Field Groups | `DELETE` | [`/field-groups`](#delete-field-groups) | Delete field groups by ID or title | `?ignore` |
+| Post Types | `GET` | [`/post-types`](#get-post-types) | List all ACF post types | |
+| Post Types | `POST` | [`/post-types`](#post-post-types) | Create or update ACF post types | |
+| Post Types | `DELETE` | [`/post-types`](#delete-post-types) | Delete post types by ID or key | `?ignore` |
+| Posts | `GET` | [`/posts`](#get-posts) | List posts, with filters and exact-title search | [Paginated](#pagination) |
+| Posts | `GET` | [`/posts/{id}`](#get-postsid) | Get a single post | |
+| Posts | `POST` | [`/posts`](#post-posts) | Create or update posts in batch | |
+| Posts | `DELETE` | [`/posts`](#delete-posts) | Delete posts by ID, `local_key` or post type | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/brands`](#get-woocommercebrands) | List WooCommerce brands | |
+| WooCommerce | `POST` | [`/woocommerce/brands`](#post-woocommercebrands) | Create or update brands | |
+| WooCommerce | `DELETE` | [`/woocommerce/brands`](#delete-woocommercebrands) | Delete brands by `local_key` | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/attributes`](#get-woocommerceattributes) | List global product attributes | |
+| WooCommerce | `POST` | [`/woocommerce/attributes`](#post-woocommerceattributes) | Create or update global product attributes | |
+| WooCommerce | `DELETE` | [`/woocommerce/attributes`](#delete-woocommerceattributes) | Delete global product attributes by `local_key` | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/attributes/{attribute}/terms`](#get-woocommerceattributesattributeterms) | List the terms of an attribute | |
+| WooCommerce | `POST` | [`/woocommerce/attributes/{attribute}/terms`](#post-woocommerceattributesattributeterms) | Create or update the terms of an attribute | |
+| WooCommerce | `DELETE` | [`/woocommerce/attributes/{attribute}/terms`](#delete-woocommerceattributesattributeterms) | Delete attribute terms by `local_key` | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/categories`](#get-woocommercecategories) | List product categories | |
+| WooCommerce | `POST` | [`/woocommerce/categories`](#post-woocommercecategories) | Create or update product categories | |
+| WooCommerce | `DELETE` | [`/woocommerce/categories`](#delete-woocommercecategories) | Delete product categories by `local_key` | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/tags`](#get-woocommercetags) | List product tags | |
+| WooCommerce | `POST` | [`/woocommerce/tags`](#post-woocommercetags) | Create or update product tags | |
+| WooCommerce | `DELETE` | [`/woocommerce/tags`](#delete-woocommercetags) | Delete product tags by `local_key` | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/products`](#get-woocommerceproducts) | List WooCommerce products | |
+| WooCommerce | `POST` | [`/woocommerce/products`](#post-woocommerceproducts) | Create or update products | |
+| WooCommerce | `DELETE` | [`/woocommerce/products`](#delete-woocommerceproducts) | Delete products by `local_key` | `?ignore` |
+| WooCommerce | `GET` | [`/woocommerce/variant-products`](#get-woocommercevariant-products) | List product variations | |
+| WooCommerce | `POST` | [`/woocommerce/variant-products`](#post-woocommercevariant-products) | Create or update variations of a variable product | |
+| WooCommerce | `DELETE` | [`/woocommerce/variant-products`](#delete-woocommercevariant-products) | Delete variations by `local_key` | `?ignore` |
+| Media | `GET` | [`/media`](#get-media) | List Media Library attachments | [Paginated](#pagination) |
+| Media | `POST` | [`/media`](#post-media) | Upload files (`multipart/form-data`) | |
+| Media | `POST` | [`/media/link`](#post-medialink) | Import files by URL and link them to a post's ACF field | |
+| Media | `DELETE` | [`/media`](#delete-media) | Delete attachments by ID | `?ignore` |
+| Taxonomies | `GET` | [`/taxonomies`](#get-taxonomies) | List all ACF taxonomies | |
+| Taxonomies | `POST` | [`/taxonomies`](#post-taxonomies) | Create or update ACF taxonomies | |
+| Taxonomies | `DELETE` | [`/taxonomies`](#delete-taxonomies) | Delete taxonomies by ID or slug | `?ignore` |
+| Terms | `GET` | [`/terms`](#get-terms) | List or search terms of a taxonomy | |
+| Terms | `POST` | [`/terms`](#post-terms) | Create or update terms in batch | |
+| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID | |
+| Maintenance | `DELETE` | [`/indexes`](#delete-indexes) | Remove all `local_key` associations | |
+| Maintenance | `POST` | [`/migration`](#post-migration) | Run the plugin's data migrations | |
+
+Path parameters:
+
+- `{id}` and `{attribute}` each match a single path segment (no `/`).
+- `{attribute}` accepts an attribute ID, or a slug with or without the `pa_` prefix. `color` and `pa_color` both work.
 
 ## Authentication
 
@@ -99,7 +106,7 @@ The token is generated from the **On Page®** page in the WordPress admin. Only 
 - **Batch writes.** Almost every write endpoint works in batch: the expected JSON body is an array.
 - **Exception: `POST /media`.** It uses `multipart/form-data` and accepts one or more files in the same request.
 - **Fail fast.** If one element of a batch fails, the request stops immediately and returns a `WP_Error`.
-- **`?ignore=1` on DELETE.** The `DELETE` endpoints of `field-groups`, `post-types`, `posts`, `taxonomies`, the WooCommerce resources and `media` accept the query string `?ignore=1` to skip elements that are not found. The flag is enabled by the mere presence of the `ignore` parameter, whatever its value. `DELETE /terms` does not support it.
+- **`?ignore=1` on DELETE.** The `DELETE` endpoints of `field-groups`, `post-types`, `posts`, `taxonomies`, the WooCommerce resources and `media` accept the query string `?ignore=1` to skip elements that are not found. The flag is enabled by the mere presence of the `ignore` parameter, whatever its value. `DELETE /terms` and `DELETE /indexes` do not support it.
 - **Taxonomy identifier.** The term endpoints identify the taxonomy with the `taxonomy` parameter (query string on `GET`/`DELETE /terms`, body field on `POST /terms`). It accepts either the **taxonomy slug** (e.g. `product_cat`, `brand`, `pa_color`) or the **numeric ACF ID** of the taxonomy. The slug takes precedence and is recommended: it is stable across environments (the ACF ID depends on creation order) and it also covers non-ACF taxonomies (WooCommerce `product_cat`/`product_tag`/`pa_*`). The numeric ID is still supported for backward compatibility.
 - **Multilingual values.** When WPML is active, some fields can be sent as a language map `{ "<lang>": <value> }`.
 - **Exact post types.** `/posts` and `/post-types` use the exact post type sent in the payload. No prefix is added.
@@ -131,6 +138,88 @@ An existing term with the same name under the same parent but with a different `
 WordPress does not allow two sibling terms with the same name unless the caller provides a free explicit slug. In that case the upsert therefore creates a **separate term** with the requested name and a technical slug (`<slug-base>-<language>`, with a numeric suffix if already taken). The upsert fails with `500 request_failed` and message `term_exists` only if no technical slug is available.
 
 The destination then holds two terms with the same name and different `local_key`s. This is the typical symptom of `local_key`s that are out of sync between source and destination (e.g. the source regenerated its keys). To fix it, call [`DELETE /indexes`](#delete-indexes) and then run a **top-down** re-import. The re-import re-adopts the existing terms and rewrites their `local_key` instead of duplicating them.
+
+### Media values: URL or `attachment_id`
+
+Every field that accepts a remote file URL also accepts the `attachment_id` of a file already in the Media Library, for example one uploaded earlier with `POST /media`. It must be a JSON integer, not a string.
+
+With an `attachment_id` the plugin downloads nothing. It only checks that the ID matches an existing attachment and assigns it directly. If the field has a parent post, product or variation, the attachment is also attached to that parent, as with a URL import.
+
+This applies to:
+
+- `image` and `gallery` of `POST /woocommerce/products` and `POST /woocommerce/variant-products`;
+- `thumbnail` of `POST /woocommerce/brands` and `POST /woocommerce/categories`;
+- `downloads[].file`/`downloads[].url` of `POST /woocommerce/products`;
+- `files` of `POST /posts` and `POST /media/link`;
+- every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or `group`).
+
+### Pagination
+
+Only two endpoints paginate: `GET /posts` and `GET /media`. Every other list endpoint returns all matching items in a single response.
+
+Paginated endpoints accept:
+
+- `?per_page=<n>` — page size. Default `100`, maximum `100`.
+- `?page=<n>` — page number. Default `1`.
+
+Invalid values, `0` and negatives fall back to the defaults.
+
+They return two response headers, following the same convention as the WordPress core REST API:
+
+- `X-WP-Total` — total number of items that match the filters, regardless of the page.
+- `X-WP-TotalPages` — total number of pages, calculated as `ceil(X-WP-Total / per_page)`.
+
+The client can tell from the current response whether it is on the last page (`page >= X-WP-TotalPages`). There is no need to request one extra page and wait for an empty array.
+
+Example walk-through (250 items, `per_page=100` → 3 pages):
+
+```text
+GET /media?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /media?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /media?page=3&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (page == X-WP-TotalPages → stop)
+```
+
+Client pseudocode:
+
+```text
+page = 1
+items = []
+loop:
+  response = GET /media?page={page}&per_page=100
+  items += response.body
+  if page >= response.headers['X-WP-TotalPages']:
+    break
+  page += 1
+```
+
+On `GET /posts` the headers are **conditional**. The `?id=` and `?title=` branches are lookups, not listings, and return no headers. A missing `X-WP-Total` there means "you are on a lookup branch", not "the list is empty".
+
+#### Endpoints
+
+| Endpoint | Paginated | `per_page`/`page` | `X-WP-Total`/`X-WP-TotalPages` | Notes |
+|---|---|---|---|---|
+| `GET /posts` | ✅ | ✅ | ✅ | Not paginated when using `?id=` or `?title=`: these always return every match, with no pagination headers. |
+| `GET /media` | ✅ | ✅ | ✅ | — |
+| `GET /terms` | ❌ | — | — | Always returns every term of the requested taxonomy. |
+| `GET /field-groups` | ❌ | — | — | Always returns every field group (`acf_get_field_groups()`). |
+| `GET /taxonomies` | ❌ | — | — | Always returns every ACF taxonomy (`acf_get_acf_taxonomies()`). |
+| `GET /post-types` | ❌ | — | — | Always returns every ACF post type (`acf_get_acf_post_types()`). |
+| `GET /woocommerce/brands` | ❌ | — | — | Always returns every brand. |
+| `GET /woocommerce/attributes` | ❌ | — | — | Always returns every attribute (`wc_get_attribute_taxonomies()`). |
+| `GET /woocommerce/attributes/{attribute}/terms` | ❌ | — | — | Always returns every term of the attribute. |
+| `GET /woocommerce/categories` | ❌ | — | — | Always returns every category. |
+| `GET /woocommerce/tags` | ❌ | — | — | Always returns every tag. |
+| `GET /woocommerce/products` | ❌ | — | — | `numberposts => -1`, explicitly unlimited. Without a query it returns **all** products. |
+| `GET /woocommerce/variant-products` | ❌ | — | — | `numberposts => -1`, explicitly unlimited. Without a query it returns **all** variations. |
+
+#### Why not every endpoint paginates
+
+It depends on how many items each endpoint is expected to return:
+
+- **Paginated:** `posts` and `media` (Media Library) can easily grow to thousands of items on a real site. Pagination avoids heavy queries and huge JSON responses.
+- **Not paginated:** terms, taxonomies, field groups and post types are usually small, bounded sets (tens, at most hundreds of items). Returning everything in one response was considered acceptable.
+
+**Notable exception:** WooCommerce products and variations can be as numerous as posts, but they are **not** paginated. A very large catalog can therefore produce heavy responses on `GET /woocommerce/products` and `GET /woocommerce/variant-products`.
 
 ## Handling `acf_fields`
 
@@ -227,10 +316,6 @@ Errors are returned as `WP_Error` using the standard WordPress REST shape:
 ```
 
 In this document, errors are written as `<status> <code>`, for example `400 invalid_param`.
-
-### Pagination at a glance
-
-Only two endpoints paginate: `GET /posts` and `GET /media`. They use `per_page`/`page` and return the `X-WP-Total`/`X-WP-TotalPages` headers. Every other list endpoint always returns all matching items in a single response. See [dev/pagination.md](dev/pagination.md) for more background.
 
 ## Field Groups
 
