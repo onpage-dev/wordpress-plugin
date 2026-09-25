@@ -10,6 +10,7 @@ Base REST namespace:
 
 ## Contents
 
+- [Endpoint index](#endpoint-index)
 - [Authentication](#authentication)
 - [General conventions](#general-conventions)
 - [Handling `acf_fields`](#handling-acf_fields)
@@ -24,6 +25,56 @@ Base REST namespace:
 - [Maintenance](#maintenance)
 - [cURL examples](#curl-examples)
 - [Implementation notes](#implementation-notes)
+
+## Endpoint index
+
+Every endpoint at a glance. Paths are relative to the base namespace `/wp-json/onpage/v1`. Click an endpoint to open its full specification.
+
+| Area | Method | Endpoint | Description |
+| --- | --- | --- | --- |
+| Field Groups | `GET` | [`/field-groups`](#get-field-groups) | List all ACF field groups |
+| Field Groups | `POST` | [`/field-groups`](#post-field-groups) | Create or update ACF field groups |
+| Field Groups | `DELETE` | [`/field-groups`](#delete-field-groups) | Delete field groups by ID or title |
+| Post Types | `GET` | [`/post-types`](#get-post-types) | List all ACF post types |
+| Post Types | `POST` | [`/post-types`](#post-post-types) | Create or update ACF post types |
+| Post Types | `DELETE` | [`/post-types`](#delete-post-types) | Delete post types by ID or key |
+| Posts | `GET` | [`/posts`](#get-posts) | List posts, with filters and exact-title search |
+| Posts | `GET` | [`/posts/{id}`](#get-postsid) | Get a single post |
+| Posts | `POST` | [`/posts`](#post-posts) | Create or update posts in batch |
+| Posts | `DELETE` | [`/posts`](#delete-posts) | Delete posts by ID, `local_key` or post type |
+| WooCommerce | `GET` | [`/woocommerce/brands`](#get-woocommercebrands) | List WooCommerce brands |
+| WooCommerce | `POST` | [`/woocommerce/brands`](#post-woocommercebrands) | Create or update brands |
+| WooCommerce | `DELETE` | [`/woocommerce/brands`](#delete-woocommercebrands) | Delete brands by `local_key` |
+| WooCommerce | `GET` | [`/woocommerce/attributes`](#get-woocommerceattributes) | List global product attributes |
+| WooCommerce | `POST` | [`/woocommerce/attributes`](#post-woocommerceattributes) | Create or update global product attributes |
+| WooCommerce | `DELETE` | [`/woocommerce/attributes`](#delete-woocommerceattributes) | Delete global product attributes by `local_key` |
+| WooCommerce | `GET` | [`/woocommerce/attributes/{attribute}/terms`](#get-woocommerceattributesattributeterms) | List the terms of an attribute |
+| WooCommerce | `POST` | [`/woocommerce/attributes/{attribute}/terms`](#post-woocommerceattributesattributeterms) | Create or update the terms of an attribute |
+| WooCommerce | `DELETE` | [`/woocommerce/attributes/{attribute}/terms`](#delete-woocommerceattributesattributeterms) | Delete attribute terms by `local_key` |
+| WooCommerce | `GET` | [`/woocommerce/categories`](#get-woocommercecategories) | List product categories |
+| WooCommerce | `POST` | [`/woocommerce/categories`](#post-woocommercecategories) | Create or update product categories |
+| WooCommerce | `DELETE` | [`/woocommerce/categories`](#delete-woocommercecategories) | Delete product categories by `local_key` |
+| WooCommerce | `GET` | [`/woocommerce/tags`](#get-woocommercetags) | List product tags |
+| WooCommerce | `POST` | [`/woocommerce/tags`](#post-woocommercetags) | Create or update product tags |
+| WooCommerce | `DELETE` | [`/woocommerce/tags`](#delete-woocommercetags) | Delete product tags by `local_key` |
+| WooCommerce | `GET` | [`/woocommerce/products`](#get-woocommerceproducts) | List WooCommerce products |
+| WooCommerce | `POST` | [`/woocommerce/products`](#post-woocommerceproducts) | Create or update products |
+| WooCommerce | `DELETE` | [`/woocommerce/products`](#delete-woocommerceproducts) | Delete products by `local_key` |
+| WooCommerce | `GET` | [`/woocommerce/variant-products`](#get-woocommercevariant-products) | List product variations |
+| WooCommerce | `POST` | [`/woocommerce/variant-products`](#post-woocommercevariant-products) | Create or update variations of a variable product |
+| WooCommerce | `DELETE` | [`/woocommerce/variant-products`](#delete-woocommercevariant-products) | Delete variations by `local_key` |
+| Media | `GET` | [`/media`](#get-media) | List Media Library attachments |
+| Media | `POST` | [`/media`](#post-media) | Upload files (`multipart/form-data`) |
+| Media | `POST` | [`/media/link`](#post-medialink) | Import files by URL and link them to a post's ACF field |
+| Media | `DELETE` | [`/media`](#delete-media) | Delete attachments by ID |
+| Taxonomies | `GET` | [`/taxonomies`](#get-taxonomies) | List all ACF taxonomies |
+| Taxonomies | `POST` | [`/taxonomies`](#post-taxonomies) | Create or update ACF taxonomies |
+| Taxonomies | `DELETE` | [`/taxonomies`](#delete-taxonomies) | Delete taxonomies by ID or slug |
+| Terms | `GET` | [`/terms`](#get-terms) | List or search terms of a taxonomy |
+| Terms | `POST` | [`/terms`](#post-terms) | Create or update terms in batch |
+| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID |
+| Maintenance | `DELETE` | [`/indexes`](#delete-indexes) | Remove all `local_key` associations |
+| Maintenance | `POST` | [`/migration`](#post-migration) | Run the plugin's data migrations |
 
 ## Authentication
 
@@ -179,7 +230,7 @@ In this document, errors are written as `<status> <code>`, for example `400 inva
 
 ### Pagination at a glance
 
-Only two endpoints paginate: `GET /posts` and `GET /media`. They use `per_page`/`page` and return the `X-WP-Total`/`X-WP-TotalPages` headers. Every other list endpoint always returns all matching items in a single response. See [PAGINATION.md](PAGINATION.md) for more background.
+Only two endpoints paginate: `GET /posts` and `GET /media`. They use `per_page`/`page` and return the `X-WP-Total`/`X-WP-TotalPages` headers. Every other list endpoint always returns all matching items in a single response. See [dev/pagination.md](dev/pagination.md) for more background.
 
 ## Field Groups
 
@@ -715,7 +766,7 @@ Notes:
 
 ## WooCommerce
 
-For WooCommerce-specific background see [WooCommerce.md](WooCommerce.md).
+For WooCommerce-specific background see [dev/woocommerce.md](dev/woocommerce.md).
 
 ### Shared behaviour of term list endpoints
 

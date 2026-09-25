@@ -1,6 +1,6 @@
 # Pagination of GET endpoints
 
-A quick reference showing which `GET` endpoints of the On Page® plugin paginate their results and which always return the full list. For details on each endpoint, see [API.md](API.md).
+A quick reference showing which `GET` endpoints of the On Page® plugin paginate their results and which always return the full list. For details on each endpoint, see [API.md](../API.md).
 
 ## How pagination works
 

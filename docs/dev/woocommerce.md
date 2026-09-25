@@ -28,7 +28,7 @@ The plugin exposes dedicated endpoints for the main WooCommerce entities:
 
 Whenever WooCommerce provides an official method, the plugin uses the native WooCommerce CRUD classes (`WC_Product_Simple`, `WC_Product_Variable`, `WC_Product_Variation`, `WC_Product_Download`). It does not write directly to meta in those cases.
 
-**Pagination:** none of the WooCommerce `GET` endpoints above are paginated. Every call returns **all** items matching the given filters; there is no `per_page`/`page`. On very large catalogs (especially `products` and `variant-products`) the response can be heavy. See [PAGINATION.md](PAGINATION.md) for the full table of the plugin's GET endpoints (WooCommerce and others).
+**Pagination:** none of the WooCommerce `GET` endpoints above are paginated. Every call returns **all** items matching the given filters; there is no `per_page`/`page`. On very large catalogs (especially `products` and `variant-products`) the response can be heavy. See [pagination.md](pagination.md) for the full table of the plugin's GET endpoints (WooCommerce and others).
 
 ## Categories and tags
 
@@ -38,7 +38,7 @@ If `name` is a plain string while other fields are WPML language maps, the same 
 
 An existing term with the same name under the same parent but a different `local_key` is left untouched. This avoids overwriting a category that comes from another source. In WordPress, two sibling terms cannot share a name unless one has an explicit, free slug. So the plugin creates a separate term with a technical slug (`<slug-base>-<language>`, plus a numeric suffix if already taken).
 
-Ending up with two terms of the same name is the typical symptom of `local_key` values that are out of sync between source and destination. To fix it, call `DELETE /indexes` and then re-import top-down (see [API.md](API.md)).
+Ending up with two terms of the same name is the typical symptom of `local_key` values that are out of sync between source and destination. To fix it, call `DELETE /indexes` and then re-import top-down (see [API.md](../API.md)).
 
 ## Product save flow
 

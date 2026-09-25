@@ -10,12 +10,12 @@ get right.
 | You want | Read |
 | --- | --- |
 | how to write an integration, with working examples | this file |
-| the full payload reference, endpoint by endpoint | [API.md](API.md) |
-| how the plugin works inside, service by service | [DEV.md](DEV.md) |
-| the architectural decisions and their trade-offs | [design.md](design.md) |
-| how to install and configure the plugin as a site admin | [USER.md](USER.md) |
-| WooCommerce specifics | [WooCommerce.md](WooCommerce.md) |
-| pagination details | [PAGINATION.md](PAGINATION.md) |
+| the full payload reference, endpoint by endpoint | [API.md](../API.md) |
+| how the plugin works inside, service by service | [internals.md](internals.md) |
+| the architectural decisions and their trade-offs | [architecture.md](architecture.md) |
+| how to install and configure the plugin as a site admin | [user/guide.md](../user/guide.md) |
+| WooCommerce specifics | [woocommerce.md](woocommerce.md) |
+| pagination details | [pagination.md](pagination.md) |
 
 ---
 
@@ -989,7 +989,7 @@ WooCommerce's own error code and HTTP status (500 when WooCommerce sets none). T
   means top level everywhere. Prefer that.
 - **Deletions do not propagate.** An item removed from On Page® stays published until the
   integration calls the matching `DELETE`.
-- **The plugin has no dry-run.** Test against the Docker environment in [README](../README.md)
+- **The plugin has no dry-run.** Test against the Docker environment in [README](../../README.md)
   before pointing an integration at a live site.
 
 ---

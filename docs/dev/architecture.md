@@ -5,8 +5,8 @@ main decisions. It covers **how the code is organized and why**.
 
 It is not:
 
-- a usage guide — see [USER.md](USER.md) and [API.md](API.md);
-- a performance analysis — see [Tech.md](Tech.md).
+- a usage guide — see [user/guide.md](../user/guide.md) and [API.md](../API.md);
+- a performance analysis — see [woocommerce-performance.md](woocommerce-performance.md).
 
 ---
 
@@ -33,7 +33,7 @@ The architecture responds to a set of non-negotiable constraints:
 - **Shared WordPress/PHP runtime.** The code runs inside the WordPress lifecycle. There is no
   dedicated process, no framework, no build step, no DI container and no ORM.
 - **No external dependencies.** There is no `composer.json`. Classes are included manually in
-  [onpage.php](../onpage.php). A small dependency surface avoids version conflicts with other plugins
+  [onpage.php](../../onpage.php). A small dependency surface avoids version conflicts with other plugins
   in the same runtime.
 - **Three "opaque", mismatched integrations.** ACF, WooCommerce and WPML use different data models
   (postmeta vs. CRUD objects vs. `icl_translations`). They must be orchestrated, not just called.
@@ -88,7 +88,7 @@ and concentrates complexity in a single layer (Service).
 ### 4.1 Custom router on top of the WordPress REST API
 
 Routes are not scattered across dozens of `register_rest_route()` calls. They are all declared in one
-file, [routes.php](../routes.php), through a small fluent [Router](../src/Router.php):
+file, [routes.php](../../routes.php), through a small fluent [Router](../../src/Router.php):
 
 ```php
 $router->bind('POST', '/woocommerce/products', [ProductController::class, 'save'], AuthMiddleware::class);
@@ -99,14 +99,14 @@ $router->bind('POST', '/woocommerce/products', [ProductController::class, 'save'
 - **One routing table.** It reads at a glance as an index of the whole API. It is the living
   documentation of the contract.
 - **Middleware is an explicit parameter.** The router maps the middleware onto the WordPress
-  `permission_callback` ([Router.php:108](../src/Router.php#L108)). Auth is declared on the route, so
+  `permission_callback` ([Router.php:108](../../src/Router.php#L108)). Auth is declared on the route, so
   it cannot be forgotten.
 - **Centralized dispatch and error handling.** `Router::dispatch()`
-  ([Router.php:41-72](../src/Router.php#L41-L72)) is the **only** place that catches `HttpException`
+  ([Router.php:41-72](../../src/Router.php#L41-L72)) is the **only** place that catches `HttpException`
   and converts it to `WP_Error`. Services throw domain exceptions without knowing about HTTP. The
   translation into a response happens in one place.
 - **`{param}` placeholders.** They are converted into named capture groups
-  ([Router.php:30-33](../src/Router.php#L30-L33)). This gives a familiar routing syntax without the
+  ([Router.php:30-33](../../src/Router.php#L30-L33)). This gives a familiar routing syntax without the
   verbosity of native WordPress.
 
 The router is deliberately minimal: no unused features (route groups, multiple middleware, etc.). The
@@ -121,7 +121,7 @@ Controllers do **only** this:
 3. delegate each item to the Service;
 4. package the response.
 
-The [Category](../src/Controllers/WooCommerce/Category.php) controller is a typical example: about 60
+The [Category](../../src/Controllers/WooCommerce/Category.php) controller is a typical example: about 60
 lines, no domain logic.
 
 **Why:** the hard logic (WPML resolution, idempotent upsert, media sideloading, ACF) is shared by many
@@ -137,8 +137,8 @@ If this logic lived in Controllers, it would be duplicated 4–6 times.
 Error handling has **two stages**:
 
 1. In the domain, code throws `httpException($msg, $status, $code)`
-   ([helpers.php:168](../src/helpers.php#L168)). This creates an
-   [HttpException](../src/Exceptions/HttpException.php) carrying an HTTP status and an error code.
+   ([helpers.php:168](../../src/helpers.php#L168)). This creates an
+   [HttpException](../../src/Exceptions/HttpException.php) carrying an HTTP status and an error code.
 2. At the edge, `Router::dispatch` turns it into the `WP_Error` that WordPress serializes into the
    response.
 
@@ -149,16 +149,16 @@ Error handling has **two stages**:
 - The uniform message format `Service :: Element {i} :: ...` points every batch error straight to the
   item that caused it.
 - Exceptions that are not `HttpException` are re-thrown
-  ([Router.php:67-69](../src/Router.php#L67-L69)). Real bugs surface as 500s with a stack trace
+  ([Router.php:67-69](../../src/Router.php#L67-L69)). Real bugs surface as 500s with a stack trace
   instead of being masked.
 
 ### 4.4 Authentication: Bearer token + admin UI, no token endpoint
 
-Auth is a [middleware](../src/Middlewares/Auth.php) that delegates to the
-[Auth service](../src/Services/Auth.php). It compares the request's Bearer token with the one stored
+Auth is a [middleware](../../src/Middlewares/Auth.php) that delegates to the
+[Auth service](../../src/Services/Auth.php). It compares the request's Bearer token with the one stored
 in `wp_options` (`onpage_auth_token`), in constant time (`hash_equals`).
 
-The token can be generated **only** from the admin page ([UI.php](../src/Views/UI.php)). That page
+The token can be generated **only** from the admin page ([UI.php](../../src/Views/UI.php)). That page
 requires the `manage_options` capability and is protected by a CSRF nonce.
 
 **Why:**
@@ -203,7 +203,7 @@ field group defines no dedicated field.
 
 Earlier on, the post key was written through an implicit ACF field (meta `local_key` /
 `_local_key`). That field has been removed. `POST /migration` brings existing installs in line; see
-[DEV.md](DEV.md) for the full mapping.
+[internals.md](internals.md) for the full mapping.
 
 **Accepted trade-off: partial state.** If an item fails, the `HttpException` stops the batch. Items
 already written **stay written**. This is deliberate:
@@ -236,13 +236,13 @@ They then resolve the final value for each language through a fallback chain.
 - **Fail explicitly.** If the payload is multilingual but WPML is not active, the response is
   `500 wpml_required`. The plugin does not silently degrade, which would produce ambiguous data.
 - **Domain rules stay isolated.** Rules such as "a WooCommerce SKU is globally unique, so it applies
-  only to the source language, not to translations" (see [DEV.md](DEV.md)) live in the Services,
+  only to the source language, not to translations" (see [internals.md](internals.md)) live in the Services,
   behind the shared/translated model.
 
-The WPML helpers ([helpers.php:75-155](../src/helpers.php#L75-L155)) are **memoized per request**.
+The WPML helpers ([helpers.php:75-155](../../src/helpers.php#L75-L155)) are **memoized per request**.
 `isWpmlActive`, `getWpmlDefaultLanguage` and `getWpmlLanguages` are called dozens of times per item,
 and the set of languages does not change during an import. This is the cheapest, highest-impact
-memoization in the plugin (see the WPML memoization notes in [Tech.md](Tech.md)).
+memoization in the plugin (see the WPML memoization notes in [woocommerce-performance.md](woocommerce-performance.md)).
 
 ### 4.7 WooCommerce as a specialization of WordPress primitives
 
@@ -287,7 +287,7 @@ service:
   Services.
 
 Downloads are currently synchronous and are the main known bottleneck (see the media download notes
-in [Tech.md](Tech.md)).
+in [woocommerce-performance.md](woocommerce-performance.md)).
 
 ### 4.10 Repositories for critical lookups
 
@@ -306,8 +306,8 @@ WordPress.
 
 ### 4.11 Bootstrap with manual includes + lightweight `Env`
 
-[onpage.php](../onpage.php) includes files in an **explicit dependency order**, with no autoloader.
-[Env](../src/Env.php) is a singleton that reads an optional `.env` file for local configuration.
+[onpage.php](../../onpage.php) includes files in an **explicit dependency order**, with no autoloader.
+[Env](../../src/Env.php) is a singleton that reads an optional `.env` file for local configuration.
 
 **Why:** without Composer there is no PSR-4 autoloading. Manual include order is verbose, but it
 removes any dependency on build tooling and makes the dependency graph **readable in one file**. This
@@ -370,7 +370,7 @@ Deliberate choices and their rationale:
   the Repositories for critical lookups (section 4.10).
 - **Imperative validation, not a declarative schema.** Validation is spread across the Services as
   chains of checks. It is repetitive and walks the payload several times (see the validation notes in
-  [Tech.md](Tech.md)). A normalized, single-pass DTO is the most natural refactor if validation cost
+  [woocommerce-performance.md](woocommerce-performance.md)). A normalized, single-pass DTO is the most natural refactor if validation cost
   ever becomes dominant.
 
 ---

@@ -162,7 +162,7 @@ The **On Page®** plugin connects On Page® to WordPress. It lets you:
 - receive data from the **custom integration**
 - turn collections into **Post Types**
 - turn fields into **ACF custom fields**
-- sync e-commerce data with **WooCommerce** (optional; WPML is not needed for this)
+- sync e-commerce data with **WooCommerce** (optional; WPML is not needed for this; see [woocommerce.md](woocommerce.md))
 - support complex and multilingual data structures, if WPML is configured
 
 It is built for WordPress sites that need to publish structured data coming from an external system.

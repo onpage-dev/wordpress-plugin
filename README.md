@@ -29,19 +29,16 @@ Current version: **1.0.0**. The project follows [Semantic Versioning](https://se
 
 ## Documentation
 
-Writing an integration? Start with **[docs/DEVELOPER.md](docs/DEVELOPER.md)**. It covers the REST
-contract, the order of calls, complete PHP examples and the error reference.
+The docs live in [docs/](docs/). See [docs/README.md](docs/README.md) for the full index.
+
+Writing an integration? Start with **[docs/dev/integration-guide.md](docs/dev/integration-guide.md)**.
+It covers the REST contract, the order of calls, complete PHP examples and the error reference.
 
 | Document | Who it is for |
 | --- | --- |
-| [docs/DEVELOPER.md](docs/DEVELOPER.md) | integration authors: examples, call order, errors |
-| [docs/API.md](docs/API.md) | full reference, endpoint by endpoint |
-| [docs/USER.md](docs/USER.md) | site admins: installation and configuration |
-| [docs/DEV.md](docs/DEV.md) | plugin internals, service by service |
-| [docs/design.md](docs/design.md) | architectural decisions and trade-offs |
-| [docs/Tech.md](docs/Tech.md) | technical analysis of the WooCommerce endpoints |
-| [docs/WooCommerce.md](docs/WooCommerce.md) | WooCommerce specifics |
-| [docs/PAGINATION.md](docs/PAGINATION.md) | pagination |
+| [docs/user/](docs/user/) | site admins: what the plugin does, installation and configuration |
+| [docs/dev/](docs/dev/) | plugin and integration developers: internals, design, technical analysis |
+| [docs/API.md](docs/API.md) | full REST API reference, endpoint by endpoint |
 
 ## License
 
