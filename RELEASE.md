@@ -3,7 +3,7 @@
 Versions follow [Semantic Versioning](https://semver.org/), and every release has an entry in
 `CHANGELOG.md`.
 
-1. **Bump the version.** Set `Version:` in the `onpage.php` header to the new version. Add a
+1. **Bump the version.** Set `Version:` in the `plugin.php` header to the new version. Add a
    section at the top of `CHANGELOG.md` titled `## [X.Y.Z] - YYYY-MM-DD` with the release date,
    and add the link for the new version at the bottom of the file.
 2. **Tag it.**

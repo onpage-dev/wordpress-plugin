@@ -104,7 +104,7 @@ download, the Media Library import and the deduplication.
 
 | Component | When | Consequence if missing |
 | --- | --- | --- |
-| PHP 8.2+ | always | the plugin code does not run (`Requires PHP` in `onpage.php`) |
+| PHP 8.2+ | always | the plugin code does not run (`Requires PHP` in `plugin.php`) |
 | WordPress 7.1+ | always | declared minimum (`Requires at least`) |
 | **ACF** | **always** | **no route is registered at all** — see below |
 | ACF PRO | only for its own field types (`repeater`, `flexible_content`, …) | the plugin does **not** check the ACF edition. `POST /field-groups` passes `fields[].type` straight to `acf_update_field()` and still answers `200`. A PRO-only field is stored but does not work |
@@ -114,7 +114,7 @@ download, the Media Library import and the deduplication.
 
 ### ACF is a hard dependency
 
-`onpage.php` includes `routes.php` on `plugins_loaded` **only** when `acf_get_field_groups()`
+`plugin.php` includes `routes.php` on `plugins_loaded` **only** when `acf_get_field_groups()`
 exists. With ACF inactive:
 
 - the plugin registers no routes;

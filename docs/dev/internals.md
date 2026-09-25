@@ -586,7 +586,7 @@ With `ignore=1`, this cleanup runs even if the taxonomy no longer exists. This l
 
 ## Tests
 
-Tests live in `src/Tests/`. They are not part of the plugin: `onpage.php` does not include them, and they are left out of the distribution package. They are command-line PHP scripts that talk to a real WordPress site through the plugin's REST API.
+Tests live in `src/Tests/`. They are not part of the plugin: `plugin.php` does not include them, and they are left out of the distribution package. They are command-line PHP scripts that talk to a real WordPress site through the plugin's REST API.
 
 ### Configuration
 

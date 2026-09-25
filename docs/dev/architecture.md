@@ -33,7 +33,7 @@ The architecture responds to a set of non-negotiable constraints:
 - **Shared WordPress/PHP runtime.** The code runs inside the WordPress lifecycle. There is no
   dedicated process, no framework, no build step, no DI container and no ORM.
 - **No external dependencies.** There is no `composer.json`. Classes are included manually in
-  [onpage.php](../../onpage.php). A small dependency surface avoids version conflicts with other plugins
+  [plugin.php](../../plugin.php). A small dependency surface avoids version conflicts with other plugins
   in the same runtime.
 - **Three "opaque", mismatched integrations.** ACF, WooCommerce and WPML use different data models
   (postmeta vs. CRUD objects vs. `icl_translations`). They must be orchestrated, not just called.
@@ -306,7 +306,7 @@ WordPress.
 
 ### 4.11 Bootstrap with manual includes + lightweight `Env`
 
-[onpage.php](../../onpage.php) includes files in an **explicit dependency order**, with no autoloader.
+[plugin.php](../../plugin.php) includes files in an **explicit dependency order**, with no autoloader.
 [Env](../../src/Env.php) is a singleton that reads an optional `.env` file for local configuration.
 
 **Why:** without Composer there is no PSR-4 autoloading. Manual include order is verbose, but it
