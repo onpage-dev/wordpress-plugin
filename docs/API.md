@@ -1,71 +1,145 @@
-# API del plugin On Page®
+# On Page® plugin REST API
 
-Questa documentazione descrive le API REST esposte dal plugin, prendendo come riferimento `routes.php` e la logica effettiva implementata nei controller.
+This document describes the REST API exposed by the plugin. It is based on `routes.php` and on the logic actually implemented in the controllers.
 
-Base namespace REST:
+Base REST namespace:
 
 ```text
 /wp-json/onpage/v1
 ```
 
-## Autenticazione
+## Contents
 
-Tutti gli endpoint sono protetti da Bearer token.
+- [Authentication](#authentication)
+- [General conventions](#general-conventions)
+- [Handling `acf_fields`](#handling-acf_fields)
+- [Error format](#error-format)
+- [Field Groups](#field-groups)
+- [Post Types](#post-types)
+- [Posts](#posts)
+- [WooCommerce](#woocommerce): brands, attributes, attribute terms, categories, tags, products, variations
+- [Media](#media)
+- [Taxonomies](#taxonomies)
+- [Terms](#terms)
+- [Maintenance](#maintenance)
+- [cURL examples](#curl-examples)
+- [Implementation notes](#implementation-notes)
 
-Header richiesto:
+## Authentication
+
+Every endpoint requires a Bearer token.
+
+Required header:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-Comportamento:
+| Status | When |
+| --- | --- |
+| `500` | No API token is configured in the WordPress options (`onpage_auth_token`). |
+| `401` | The `Authorization` header is missing or does not contain a valid Bearer token. |
+| `403` | The token sent does not match the configured one. |
 
-- `500` se il token API non e' configurato nelle option WordPress (`onpage_auth_token`)
-- `401` se l'header `Authorization` manca o non contiene un Bearer token valido
-- `403` se il token inviato non coincide con quello configurato
+The token is generated from the **On Page®** page in the WordPress admin. Only administrators can access that page (capability `manage_options`). Generating and regenerating the token is also protected by a CSRF nonce. No REST endpoint can read or write the token: it is managed exclusively from the admin UI.
 
-Il token si genera dalla pagina **On Page®** nel backend WordPress, accessibile **solo agli utenti amministratori** (capability `manage_options`); la generazione/rigenerazione e' protetta anche da nonce CSRF. Non esiste alcun endpoint REST per leggere o scrivere il token: e' gestito esclusivamente dalla UI admin.
+## General conventions
 
-## Convenzioni generali
-
-- Quasi tutti gli endpoint di scrittura lavorano in batch: il body JSON atteso e' un array.
-- L'endpoint `POST /media` fa eccezione: usa `multipart/form-data` e accetta uno o piu' file nella stessa richiesta.
-- In caso di errore su un elemento del batch, la richiesta termina immediatamente e restituisce un `WP_Error`.
-- Gli endpoint `DELETE` di `field-groups`, `post-types`, `posts` e `taxonomies` supportano la query string `?ignore=1` per ignorare gli elementi non trovati.
-- Gli endpoint dei `terms` usano un parametro path `id` che identifica la tassonomia. Accetta indifferentemente lo **slug della tassonomia** (es. `product_cat`, `brand`, `pa_color`) oppure l'**ID ACF numerico** della tassonomia. Lo slug ha la precedenza ed e' consigliato: e' stabile tra ambienti (l'ID ACF dipende dall'ordine di creazione) e copre anche le tassonomie non-ACF (WooCommerce `product_cat`/`product_tag`/`pa_*`). L'ID numerico resta supportato per retrocompatibilita'.
-- Dove presente WPML, alcuni campi possono essere inviati in forma multilingua come oggetto `{ "<lang>": <value> }`.
-- Gli endpoint `/posts` e `/post-types` usano il post type esatto inviato nel payload, senza aggiungere prefissi.
+- **Batch writes.** Almost every write endpoint works in batch: the expected JSON body is an array.
+- **Exception: `POST /media`.** It uses `multipart/form-data` and accepts one or more files in the same request.
+- **Fail fast.** If one element of a batch fails, the request stops immediately and returns a `WP_Error`.
+- **`?ignore=1` on DELETE.** The `DELETE` endpoints of `field-groups`, `post-types`, `posts`, `taxonomies`, the WooCommerce resources and `media` accept the query string `?ignore=1` to skip elements that are not found. The flag is enabled by the mere presence of the `ignore` parameter, whatever its value. `DELETE /terms` does not support it.
+- **Taxonomy identifier.** The term endpoints identify the taxonomy with the `taxonomy` parameter (query string on `GET`/`DELETE /terms`, body field on `POST /terms`). It accepts either the **taxonomy slug** (e.g. `product_cat`, `brand`, `pa_color`) or the **numeric ACF ID** of the taxonomy. The slug takes precedence and is recommended: it is stable across environments (the ACF ID depends on creation order) and it also covers non-ACF taxonomies (WooCommerce `product_cat`/`product_tag`/`pa_*`). The numeric ID is still supported for backward compatibility.
+- **Multilingual values.** When WPML is active, some fields can be sent as a language map `{ "<lang>": <value> }`.
+- **Exact post types.** `/posts` and `/post-types` use the exact post type sent in the payload. No prefix is added.
 
 ### `local_key`
 
-`local_key` e' l'identificativo esterno On Page® e puo' essere un **intero positivo o una stringa non vuota**.
+`local_key` is the external On Page® identifier. It can be a **positive integer or a non-empty string**.
 
-- **In input** (payload e query string) e' normalizzato con `trim`: sono rifiutate solo la stringa vuota, `"0"` e i tipi non scalari, con `400 invalid_param`. Interi e stringhe numeriche sono **equivalenti** (`123` ≡ `"123"`, e' cosi' che WordPress memorizza i meta), quindi lo stesso oggetto si risolve indipendentemente dal tipo inviato; una chiave testuale (es. `"SKU-ABC"`) e' conservata cosi' com'e' (whitespace ai lati escluso).
-- **In output** (HTTP response) una chiave che e' un intero canonico e' restituita come **intero** (retrocompatibile con i consumatori esistenti); una chiave non numerica e' restituita come **stringa**; quando non e' impostata e' **`null`**. Vale per tutti gli endpoint che lo espongono: `posts`, `products`, `variant-products`, `terms`/`brands`/`categories`/`tags`/`attributes/{}/terms`/`attributes`.
-- I **`Post`** espongono `local_key` come campo top-level della response (`int|string|null`). Non è un campo ACF: è una post meta tecnica (`onpage_local_key`) e non compare dentro `acf_fields`.
-- **Riferimenti a termini**: per i **prodotti** (`brand`, `categories`, `tags`, `terms`) i riferimenti sono **local_key** (interi o stringhe); gli slug non sono supportati. Per i **`Post`** (`terms`/`term`) un riferimento puo' essere un local_key (intero o stringa) **oppure** uno slug (viene prima cercato come local_key, altrimenti trattato come slug). Anche il `parent` delle categorie WooCommerce e' un local_key (intero o stringa).
+- **Input** (payload and query string):
+  - The value is trimmed.
+  - Only the empty string, `"0"` and non-scalar types are rejected, with `400 invalid_param`.
+  - Integers and numeric strings are **equivalent** (`123` ≡ `"123"`; this is how WordPress stores meta values). The same object is resolved whatever type you send.
+  - A text key (e.g. `"SKU-ABC"`) is kept as is, except for surrounding whitespace.
+- **Output** (HTTP response):
+  - A key that is a canonical integer is returned as an **integer** (backward compatible with existing consumers).
+  - A non-numeric key is returned as a **string**.
+  - A key that is not set is returned as **`null`**.
+  - This applies to every endpoint that exposes it: `posts`, `products`, `variant-products`, `terms`/`brands`/`categories`/`tags`/`attributes/{}/terms`/`attributes`.
+- **Posts** expose `local_key` as a top-level response field (`int|string|null`). It is not an ACF field: it is a technical post meta (`onpage_local_key`) and does not appear inside `acf_fields`.
+- **Term references:**
+  - For **products** (`brand`, `categories`, `tags`, `terms`), references are **local_keys** (integers or strings). Slugs are not supported.
+  - For **posts** (`terms`/`term`), a reference can be a local_key (integer or string) **or** a slug. It is first looked up as a local_key, otherwise it is treated as a slug.
+  - The `parent` of WooCommerce categories is also a local_key (integer or string).
 
-### Conflitto `term_exists` sui termini
+### `term_exists` conflicts on terms
 
-Un termine gia' esistente con lo stesso nome sotto lo stesso parent ma con un `local_key` diverso **non** viene toccato, per non sovrascrivere un termine di un'altra origine. Poiche' WordPress non ammette due termini fratelli con lo stesso nome — a meno che il chiamante non fornisca uno slug esplicito libero — l'upsert crea in quel caso un **termine distinto** con uno slug tecnico (`<slug-base>-<lingua>`, con suffisso numerico se occupato) e il nome richiesto. L'upsert fallisce con `500 request_failed` e messaggio `term_exists` solo se nessuno slug tecnico e' disponibile.
+An existing term with the same name under the same parent but with a different `local_key` is **not** modified, so that a term from another source is never overwritten.
 
-Restano quindi a destinazione due termini omonimi con `local_key` diverse: e' il sintomo tipico di `local_key` disallineate tra sorgente e destinazione (es. la sorgente ha rigenerato le chiavi). Si risolve con [`DELETE /indexes`](#delete-indexes) seguito da un re-import **top-down**, che fa ri-adottare i termini esistenti riscrivendone la `local_key` invece di duplicarli.
+WordPress does not allow two sibling terms with the same name unless the caller provides a free explicit slug. In that case the upsert therefore creates a **separate term** with the requested name and a technical slug (`<slug-base>-<language>`, with a numeric suffix if already taken). The upsert fails with `500 request_failed` and message `term_exists` only if no technical slug is available.
 
-## Gestione `acf_fields`
+The destination then holds two terms with the same name and different `local_key`s. This is the typical symptom of `local_key`s that are out of sync between source and destination (e.g. the source regenerated its keys). To fix it, call [`DELETE /indexes`](#delete-indexes) and then run a **top-down** re-import. The re-import re-adopts the existing terms and rewrites their `local_key` instead of duplicating them.
 
-Tutti gli endpoint di scrittura che accettano un oggetto `acf_fields` (`POST /posts`, `POST /woocommerce/products`, `POST /woocommerce/variant-products`, `POST /woocommerce/brands`, `POST /woocommerce/categories`, `POST /woocommerce/tags`, `POST /woocommerce/attributes/{attribute}/terms`, `POST /terms`) condividono la stessa logica di assegnazione, centralizzata in `Acf::updateFieldValue`. Per ogni chiave dentro `acf_fields`:
+## Handling `acf_fields`
 
-- **`text`, `textarea`, `select`, `number`, `url`, `email`, …** (campi semplici): il valore viene passato direttamente ad ACF.
-- **`image` / `file`**: il valore puo' essere una stringa URL valida (importata/riusata in Media Library) oppure l'`attachment_id` (intero JSON) di un file gia' presente in Media Library (es. caricato con `POST /media`); in entrambi i casi nel campo viene salvato l'`attachment_id` risultante. Per il contesto `post` l'attachment viene anche collegato al post parent (via download per l'URL, senza download per l'`attachment_id`, che viene solo verificato e ricollegato). Per svuotare il campo passare `null` o stringa vuota. Un `attachment_id` che non corrisponde a un attachment esistente viene ignorato (il valore originale passa invariato ad ACF).
-- **`tab`**: i tab ACF sono separatori UI senza valore, eventuali chiavi inviate per un campo di tipo `tab` vengono ignorate silenziosamente. I tab non compaiono in lettura (`get_fields()` non li espone).
-- **`repeater`**: il valore deve essere una lista di oggetti (uno per riga); ogni oggetto contiene i sub-field della riga. Esempio: `"certifications": [{"nome": "Marcatura CE", "anno": 2024}, {"nome": "VOC A+"}]`. Sub-field di tipo `image`/`file` con URL o `attachment_id` vengono risolti in `attachment_id` con le stesse regole dei campi top-level. Sub-field di tipo `repeater` sono supportati ricorsivamente. Sub-field di tipo `tab` ignorati. Una mappa lingua WPML va applicata a livello dell'intero repeater (`"certifications": {"it": [...righe...], "en": [...righe...]}`), non a livello di sub-field. Mappe lingua dentro una riga non sono supportate.
-- Se il payload di un repeater non e' una lista di oggetti, l'endpoint ritorna `400 invalid_param` con messaggio `Repeater '<name>' must be a list of rows` o `Repeater '<name>' row N must be an object`.
-- **`group`**: il valore e' un oggetto con i sub-field del gruppo, ad esempio `"scheda": {"titolo": "…", "allegato": "https://…pdf"}`. Sub-field `image`/`file` con URL o `attachment_id` vengono convertiti/risolti in `attachment_id`. Una mappa lingua WPML va applicata a livello dell'intero gruppo.
-- **`group` con sub-field di due o tre lettere**: il campo viene **svuotato** e la richiesta risponde comunque `200`. `MultiLang::isLanguageMapShape()` riconosce una mappa lingua dalla sola forma delle chiavi, e un codice lingua e' qualsiasi chiave di 2-3 lettere: un gruppo come `{"lat": 45.1, "lng": 9.2}`, `{"sku": …, "ean": …}` o `{"url": …, "alt": …}` viene quindi scambiato per una mappa lingua, non contiene ne' la lingua richiesta ne' il fallback, e si risolve in `null`. Il comportamento e' fissato in `src/Tests/MultiLangResolveFields.php` (`casiDaComportamentoAttuale`): irrigidire il riconoscimento e' un compromesso, perche' una mappa che porta solo lingue non attive sul sito verrebbe scritta grezza nel campo invece che svuotarlo. Finche' resta cosi', a un gruppo di questo tipo va dato almeno un sub-field con un nome piu' lungo di tre lettere, oppure i valori vanno tenuti in campi separati. Nota: sui **termini** lo stesso payload viene scritto intatto, perche' quel percorso (`splitAcfFieldsByLanguage`) interseca le chiavi con le lingue WPML attive.
+These write endpoints accept an `acf_fields` object:
 
-### Mappe lingua dentro `acf_fields`
+- `POST /posts`
+- `POST /woocommerce/products`
+- `POST /woocommerce/variant-products`
+- `POST /woocommerce/brands`
+- `POST /woocommerce/categories`
+- `POST /woocommerce/tags`
+- `POST /woocommerce/attributes/{attribute}/terms`
+- `POST /terms`
 
-Ogni valore in `acf_fields` puo' essere inviato come mappa lingua WPML `{ "<lang>": <value> }`. La risoluzione per lingua e' indipendente: il valore di ciascuna lingua puo' essere **stringa**, **numero**, **`null`/`""`**, **lista di oggetti** (repeater) o **oggetto** (group), e lingue diverse della stessa mappa possono avere tipi diversi.
+They all share the same assignment logic, centralized in `Acf::updateFieldValue`. For each key inside `acf_fields`, the behaviour depends on the ACF field type.
+
+**Simple fields** (`text`, `textarea`, `select`, `number`, `url`, `email`, …)
+
+- The value is passed to ACF unchanged.
+
+**`image` / `file`**
+
+- The value can be a valid URL string (imported into, or reused from, the Media Library).
+- It can also be the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`).
+- In both cases the field stores the resulting `attachment_id`.
+- In the `post` context the attachment is also attached to the parent post. For a URL this happens through the download. For an `attachment_id` there is no download: the attachment is only verified and re-attached.
+- To clear the field, pass `null` or an empty string.
+- An `attachment_id` that does not match an existing attachment is ignored: the original value is passed to ACF unchanged.
+
+**`tab`**
+
+- ACF tabs are UI separators with no value. Keys sent for a `tab` field are silently ignored.
+- Tabs do not appear on read (`get_fields()` does not expose them).
+
+**`repeater`**
+
+- The value must be a list of objects, one per row. Each object contains the row's sub-fields. Example: `"certifications": [{"nome": "Marcatura CE", "anno": 2024}, {"nome": "VOC A+"}]`.
+- `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields.
+- Nested `repeater` sub-fields are supported recursively.
+- `tab` sub-fields are ignored.
+- A WPML language map must be applied to the whole repeater (`"certifications": {"it": [...rows...], "en": [...rows...]}`), not to individual sub-fields. Language maps inside a row are not supported.
+- If a repeater payload is not a list of objects, the endpoint returns `400 invalid_param` with the message `Repeater '<name>' must be a list of rows` or `Repeater '<name>' row N must be an object`.
+
+**`group`**
+
+- The value is an object with the group's sub-fields, for example `"scheda": {"titolo": "…", "allegato": "https://…pdf"}`.
+- `image`/`file` sub-fields with a URL or `attachment_id` are converted/resolved to an `attachment_id`.
+- A WPML language map must be applied to the whole group.
+
+**`group` whose sub-fields all have two- or three-letter names**
+
+- The field is **cleared**, and the request still returns `200`.
+- Why: `MultiLang::isLanguageMapShape()` recognizes a language map from the shape of its keys alone, and any 2-3 letter key counts as a language code. A group such as `{"lat": 45.1, "lng": 9.2}`, `{"sku": …, "ean": …}` or `{"url": …, "alt": …}` is therefore mistaken for a language map. It contains neither the requested language nor the fallback, so it resolves to `null`.
+- This behaviour is pinned in `src/Tests/MultiLangResolveFields.php` (`casiDaComportamentoAttuale`). Tightening the detection is a trade-off: a map carrying only languages that are not active on the site would then be written raw into the field instead of clearing it.
+- Workaround: give such a group at least one sub-field whose name is longer than three letters, or keep the values in separate fields.
+- On **terms** the same payload is written intact, because that code path (`splitAcfFieldsByLanguage`) intersects the keys with the active WPML languages.
+
+### Language maps inside `acf_fields`
+
+Any value in `acf_fields` can be sent as a WPML language map `{ "<lang>": <value> }`. Each language is resolved independently. The value for a language can be a **string**, a **number**, **`null`/`""`**, a **list of objects** (repeater) or an **object** (group). Different languages in the same map can have different types.
 
 ```json
 "acf_fields": {
@@ -77,13 +151,19 @@ Ogni valore in `acf_fields` puo' essere inviato come mappa lingua WPML `{ "<lang
 }
 ```
 
-La coerenza con il tipo ACF e' comunque verificata a valle, dopo la risoluzione della lingua: per un campo `repeater` il valore risolto di ogni lingua deve restare una lista di oggetti (un oggetto singolo o una stringa per quella lingua ritornano `400 invalid_param`); per `image`/`file` vale la conversione URL → `attachment_id`; i `tab` restano ignorati. La mappa lingua va sempre al livello del campo (o dell'intero repeater/group), mai sui singoli sub-field.
+Consistency with the ACF type is still checked after the language is resolved:
 
-In lettura (GET) i repeater vengono restituiti nativamente da `\get_fields()` come liste di oggetti; i tab non compaiono.
+- For a `repeater` field, the resolved value of every language must still be a list of objects. A single object or a string for that language returns `400 invalid_param`.
+- For `image`/`file`, the URL → `attachment_id` conversion applies.
+- `tab` fields are still ignored.
 
-## Struttura errori
+The language map always goes at field level (or on the whole repeater/group), never on individual sub-fields.
 
-Gli errori arrivano come `WP_Error` con schema tipico WordPress REST:
+On read (GET), repeaters are returned natively by `\get_fields()` as lists of objects. Tabs do not appear.
+
+## Error format
+
+Errors are returned as `WP_Error` using the standard WordPress REST shape:
 
 ```json
 {
@@ -95,13 +175,19 @@ Gli errori arrivano come `WP_Error` con schema tipico WordPress REST:
 }
 ```
 
+In this document, errors are written as `<status> <code>`, for example `400 invalid_param`.
+
+### Pagination at a glance
+
+Only two endpoints paginate: `GET /posts` and `GET /media`. They use `per_page`/`page` and return the `X-WP-Total`/`X-WP-TotalPages` headers. Every other list endpoint always returns all matching items in a single response. See [PAGINATION.md](PAGINATION.md) for more background.
+
 ## Field Groups
 
 ### GET `/field-groups`
 
-Restituisce tutti i field group ACF.
+Returns all ACF field groups.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i field group in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** field groups; there is no `per_page`/`page`.
 
 Response `200`:
 
@@ -117,7 +203,7 @@ Response `200`:
 
 ### POST `/field-groups`
 
-Crea o aggiorna uno o piu' field group ACF.
+Creates or updates one or more ACF field groups.
 
 Body:
 
@@ -152,16 +238,30 @@ Body:
 ]
 ```
 
-Note:
+Group fields:
 
-- `title` (obbligatorio) e' il titolo del gruppo. Se manca o e' vuoto, l'endpoint risponde `400 missing_title`.
-- `key` (opzionale) e' la chiave ACF del gruppo (convenzione `group_...`). Se manca, viene generata automaticamente dal `title` (`group_` + slug del titolo).
-- Se esiste gia' un field group con la stessa `key` oppure lo stesso `title`, viene aggiornato invece di crearne uno nuovo (upsert). Quando `key` non e' passata e un gruppo con quel `title` esiste, ne viene riusata la chiave esistente (non viene cambiata).
-- In update, i campi del gruppo vengono sostituiti dal payload: i campi con la stessa chiave tecnica mantengono la field key ACF interna, i campi non piu' presenti vengono rimossi dal field group.
-- Per ogni field, `key` e' la chiave tecnica ACF salvata come field name; e' la stessa chiave da usare negli oggetti `acf_fields` di `POST /posts`, `POST /woocommerce/products` e termini.
-- `name` e `label` sono descrittivi; se `label` manca, viene usato `name`; se `key` manca, per retrocompatibilita' viene usato `name` come chiave tecnica.
-- Ogni field passato viene sanificato almeno per `key`, `label`, `name`, `type`.
-- Se WPML e' attivo, il gruppo viene marcato con modalita' traduzione ACFML.
+| Field | Required | Description |
+| --- | --- | --- |
+| `title` | yes | Group title. Missing or empty → `400 missing_title`. |
+| `key` | no | ACF group key (convention `group_...`). If missing, it is generated from `title` (`group_` + title slug). |
+| `locations` | no | ACF location rules. |
+| `description` | no | Group description. |
+| `fields` | no | List of fields (see below). |
+
+Upsert rules:
+
+- If a field group with the same `key` **or** the same `title` already exists, it is updated instead of creating a new one.
+- When `key` is not sent and a group with that `title` exists, its existing key is reused (it is not changed).
+- On update, the group's fields are replaced by the payload. Fields with the same technical key keep their internal ACF field key. Fields no longer present are removed from the field group.
+
+Per-field rules:
+
+- `key` is the technical ACF key, saved as the field name. It is the key to use in the `acf_fields` objects of `POST /posts`, `POST /woocommerce/products` and the term endpoints.
+- `name` and `label` are descriptive. If `label` is missing, `name` is used.
+- If `key` is missing, `name` is used as the technical key (backward compatibility).
+- Every field is sanitized at least for `key`, `label`, `name` and `type`.
+
+If WPML is active, the group is flagged with an ACFML translation mode.
 
 Response `200`:
 
@@ -169,7 +269,7 @@ Response `200`:
 [123, 124]
 ```
 
-Errori principali:
+Main errors:
 
 - `400 missing_title`
 - `400 invalid_param`
@@ -178,7 +278,7 @@ Errori principali:
 
 ### DELETE `/field-groups`
 
-Elimina field group per ID numerico oppure per titolo.
+Deletes field groups by numeric ID or by title.
 
 Body:
 
@@ -186,7 +286,7 @@ Body:
 [123, "Product Fields"]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -202,13 +302,13 @@ null
 
 ### GET `/post-types`
 
-Restituisce tutti i post type ACF registrati.
+Returns all registered ACF post types.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i post type registrati in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** registered post types; there is no `per_page`/`page`.
 
 ### POST `/post-types`
 
-Crea o aggiorna uno o piu' post type ACF (upsert per chiave `post_type`).
+Creates or updates one or more ACF post types (upsert by the `post_type` key).
 
 Body:
 
@@ -227,24 +327,24 @@ Body:
 ]
 ```
 
-Campi usati:
+| Field | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `post_type` | yes | | |
+| `singular_label` | yes | | |
+| `plural_label` | yes | | |
+| `hierarchical` | no | `false` | |
+| `icon` | no | `dashicons-admin-post` | |
+| `supports` | no | `["title", "editor", "thumbnail", "revisions"]` | |
+| `taxonomies` | no | `[]` | |
+| `rewrite_slug` | no | value of `post_type` | WordPress permalink slug. If `null`, empty or omitted, no custom slug is applied. |
 
-- `post_type` richiesto
-- `singular_label` richiesto
-- `plural_label` richiesto
-- `hierarchical` opzionale, default `false`
-- `icon` opzionale, default `dashicons-admin-post`
-- `supports` opzionale, default `["title", "editor", "thumbnail", "revisions"]`
-- `taxonomies` opzionale, default `[]`
-- `rewrite_slug` opzionale, default = valore di `post_type` (slug WordPress nei permalink). Se `null`, stringa vuota o omesso non viene applicato alcuno slug custom
+Behaviour:
 
-Note:
-
-- **Upsert**: se esiste gia' un post type con la stessa chiave (`sanitize_key(post_type)`) i valori vengono aggiornati, altrimenti viene creato. Non viene restituito errore in caso di duplicato.
-- **Payload-as-truth**: ogni chiamata sovrascrive completamente i campi ACF; le proprieta' opzionali non incluse nel payload tornano al loro default (es. un `rewrite_slug` precedentemente impostato viene rimosso se la chiave non e' piu' presente).
-- La chiave ACF del post type viene ottenuta con `sanitize_key(post_type)`.
-- Lo slug WordPress usa il valore di `rewrite_slug` se fornito, altrimenti il valore esatto di `post_type`, senza prepend `post_`.
-- Dopo ogni batch viene eseguito `flush_rewrite_rules()` una sola volta.
+- **Upsert.** If a post type with the same key (`sanitize_key(post_type)`) exists, its values are updated; otherwise it is created. A duplicate never returns an error.
+- **Payload as source of truth.** Every call fully overwrites the ACF fields. Optional properties missing from the payload go back to their default. For example, a previously set `rewrite_slug` is removed if the key is no longer sent.
+- The ACF key of the post type is `sanitize_key(post_type)`.
+- The WordPress slug is `rewrite_slug` if provided, otherwise the exact value of `post_type`. No `post_` prefix is added.
+- `flush_rewrite_rules()` runs once per batch.
 
 Response `200`:
 
@@ -252,13 +352,13 @@ Response `200`:
 [45]
 ```
 
-Errori principali:
+Main errors:
 
 - `500 acf_error`
 
 ### DELETE `/post-types`
 
-Elimina post type per ID ACF oppure per chiave stringa.
+Deletes post types by ACF ID or by string key.
 
 Body:
 
@@ -266,28 +366,29 @@ Body:
 [45, "product"]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
 ```
 
-Note:
+Notes:
 
-- La stringa viene sanificata con `sanitize_key`.
-- Dopo ogni cancellazione viene eseguito `flush_rewrite_rules()`.
+- String values are sanitized with `sanitize_key`.
+- `flush_rewrite_rules()` runs after each deletion.
 
 ## Posts
 
 ### GET `/posts`
 
-Restituisce post generici, con filtri opzionali utili per sync/mapping. Supporta anche la ricerca per **titolo esatto** (parametro `title`), filtrabile per post type con `?type=`.
+Returns generic posts, with optional filters useful for sync and mapping. It also supports **exact-title** search (`title` parameter), which can be scoped to a post type with `?type=`.
 
-**Paginazione:** si', tramite `per_page`/`page` e header `X-WP-Total`/`X-WP-TotalPages` (dettagli sotto) — **tranne** quando si usa `?id=` o `?title=`, che ritornano sempre tutti i match senza paginare.
+**Pagination:** yes, through `per_page`/`page` and the `X-WP-Total`/`X-WP-TotalPages` headers (details below). **Exception:** `?id=` and `?title=` always return every match, without pagination.
 
-Query opzionale:
+Optional query:
 
 ```text
+?id=321
 ?type=product
 ?local_key=1001
 ?updated_after=2026-05-14T10:00:00Z
@@ -299,37 +400,39 @@ Query opzionale:
 ?title[it]=Chi siamo&title[en]=About us
 ```
 
-Note:
+| Parameter | Description |
+| --- | --- |
+| `id` | Returns the single matching post (as a one-element list). |
+| `type` | Exact post type. Default `any`. In the normal listing an unknown `type` is not an error (empty list). Combined with `title`, an unknown `type` returns `404 not_found`. |
+| `local_key` | Filters on the `onpage_local_key` post meta. |
+| `status` | Default `any`, which **excludes** trashed posts and auto-drafts. `trashed` (alias of the WP status `trash`) returns **only** trashed items. Any other value (`publish`, `draft`, `pending`, `private`, …) is passed to WordPress unchanged. |
+| `updated_after` | Filters on `post_modified_gmt`. An invalid date/time returns `400 invalid_param`. |
+| `per_page` | Default `100`, maximum `100`. |
+| `page` | Page number. |
+| `title` | Exact-title search (see below). |
 
-- `type` filtra per post type esatto; se omesso usa `any`. Nel listing normale un `type` inesistente non genera errore (ritorna lista vuota); in combinazione con `title` un `type` inesistente ritorna `404 not_found`.
-- `local_key` filtra sul meta ACF `local_key`.
-- `status` filtra per stato. Se omesso usa `any`, che **esclude** i post nel cestino e gli auto-draft. Il valore `trashed` (alias dello stato WP `trash`) restituisce **solo** gli elementi nel cestino; altri valori (`publish`, `draft`, `pending`, `private`, …) sono passati a WordPress invariati.
-- `updated_after` filtra su `post_modified_gmt`.
-- `per_page` ha massimo `100` e default `100`.
-- `id` restituisce il singolo post corrispondente.
+**Pagination headers** (normal listing only, not with `id`/`title`):
 
-Header di paginazione (solo sul listing normale, non su `id`/`title`):
+- `X-WP-Total`: total number of posts matching the filters, regardless of the page.
+- `X-WP-TotalPages`: total number of pages, `ceil(X-WP-Total / per_page)`.
+- The client knows from the current response whether it is on the last page (`page >= X-WP-TotalPages`). There is no need to request an extra page and wait for an empty array.
 
-- `X-WP-Total`: numero totale di post che soddisfano i filtri, indipendentemente dalla pagina.
-- `X-WP-TotalPages`: numero totale di pagine, calcolato come `ceil(X-WP-Total / per_page)`.
-- Il client sa gia' dalla risposta corrente se e' l'ultima pagina (`page >= X-WP-TotalPages`): non serve chiamare una pagina in piu' per scoprirlo tramite un array vuoto.
-
-Esempio di scorrimento (250 post, `per_page=100` → 3 pagine):
+Walk-through (250 posts, `per_page=100` → 3 pages):
 
 ```text
-GET /posts?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continua)
-GET /posts?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continua)
-GET /posts?page=3&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (page == X-WP-TotalPages → stop, nessuna richiesta a page=4)
+GET /posts?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /posts?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /posts?page=3&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (page == X-WP-TotalPages → stop, no request for page=4)
 ```
 
-Ricerca per `title`:
+**Search by `title`:**
 
-- `title` esegue una ricerca per **titolo esatto** e accetta due forme:
-  - **stringa** (`?title=My post`): ricerca nella lingua corrente della richiesta;
-  - **mappa lingua** (`?title[it]=Chi siamo&title[en]=About us`): ricerca ogni titolo nel contesto della rispettiva lingua WPML e ne restituisce l'**unione**.
-- Quando `title` e' presente la ricerca e' scopata al `type` indicato (validato, `404 not_found` se inesistente); se `type` e' omesso cerca su qualsiasi post type.
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** (rappresentante in lingua di default quando disponibile), con la mappa `translations`: titoli che sono traduzioni dello stesso post → un solo oggetto; titoli di gruppi diversi → più oggetti. Stesso comportamento di `GET /woocommerce/products?name=`.
-- Quando `title` e' presente, gli altri filtri (`local_key`, `updated_after`, `status`, `page`, `per_page`) non si applicano.
+- `title` performs an **exact-title** search. It accepts two forms:
+  - **string** (`?title=My post`): searches in the current language of the request;
+  - **language map** (`?title[it]=Chi siamo&title[en]=About us`): searches each title in the context of its WPML language and returns the **union** of the results.
+- The search is scoped to the given `type` (validated; `404 not_found` if it does not exist). Without `type`, it searches every post type.
+- The response is **always a list** with **one object per distinct translation group**. The representative is the default-language post when available, and it carries the `translations` map. Titles that are translations of the same post → one object. Titles from different groups → several objects. This mirrors `GET /woocommerce/products?name=`.
+- When `title` is present, the other filters (`local_key`, `updated_after`, `status`, `page`, `per_page`) do not apply.
 
 Response `200`:
 
@@ -353,27 +456,28 @@ Response `200`:
 ]
 ```
 
-- `translations` mappa ogni codice lingua all'ID del post in quella lingua (gruppo di traduzione WPML); senza WPML attivo e' una mappa vuota. E' presente in tutte le response dei post (singolo, lista e ricerca per `title`).
+- `translations` maps each language code to the ID of the post in that language (WPML translation group). Without WPML it is an empty map. It is present in every post response (single, list and `title` search).
 
-> **Nota:** l'endpoint `GET /post-types/{post_type}/posts` è stato rimosso. Per elencare o cercare i post di un post type specifico usa `GET /posts?type={post_type}` (con `&title=...` per la ricerca per titolo esatto).
+> **Note:** there is no `GET /post-types/{post_type}/posts` endpoint. To list or search the posts of a specific post type, use `GET /posts?type={post_type}` (add `&title=...` for exact-title search).
 
 ### GET `/posts/{id}`
 
-Restituisce un singolo post.
+Returns a single post.
 
-**Paginazione:** non applicabile — restituisce un solo oggetto, non una lista.
+**Pagination:** not applicable (returns one object, not a list).
 
-Query opzionale:
+Optional query:
 
-- `keyfield=id`
-- `keyfield=local_key`
-- default `id`
-- con `keyfield=id`, `{id}` e' l'ID numerico del post
-- con `keyfield=local_key`, `{id}` e' il valore `local_key`
-- con `keyfield=local_key`, puoi passare anche `type=product` per evitare ambiguita' tra post type
-- con `keyfield=local_key`, se piu' post condividono la chiave (traduzioni WPML) viene restituito il post in **lingua di default** del gruppo (le altre lingue sono nella mappa `translations`)
+| Parameter | Description |
+| --- | --- |
+| `keyfield` | `id` (default) or `local_key`. Any other value returns `400 invalid_keyfield`. |
+| `type` | Only with `keyfield=local_key`: restricts the lookup to a post type, to avoid ambiguity across post types. |
 
-Esempi:
+- With `keyfield=id`, `{id}` is the numeric post ID.
+- With `keyfield=local_key`, `{id}` is the `local_key` value (an invalid value returns `400 invalid_param`).
+- With `keyfield=local_key`, if several posts share the key (WPML translations), the post in the group's **default language** is returned. The other languages are in the `translations` map.
+
+Example:
 
 ```bash
 curl -X GET \
@@ -407,15 +511,21 @@ Response `200`:
 }
 ```
 
-Errore:
+Errors:
 
 - `404 no_post`
 
 ### POST `/posts`
 
-Crea o aggiorna post in batch. Se passi un `id` che esiste in WordPress, viene aggiornato quel post (l'`id` ha la precedenza, come in `POST /woocommerce/products`); altrimenti l'upsert e' guidato da `local_key`: se `local_key` esiste gia' aggiorna quel post, altrimenti ne crea uno nuovo.
+Creates or updates posts in batch.
 
-#### Payload base
+How the target post is resolved:
+
+1. If the element has an `id` that exists in WordPress, that post is updated (`id` takes precedence, as in `POST /woocommerce/products`).
+2. Otherwise the upsert is driven by `local_key`: if the `local_key` already exists, that post is updated.
+3. Otherwise a new post is created.
+
+#### Base payload
 
 ```json
 [
@@ -440,59 +550,64 @@ Crea o aggiorna post in batch. Se passi un `id` che esiste in WordPress, viene a
 ]
 ```
 
-Campi:
+| Field | Required | Notes |
+| --- | --- | --- |
+| `type` | on insert | On update, defaults to the current post type. Used as the exact post type; no `post_` prefix is added. |
+| `title` | on insert | |
+| `content` | no | |
+| `status` | no | Default `draft` on insert. |
+| `local_key` | yes | Always required, also when updating by `id`. |
+| `files` | no | Map `acf_field_name => URL or attachment_id`. |
+| `acf_fields` | no | See [Handling `acf_fields`](#handling-acf_fields). |
+| `terms` | no | Term assignments per taxonomy. |
+| `term` | no | Legacy alias of `terms`. |
 
-- `type` richiesto in insert; in update default al tipo del post corrente; viene usato come post type esatto, senza prepend `post_`
-- `title` richiesto in insert
-- `content` opzionale
-- `status` opzionale, default `draft` in insert
-- `local_key` richiesto
-- `files` opzionale
-- `acf_fields` opzionale
-- `terms` opzionale
-- `term` accettato come alias legacy di `terms`
-- Formato supportato per `terms`:
+Supported `terms` formats:
+
 - `<taxonomy_slug> => [term_slug, ...]`
 - `<taxonomy_slug> => [lang => term_slug|[term_slug, ...]]`
 - `<taxonomy_slug> => [[lang => term_slug, ...], ...]`
 
-#### Comportamento insert
+#### Insert behaviour
 
-- Verifica che il titolo non esista gia' nello stesso post type.
-- Verifica che `local_key` non esista gia' come meta ACF `local_key`.
-- Se `files` e' presente, ogni valore deve essere un URL valido raggiungibile da WordPress, oppure l'`attachment_id` (intero JSON) di un file gia' presente in Media Library (es. caricato con `POST /media`).
-- Ogni file remoto viene scaricato, importato nella Media Library e associato al post creato; un `attachment_id` viene invece assegnato direttamente, senza download, e ricollegato al post come parent.
-- Il valore salvato nel campo indicato dentro `files` e' l'`attachment_id` WordPress del media importato o passato.
-- Se un valore dentro `acf_fields` appartiene a un campo ACF di tipo `image` ed e' un URL valido, il controller lo importa come media remoto e salva nel campo l'`attachment_id` risultante.
-- Se un campo ACF di tipo `image` viene passato a `null` o stringa vuota, il controller lo lascia senza immagine.
-- Se esiste un campo ACF chiamato `local_key`, il controller lo valorizza automaticamente.
-- Se `terms` e' presente, i termini vengono assegnati per riferimento: ogni riferimento (es. `123`, `"SKU-ABC"`) viene prima cercato come `local_key`, altrimenti viene trattato come slug. A differenza dei prodotti, qui lo slug e' supportato (i Post accettano local_key intero/stringa **oppure** slug).
-- Per payload multilingua puoi passare una mappa per lingua, ad esempio `{"manufacturer":{"en":"ford-en","it":"ford-it"}}`.
-- E' supportato anche il formato lista di mappe lingua, ad esempio `{"manufacturer":[{"en":"ford-en","it":"ford-it"}]}`.
-- Se un termine non esiste per `local_key` o slug, la richiesta fallisce con `404`.
+- The title must not already exist in the same post type (see `409 duplicate_title` below for the exact rule).
+- The `local_key` must not already exist in the `onpage_local_key` post meta (`409 duplicate_local_key`).
+- **`files`:**
+  - Each value must be a valid URL reachable by WordPress, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`).
+  - Each remote file is downloaded, imported into the Media Library and attached to the new post.
+  - An `attachment_id` is assigned directly, without download, and re-attached to the post as parent.
+  - The field named in `files` stores the WordPress `attachment_id` of the imported or given media.
+- **`acf_fields` of type `image`:**
+  - A valid URL is imported as remote media, and the field stores the resulting `attachment_id`.
+  - `null` or an empty string leaves the field without an image.
+- If an ACF field named `local_key` exists, the controller fills it automatically.
+- **`terms`:**
+  - Terms are assigned by reference. Each reference (e.g. `123`, `"SKU-ABC"`) is first looked up as a `local_key`, otherwise it is treated as a slug. Unlike products, slugs are supported here (posts accept an integer/string local_key **or** a slug).
+  - For multilingual payloads you can pass a per-language map, for example `{"manufacturer":{"en":"ford-en","it":"ford-it"}}`.
+  - A list of language maps is also supported, for example `{"manufacturer":[{"en":"ford-en","it":"ford-it"}]}`.
+  - If a term is not found by `local_key` or slug, the request fails with `404`.
 
-#### Comportamento update
+#### Update behaviour
 
-- `local_key` e' obbligatorio (anche aggiornando per `id`): viene scritto sul post risolto e propagato a **tutte le sue traduzioni WPML**.
-- Risoluzione del post da aggiornare (in ordine di precedenza):
-  - se il payload contiene un `id` che **esiste** in WordPress, viene aggiornato quel post (`404 not_found` se l'`id` non esiste);
-  - altrimenti l'update viene risolto tramite `local_key` e l'ID WordPress viene ricavato internamente.
-- Se `type`, `title`, `content`, `description`, `acf_fields`, `files`, `terms` o `status` non sono presenti nel payload, quel dato viene conservato senza modifiche.
-- In update non viene eseguito il controllo di unicita' su `local_key`.
-- Se cambia `title`, viene controllata l'unicita' rispetto agli altri post dello stesso tipo.
-- `acf_fields` aggiorna solo i campi inviati.
-- `files` aggiorna solo i campi inviati.
-- In update, anche i campi ACF di tipo `image` ricevuti come URL vengono importati o riusati come attachment e salvati come `attachment_id`.
-- In update, se un campo ACF di tipo `image` vale `null` o stringa vuota, il campo viene svuotato.
-- In update, se un URL in `files` e' gia' stato importato in precedenza dal plugin, viene riusato lo stesso attachment e ricollegato al post corrente.
-- Se il file remoto non e' ancora in Media Library, viene scaricato e creato un nuovo attachment.
-- In update, un `attachment_id` in `files` viene verificato e ricollegato al post corrente, senza download.
-- `terms` sovrascrive le assegnazioni per le tassonomie passate.
-- In update, il formato multilingua di `terms` usa i termini della lingua del post/traduzione corrente.
+- `local_key` is required (also when updating by `id`). It is written on the resolved post and propagated to **all its WPML translations**.
+- Resolution order:
+  - if the payload has an `id` that **exists** in WordPress, that post is updated (`404 not_found` if the `id` does not exist);
+  - otherwise the post is resolved through `local_key`, and the WordPress ID is looked up internally.
+- Any of `type`, `title`, `content`, `description`, `acf_fields`, `files`, `terms` or `status` missing from the payload is left unchanged.
+- No uniqueness check is performed on `local_key`.
+- If `title` changes, it is checked for uniqueness against other posts of the same type.
+- `acf_fields` updates only the fields sent.
+- `files` updates only the fields sent.
+- ACF `image` fields received as URLs are imported or reused as attachments and saved as `attachment_id`.
+- An ACF `image` field set to `null` or an empty string is cleared.
+- If a URL in `files` was already imported by the plugin, the same attachment is reused and re-attached to the current post. If the remote file is not yet in the Media Library, it is downloaded and a new attachment is created.
+- An `attachment_id` in `files` is verified and re-attached to the current post, without download.
+- `terms` overwrites the assignments for the taxonomies sent.
+- In the multilingual `terms` format, the terms of the current post/translation language are used.
 
-#### Supporto multilingua con WPML
+#### Multilingual support with WPML
 
-Per `title`, `content` e ogni valore in `acf_fields` e' possibile inviare una mappa per lingua:
+`title`, `content` and every value in `acf_fields` can be sent as a per-language map:
 
 ```json
 [
@@ -517,7 +632,7 @@ Per `title`, `content` e ogni valore in `acf_fields` e' possibile inviare una ma
 ]
 ```
 
-Anche `files` supporta il formato per lingua:
+`files` also supports the per-language format:
 
 ```json
 [
@@ -537,15 +652,15 @@ Anche `files` supporta il formato per lingua:
 ]
 ```
 
-Regole:
+Rules:
 
-- Se sono presenti contenuti multilingua in `title`, `content`, `description`, `acf_fields`, `files` o `terms` e WPML non e' installato o attivo, ritorna errore `500 wpml_required`.
-- In insert, il plugin crea il post base nella lingua default WPML e poi le traduzioni.
-- In update, il plugin aggiorna il post corrente e le sue traduzioni collegate.
-- Se `title` e' una stringa e altri campi sono multilingua, lo stesso titolo viene usato invariato per tutte le traduzioni; per titoli diversi per lingua, usare una mappa WPML.
-- Quando `files` e' multilingua, ogni traduzione riceve i propri `attachment_id` nei campi target.
-- Se per una lingua manca il titolo tradotto, viene usato il titolo condiviso o la lingua di fallback senza suffissi automatici.
-- Nell'assegnazione multilingua di `terms`, i termini vengono risolti nella lingua target tramite WPML.
+- If `title`, `content`, `description`, `acf_fields`, `files` or `terms` contain multilingual values and WPML is not installed or active, the request returns `500 wpml_required`.
+- On insert, the plugin creates the base post in the WPML default language, then the translations.
+- On update, the plugin updates the current post and its linked translations.
+- If `title` is a string and other fields are multilingual, the same title is used unchanged for every translation. For different titles per language, use a WPML map.
+- When `files` is multilingual, each translation receives its own `attachment_id`s in the target fields.
+- If the translated title is missing for a language, the shared title or the fallback language is used, without automatic suffixes.
+- For multilingual `terms`, terms are resolved in the target language through WPML.
 
 Response `200`:
 
@@ -553,19 +668,20 @@ Response `200`:
 [321, 322]
 ```
 
-Errori principali:
+Main errors:
 
 - `400 input_invalid`
-- `400 input_invalid` se un campo in `files` non contiene un `attachment_id` esistente o un URL valido
+- `400 input_invalid` if a field in `files` contains neither an existing `attachment_id` nor a valid URL
 - `404 not_found`
-- `404 input_invalid` se un termine referenziato non esiste
-- `409 duplicate_title` se il titolo esiste gia' su un oggetto **senza `local_key`**, fuori dal gruppo di traduzione di questo elemento; un oggetto che porta una `local_key` diversa e' un altro elemento On Page® e non fa conflitto, quindi due elementi omonimi si importano entrambi
+- `404 input_invalid` if a referenced term does not exist
+- `409 duplicate_local_key` on insert, if the `local_key` already exists for the post type
+- `409 duplicate_title` if the title already exists on an object **without a `local_key`**, outside this element's translation group. An object carrying a different `local_key` is another On Page® element and does not conflict, so two elements with the same title are both imported.
 - `500 request_failed`
-- `500 wpml_required` se il payload contiene valori multilingua ma WPML non e' installato o attivo
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
 
 ### DELETE `/posts`
 
-Elimina post per ID, per `local_key`, oppure elimina tutti i post di un dato post type.
+Deletes posts by ID or by `local_key`, or deletes all posts of a given post type.
 
 Body:
 
@@ -573,30 +689,64 @@ Body:
 [321, "product", {"local_key": 1001, "type": "product"}]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
 ?keyfield=local_key&type=product
 ```
 
-Note:
+Accepted body elements (default mode):
 
-- Se il valore e' stringa, viene interpretato come post type esatto.
-- In questo caso il controller cancella tutti i post di quel tipo.
-- Per cancellare per `local_key` (intero o stringa non vuota), usa `?keyfield=local_key`; `type` e' opzionale ma consigliato.
-- In alternativa puoi usare oggetti con `local_key` e `type`, senza cambiare `keyfield`.
-- Se un `local_key` non filtrato per `type` corrisponde a piu' post type, ritorna `409 ambiguous_local_key`.
+| Element | Effect |
+| --- | --- |
+| integer | Deletes the post with that ID. |
+| string | Interpreted as an exact post type: **all posts of that type** are deleted. |
+| `{"local_key": …, "type": …}` | Deletes by `local_key`; `type` is optional (falls back to the `type` query parameter). |
+| `{"id": …}` | Deletes the post with that ID. |
+| `{"type": …}` | Deletes all posts of that type. |
+
+Notes:
+
+- To delete by `local_key` (integer or non-empty string) with plain values, use `?keyfield=local_key`. `type` is optional but recommended. In this mode every element must be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`.
+- Alternatively, use objects with `local_key` and `type` without changing `keyfield`.
+- Any other `keyfield` value (besides `local_key` and the default `id_or_post_type`) returns `400 invalid_keyfield`.
+- If a `local_key` not filtered by `type` matches several post types, the request returns `409 ambiguous_local_key`.
 
 ## WooCommerce
 
+For WooCommerce-specific background see [WooCommerce.md](WooCommerce.md).
+
+### Shared behaviour of term list endpoints
+
+The list endpoints for brands, categories, tags and attribute terms share the rules below. Each endpoint section states which of them apply.
+
+**Exact-name search (`name`)**
+
+- `name` performs an **exact-name** search on the term. It accepts two forms:
+  - **string** (`?name=Ford`): searches in the current language of the request;
+  - **language map** (`?name[it]=Ford&name[en]=Ford`): searches each name in the context of its WPML language and returns the **union** of the results.
+- The response is **always a list** with **one object per distinct translation group** (the default-language term is the representative), carrying the `translations` map. Names that are translations of the same term → one object. Names from different groups → several objects. This mirrors `GET /woocommerce/products?name=`.
+
+**Parent filters (`parent_id`, `parent_lk`)**
+
+- `parent_id` (WP term ID) and `parent_lk` (the parent's local_key) return the **direct children** of the given parent.
+- `parent_lk` is expanded to **all WPML translations** of the parent, and children are searched under each of them. Per-language visibility of the children follows the same rules as the normal listing.
+- The two parameters are **mutually exclusive** (`400` if both are sent).
+- A `parent_lk` that resolves to no term returns an empty list.
+- Filter precedence: `id` > `local_key` > `slug` > `name` > `parent_*`.
+
+**`translations`**
+
+- `translations` maps each language code to the term ID in that language. It is present in every response (single, list, search). Without WPML it is an empty map.
+
 ### GET `/woocommerce/brands`
 
-Restituisce i brand WooCommerce salvati come termini della tassonomia `product_brand`.
+Returns WooCommerce brands, stored as terms of the `product_brand` taxonomy.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i brand che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** brands matching the filters; there is no `per_page`/`page`.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=701
@@ -608,11 +758,8 @@ Query opzionale:
 ?parent_lk=4001
 ```
 
-- `name` esegue una ricerca per **nome esatto** del termine e accetta due forme:
-  - **stringa** (`?name=Ford`): ricerca nella lingua corrente della richiesta;
-  - **mappa lingua** (`?name[it]=Ford&name[en]=Ford`): ricerca ogni nome nel contesto della rispettiva lingua WPML e ne restituisce l'**unione**.
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** (rappresentante in lingua di default), con la mappa `translations`: nomi che sono traduzioni dello stesso termine → un solo oggetto; nomi di gruppi diversi → più oggetti. Stesso comportamento di `GET /woocommerce/products?name=`.
-- `parent_id` (WP term id) e `parent_lk` (local_key del parent) filtrano restituendo i **figli diretti** del parent indicato. `parent_lk` viene espanso a **tutte le traduzioni WPML** del parent (i figli vengono cercati sotto ognuna); la visibilità dei figli per lingua segue le stesse regole del listing normale. I due parametri sono **mutuamente esclusivi** (`400` se passati insieme); un `parent_lk` che non risolve nessun termine restituisce lista vuota. Precedenza: `id` > `local_key` > `slug` > `name` > `parent_*`.
+- `name`: exact-name search, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
+- `parent_id` / `parent_lk`: direct-children filters, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
 
 Response `200`:
 
@@ -636,11 +783,9 @@ Response `200`:
 ]
 ```
 
-- `translations` e' presente in tutte le response (singolo/lista/ricerca); senza WPML attivo e' una mappa vuota.
-
 ### POST `/woocommerce/brands`
 
-Crea o aggiorna brand WooCommerce. L'endpoint assicura la tassonomia `product_brand` per il post type `product` e poi usa lo stesso payload dei termini (`POST /terms`).
+Creates or updates WooCommerce brands. The endpoint makes sure the `product_brand` taxonomy exists for the `product` post type, then uses the same payload as the terms endpoint (`POST /terms`).
 
 Body:
 
@@ -670,18 +815,22 @@ Body:
 ]
 ```
 
-Comportamento:
+Behaviour:
 
-- se `product_brand` non esiste, viene creata come tassonomia ACF **gerarchica** agganciata a `product`
-- `name`, `slug`, `description`, `local_key` e `acf_fields` hanno lo stesso comportamento dei termini
-- `parent` e' opzionale; se presente deve essere `null` oppure il `local_key` (intero o stringa) del brand parent, ad esempio `"parent": 4001`
-- `parent` non accetta `0` o ID WordPress numerici; per creare un brand di primo livello usare `null` oppure omettere il campo
-- il brand parent deve esistere gia' o essere stato creato prima nello stesso batch
-- con WPML attivo, quando `parent` e' un `local_key`, l'endpoint prova a usare la traduzione del brand parent nella lingua del brand creato o aggiornato
-- `thumbnail` puo' essere un URL remoto da importare nella Media Library, oppure l'`attachment_id` (intero) di un file gia' presente in Media Library (es. caricato con `POST /media`); il valore risolto viene salvato come `thumbnail_id`; se `null`, rimuove la thumbnail; se omesso, lascia invariata quella esistente
-- con WPML attivo, le mappe lingua creano o aggiornano le traduzioni del brand
-- se il payload contiene mappe lingua ma WPML non e' installato o attivo, ritorna `500 wpml_required`
-- il brand si assegna ai prodotti tramite il campo `brand` di `POST /woocommerce/products`, usando il `local_key` (intero o stringa) del brand, ad esempio `"brand": 4002`
+- If `product_brand` does not exist, it is created as a **hierarchical** ACF taxonomy attached to `product`.
+- `name`, `slug`, `description`, `local_key` and `acf_fields` behave as in [`POST /terms`](#post-terms).
+- **`parent`** (optional):
+  - must be `null` or the `local_key` (integer or string) of the parent brand, for example `"parent": 4001`;
+  - does not accept `0` or numeric WordPress IDs. For a top-level brand, use `null` or omit the field;
+  - the parent brand must already exist, or be created earlier in the same batch;
+  - with WPML, the endpoint tries to use the parent's translation in the language of the brand being created or updated.
+- **`thumbnail`**:
+  - a remote URL to import into the Media Library, or the `attachment_id` (integer) of a file already in the Media Library (e.g. uploaded with `POST /media`);
+  - the resolved value is saved as `thumbnail_id`;
+  - `null` removes the thumbnail; omitting it leaves the existing one unchanged.
+- With WPML, language maps create or update the brand's translations.
+- If the payload contains language maps but WPML is not installed or active, the request returns `500 wpml_required`.
+- Brands are assigned to products through the `brand` field of `POST /woocommerce/products`, using the brand's `local_key` (integer or string), for example `"brand": 4002`.
 
 Response `200`:
 
@@ -689,18 +838,18 @@ Response `200`:
 [701]
 ```
 
-Errori principali:
+Main errors:
 
 - `400 invalid_param`
 - `404 not_found`
 - `409 duplicate_local_key`
 - `500 woocommerce_required`
-- `500 wpml_required` se il payload contiene valori multilingua ma WPML non e' installato o attivo
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
 - `500 request_failed`
 
 ### DELETE `/woocommerce/brands`
 
-Elimina brand WooCommerce per `local_key`. Se piu' termini condividono lo stesso `local_key` (es. traduzioni WPML), vengono eliminati tutti.
+Deletes WooCommerce brands by `local_key`. If several terms share the same `local_key` (e.g. WPML translations), all of them are deleted.
 
 Body:
 
@@ -708,7 +857,7 @@ Body:
 [4002]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -722,11 +871,11 @@ null
 
 ### GET `/woocommerce/attributes`
 
-Restituisce gli attributi prodotto globali WooCommerce, cioe' le definizioni che generano tassonomie `pa_*` come `pa_color` o `pa_size`.
+Returns global WooCommerce product attributes, i.e. the definitions that generate `pa_*` taxonomies such as `pa_color` or `pa_size`.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** gli attributi che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** attributes matching the filters; there is no `per_page`/`page`.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=31
@@ -736,7 +885,8 @@ Query opzionale:
 ?name=Color
 ```
 
-- `name` esegue una ricerca per **nome esatto** dell'attributo (il label, es. `Color`, case-sensitive) e restituisce tutti gli attributi con quel nome. Gli attributi globali non sono traducibili con WPML, quindi non c'e' grouping per traduzione: il campo `translations` e' presente per coerenza di struttura ma sempre vuoto (`{}`).
+- `name` performs an **exact-name** search on the attribute label (e.g. `Color`, case-sensitive) and returns every attribute with that name.
+- Global attributes cannot be translated with WPML, so there is no translation grouping. The `translations` field is present for a consistent shape but is always empty (`{}`).
 
 Response `200`:
 
@@ -759,7 +909,7 @@ Response `200`:
 
 ### POST `/woocommerce/attributes`
 
-Crea o aggiorna attributi prodotto globali WooCommerce in batch.
+Creates or updates global WooCommerce product attributes in batch.
 
 Body:
 
@@ -776,25 +926,28 @@ Body:
 ]
 ```
 
-Campi:
+| Field | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `id` | no | | If present, updates **that** attribute (takes precedence, as in `POST /woocommerce/products`). `local_key` is then not required. |
+| `local_key` | only if `id` is absent | | |
+| `name` | on create | | |
+| `slug` | no | | Can be sent as `color` or `pa_color`. |
+| `type` | no | WooCommerce default `select` | |
+| `order_by` | no | WooCommerce default `menu_order` | |
+| `has_archives` | no | `false` | |
 
-- `id` opzionale, se presente aggiorna **quell'**attributo (ha la precedenza, come in `POST /woocommerce/products`); in questo caso `local_key` non e' obbligatorio
-- `local_key` obbligatorio **solo se `id` non e' presente**
-- `name` richiesto in creazione
-- `slug` opzionale; puo' essere inviato come `color` o `pa_color`
-- `type` opzionale, default WooCommerce `select`
-- `order_by` opzionale, default WooCommerce `menu_order`
-- `has_archives` opzionale, default `false`
+Resolution, in order of precedence:
 
-Comportamento (in ordine di precedenza):
+1. If `id` is present, that attribute is updated (`404` if the ID does not exist). If `local_key` is also sent, it is (re)associated with that attribute.
+2. Otherwise, if the `local_key` already exists, the attribute associated with it is updated.
+3. Otherwise, if `slug` matches an existing attribute, that attribute is updated.
+4. Otherwise a new attribute is created.
 
-- se `id` e' presente, viene aggiornato quell'attributo (404 se l'id non esiste); se passi anche `local_key` viene (ri)associato a quell'attributo
-- altrimenti, se `local_key` esiste gia', viene aggiornato l'attributo associato a quel `local_key`
-- altrimenti, se `slug` corrisponde a un attributo esistente, viene aggiornato quell'attributo
-- altrimenti viene creato un nuovo attributo
-- la response contiene gli ID degli attributi creati o aggiornati
-- WooCommerce limita lo slug non prefissato a 28 caratteri e rifiuta nomi riservati o gia' usati
-- i valori dell'attributo si gestiscono come termini della tassonomia generata, ad esempio `pa_color`
+Other notes:
+
+- The response contains the IDs of the created or updated attributes.
+- WooCommerce limits the unprefixed slug to 28 characters and rejects reserved or already used names.
+- Attribute values are managed as terms of the generated taxonomy, for example `pa_color` (see [attribute terms](#get-woocommerceattributesattributeterms)).
 
 Response `200`:
 
@@ -802,7 +955,7 @@ Response `200`:
 [31]
 ```
 
-Errori principali:
+Main errors:
 
 - `400 invalid_param`
 - `400 invalid_product_attribute_slug_too_long`
@@ -815,7 +968,7 @@ Errori principali:
 
 ### DELETE `/woocommerce/attributes`
 
-Elimina attributi prodotto globali WooCommerce per `local_key`. La cancellazione usa `wc_delete_attribute()` e rimuove anche i termini della tassonomia attributo quando la tassonomia e' registrata.
+Deletes global WooCommerce product attributes by `local_key`. Deletion uses `wc_delete_attribute()`, which also removes the terms of the attribute taxonomy when the taxonomy is registered.
 
 Body:
 
@@ -823,7 +976,7 @@ Body:
 [5001]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -837,17 +990,17 @@ null
 
 ### GET `/woocommerce/attributes/{attribute}/terms`
 
-Restituisce i valori/termini di un attributo prodotto globale WooCommerce.
+Returns the values (terms) of a global WooCommerce product attribute.
 
-`{attribute}` puo' essere:
+`{attribute}` can be:
 
-- ID attributo, ad esempio `31`
-- slug non prefissato, ad esempio `color`
-- tassonomia attributo, ad esempio `pa_color`
+- the attribute ID, for example `31`;
+- the unprefixed slug, for example `color`;
+- the attribute taxonomy, for example `pa_color`.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i termini dell'attributo che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** terms of the attribute matching the filters; there is no `per_page`/`page`.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=101
@@ -857,10 +1010,7 @@ Query opzionale:
 ?name[it]=Rosso&name[en]=Red
 ```
 
-- `name` esegue una ricerca per **nome esatto** del termine e accetta due forme:
-  - **stringa** (`?name=Red`): ricerca nella lingua corrente della richiesta;
-  - **mappa lingua** (`?name[it]=Rosso&name[en]=Red`): ricerca ogni nome nel contesto della rispettiva lingua WPML e ne restituisce l'**unione**.
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** (rappresentante in lingua di default), con la mappa `translations`: nomi che sono traduzioni dello stesso termine → un solo oggetto; nomi di gruppi diversi → più oggetti. Stesso comportamento di `GET /woocommerce/products?name=`.
+- `name`: exact-name search, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
 
 Response `200`:
 
@@ -880,7 +1030,7 @@ Response `200`:
 
 ### POST `/woocommerce/attributes/{attribute}/terms`
 
-Crea o aggiorna valori/termini per un attributo prodotto globale WooCommerce.
+Creates or updates the values (terms) of a global WooCommerce product attribute.
 
 Body:
 
@@ -901,16 +1051,16 @@ Body:
 ]
 ```
 
-Comportamento:
+Behaviour:
 
-- `{attribute}` viene risolto nella tassonomia WooCommerce `pa_*`
-- `local_key` viene salvato come term meta `onpage_local_key`
-- se passi un `id` che **esiste**, viene aggiornato quel termine e il `local_key` indicato viene scritto su di esso e su tutte le sue traduzioni; un `id` **non esistente** (stale) viene ignorato e l'upsert e' guidato dal `local_key`
-- `name` e' obbligatorio in creazione e puo' essere una stringa o una mappa lingua WPML
-- se `name` e' una stringa e altri campi sono mappe lingua, lo stesso nome viene usato invariato per tutte le traduzioni; se manca uno `slug` per lingua, le traduzioni ricevono uno slug tecnico distinto
-- `slug`, `description` e `acf_fields` supportano mappe lingua WPML come gli altri termini
-- se la tassonomia attributo ha un field group ACF con campo `local_key`, il valore viene riallineato anche li'
-- la response contiene gli ID dei termini creati o aggiornati nella lingua base
+- `{attribute}` is resolved to the WooCommerce `pa_*` taxonomy.
+- `local_key` is saved as the `onpage_local_key` term meta.
+- If you send an `id` that **exists**, that term is updated, and the given `local_key` is written on it and on all its translations. An `id` that does **not** exist (stale) is ignored, and the upsert is driven by `local_key`.
+- `name` is required on create. It can be a string or a WPML language map.
+- If `name` is a string and other fields are language maps, the same name is used unchanged for every translation. If a per-language `slug` is missing, the translations get a distinct technical slug.
+- `slug`, `description` and `acf_fields` support WPML language maps, as for other terms.
+- If the attribute taxonomy has an ACF field group with a `local_key` field, the value is synced there too.
+- The response contains the IDs of the created or updated terms in the base language.
 
 Response `200`:
 
@@ -920,7 +1070,7 @@ Response `200`:
 
 ### DELETE `/woocommerce/attributes/{attribute}/terms`
 
-Elimina termini di un attributo prodotto globale WooCommerce per `local_key`.
+Deletes terms of a global WooCommerce product attribute by `local_key`.
 
 Body:
 
@@ -928,7 +1078,7 @@ Body:
 [5101]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -942,11 +1092,11 @@ null
 
 ### GET `/woocommerce/categories`
 
-Restituisce le categorie prodotto WooCommerce salvate nella tassonomia `product_cat`.
+Returns WooCommerce product categories, stored in the `product_cat` taxonomy.
 
-**Paginazione:** no — la risposta contiene sempre **tutte** le categorie che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** categories matching the filters; there is no `per_page`/`page`.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=12
@@ -958,11 +1108,8 @@ Query opzionale:
 ?parent_lk=6000
 ```
 
-- `name` esegue una ricerca per **nome esatto** del termine e accetta due forme:
-  - **stringa** (`?name=Chairs`): ricerca nella lingua corrente della richiesta;
-  - **mappa lingua** (`?name[it]=Sedie&name[en]=Chairs`): ricerca ogni nome nel contesto della rispettiva lingua WPML e ne restituisce l'**unione**.
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** (rappresentante in lingua di default), con la mappa `translations`: nomi che sono traduzioni dello stesso termine → un solo oggetto; nomi di gruppi diversi → più oggetti. Stesso comportamento di `GET /woocommerce/products?name=`.
-- `parent_id` (WP term id) e `parent_lk` (local_key del parent) filtrano restituendo i **figli diretti** del parent indicato. `parent_lk` viene espanso a **tutte le traduzioni WPML** del parent (i figli vengono cercati sotto ognuna); la visibilità dei figli per lingua segue le stesse regole del listing normale. I due parametri sono **mutuamente esclusivi** (`400` se passati insieme); un `parent_lk` che non risolve nessun termine restituisce lista vuota. Precedenza: `id` > `local_key` > `slug` > `name` > `parent_*`.
+- `name`: exact-name search, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
+- `parent_id` / `parent_lk`: direct-children filters, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
 
 Response `200`:
 
@@ -986,11 +1133,9 @@ Response `200`:
 ]
 ```
 
-- `translations` e' presente in tutte le response (singolo/lista/ricerca); senza WPML attivo e' una mappa vuota.
-
 ### POST `/woocommerce/categories`
 
-Crea o aggiorna categorie prodotto WooCommerce usando lo stesso payload dei termini (`POST /terms`).
+Creates or updates WooCommerce product categories, using the same payload as the terms endpoint (`POST /terms`).
 
 Body:
 
@@ -1016,21 +1161,29 @@ Body:
 ]
 ```
 
-Comportamento:
+Behaviour:
 
-- `name`, `slug`, `description`, `local_key` e `acf_fields` hanno lo stesso comportamento dei termini
-- se `name` e' una stringa e altri campi sono mappe lingua, lo stesso nome categoria viene usato invariato per tutte le traduzioni; se manca uno `slug` per lingua, le traduzioni ricevono uno slug tecnico distinto
-- `parent` e' opzionale; se presente deve essere `null` oppure il `local_key` (intero o stringa) della categoria parent, ad esempio `"parent": 6000`
-- `parent` non accetta `0` o ID WordPress numerici; per creare una categoria di primo livello usare `null` oppure omettere il campo
-- la categoria parent deve esistere gia' o essere stata creata prima nello stesso batch
-- se `local_key` esiste gia', l'endpoint aggiorna in-place le categorie `product_cat` e le traduzioni WPML con quel `local_key`, preservando le associazioni prodotto-categoria; se `local_key` non esiste, crea categorie nuove per le lingue presenti
-- per `/woocommerce/categories`, se passi un `id` che **esiste** viene aggiornata quella categoria e il `local_key` indicato viene scritto su di essa e su tutte le sue traduzioni; un `id` **non esistente** (stale) viene ignorato e l'upsert e' guidato dal `local_key`
-- `thumbnail` puo' essere un URL remoto da importare nella Media Library, oppure l'`attachment_id` (intero) di un file gia' presente in Media Library (es. caricato con `POST /media`); il valore risolto viene salvato come `thumbnail_id`; se `null`, rimuove la thumbnail; se omesso, lascia invariata quella esistente
-- con WPML attivo, le mappe lingua creano o aggiornano le traduzioni della categoria
-- con WPML attivo, quando `parent` e' un `local_key`, l'endpoint prova a usare la traduzione della categoria parent nella lingua della categoria creata o aggiornata
-- una categoria con `local_key` diverso non viene toccata: se ha lo **stesso nome sotto lo stesso parent** la collisione fallisce con `term_exists` (vedi [Conflitto `term_exists` sui termini](#conflitto-term_exists-sui-termini)); se invece è sotto un **parent diverso**, WordPress crea un nuovo termine con uno slug de-duplicato (`silicone-acetico` → `silicone-acetico-2`)
-- se il payload contiene mappe lingua ma WPML non e' installato o attivo, ritorna `500 wpml_required`
-- le categorie si assegnano ai prodotti tramite il campo `categories` di `POST /woocommerce/products`, usando il `local_key` (intero o stringa) della categoria, ad esempio `"categories": [6001]`
+- `name`, `slug`, `description`, `local_key` and `acf_fields` behave as in [`POST /terms`](#post-terms).
+- If `name` is a string and other fields are language maps, the same category name is used unchanged for every translation. If a per-language `slug` is missing, the translations get a distinct technical slug.
+- **`parent`** (optional):
+  - must be `null` or the `local_key` (integer or string) of the parent category, for example `"parent": 6000`;
+  - does not accept `0` or numeric WordPress IDs. For a top-level category, use `null` or omit the field;
+  - the parent category must already exist, or be created earlier in the same batch;
+  - with WPML, the endpoint tries to use the parent's translation in the language of the category being created or updated.
+- **Resolution:**
+  - If you send an `id` that **exists**, that category is updated, and the given `local_key` is written on it and on all its translations. An `id` that does **not** exist (stale) is ignored, and the upsert is driven by `local_key`.
+  - If the `local_key` already exists, the endpoint updates in place the `product_cat` categories and WPML translations with that `local_key`, preserving product-category associations.
+  - If the `local_key` does not exist, it creates new categories for the languages in the payload.
+- **`thumbnail`**:
+  - a remote URL to import into the Media Library, or the `attachment_id` (integer) of a file already in the Media Library (e.g. uploaded with `POST /media`);
+  - the resolved value is saved as `thumbnail_id`;
+  - `null` removes the thumbnail; omitting it leaves the existing one unchanged.
+- With WPML, language maps create or update the category's translations.
+- A category with a different `local_key` is never modified:
+  - if it has the **same name under the same parent**, the collision is handled as described in [`term_exists` conflicts on terms](#term_exists-conflicts-on-terms);
+  - if it is under a **different parent**, WordPress creates a new term with a de-duplicated slug (`silicone-acetico` → `silicone-acetico-2`).
+- If the payload contains language maps but WPML is not installed or active, the request returns `500 wpml_required`.
+- Categories are assigned to products through the `categories` field of `POST /woocommerce/products`, using the category's `local_key` (integer or string), for example `"categories": [6001]`.
 
 Response `200`:
 
@@ -1040,7 +1193,7 @@ Response `200`:
 
 ### DELETE `/woocommerce/categories`
 
-Elimina categorie prodotto WooCommerce per `local_key`. Se piu' termini condividono lo stesso `local_key` (es. traduzioni WPML), vengono eliminati tutti.
+Deletes WooCommerce product categories by `local_key`. If several terms share the same `local_key` (e.g. WPML translations), all of them are deleted.
 
 Body:
 
@@ -1048,7 +1201,7 @@ Body:
 [6001]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -1062,11 +1215,11 @@ null
 
 ### GET `/woocommerce/tags`
 
-Restituisce i tag prodotto WooCommerce salvati nella tassonomia `product_tag`.
+Returns WooCommerce product tags, stored in the `product_tag` taxonomy.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i tag che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** tags matching the filters; there is no `per_page`/`page`.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=22
@@ -1076,10 +1229,7 @@ Query opzionale:
 ?name[it]=In evidenza&name[en]=Featured
 ```
 
-- `name` esegue una ricerca per **nome esatto** del termine e accetta due forme:
-  - **stringa** (`?name=Featured`): ricerca nella lingua corrente della richiesta;
-  - **mappa lingua** (`?name[it]=In evidenza&name[en]=Featured`): ricerca ogni nome nel contesto della rispettiva lingua WPML e ne restituisce l'**unione**.
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** (rappresentante in lingua di default), con la mappa `translations`: nomi che sono traduzioni dello stesso termine → un solo oggetto; nomi di gruppi diversi → più oggetti. Stesso comportamento di `GET /woocommerce/products?name=`.
+- `name`: exact-name search, see [Shared behaviour](#shared-behaviour-of-term-list-endpoints).
 
 Response `200`:
 
@@ -1103,11 +1253,9 @@ Response `200`:
 ]
 ```
 
-- `translations` e' presente in tutte le response (singolo/lista/ricerca); senza WPML attivo e' una mappa vuota.
-
 ### POST `/woocommerce/tags`
 
-Crea o aggiorna tag prodotto WooCommerce usando lo stesso payload dei termini (`POST /terms`).
+Creates or updates WooCommerce product tags, using the same payload as the terms endpoint (`POST /terms`).
 
 Body:
 
@@ -1128,17 +1276,19 @@ Body:
 ]
 ```
 
-Comportamento:
+Behaviour:
 
-- `name`, `slug`, `description`, `local_key` e `acf_fields` hanno lo stesso comportamento dei termini
-- se `name` e' una stringa e altri campi sono mappe lingua, lo stesso nome tag viene usato invariato per tutte le traduzioni; se manca uno `slug` per lingua, le traduzioni ricevono uno slug tecnico distinto
-- ogni elemento del body deve essere un oggetto tag; non sono accettate stringhe semplici o mappe lingua-valore come elemento top-level
-- se `local_key` esiste gia', l'endpoint aggiorna in-place i tag `product_tag` e le traduzioni WPML con quel `local_key`, preservando le associazioni prodotto-tag; se `local_key` non esiste, crea tag nuovi per le lingue presenti
-- per `/woocommerce/tags`, se passi un `id` che **esiste** viene aggiornato quel tag e il `local_key` indicato viene scritto su di esso e su tutte le sue traduzioni; un `id` **non esistente** (stale) viene ignorato e l'upsert e' guidato dal `local_key`
-- con WPML attivo, le mappe lingua creano o aggiornano le traduzioni del tag
-- se il payload contiene mappe lingua ma WPML non e' installato o attivo, ritorna `500 wpml_required`
-- `name` e `slug` possono essere mappe lingua-valore dentro l'oggetto tag, ad esempio `{ "en": "petrol", "it": "benzina" }`
-- i tag si assegnano ai prodotti tramite il campo `tags` di `POST /woocommerce/products`, usando il `local_key` (intero o stringa) del tag, ad esempio `"tags": [7001]`
+- `name`, `slug`, `description`, `local_key` and `acf_fields` behave as in [`POST /terms`](#post-terms).
+- Each body element must be a tag object. Plain strings or language-value maps are not accepted as top-level elements.
+- `name` and `slug` can be language-value maps inside the tag object, for example `{ "en": "petrol", "it": "benzina" }`.
+- If `name` is a string and other fields are language maps, the same tag name is used unchanged for every translation. If a per-language `slug` is missing, the translations get a distinct technical slug.
+- **Resolution:**
+  - If you send an `id` that **exists**, that tag is updated, and the given `local_key` is written on it and on all its translations. An `id` that does **not** exist (stale) is ignored, and the upsert is driven by `local_key`.
+  - If the `local_key` already exists, the endpoint updates in place the `product_tag` tags and WPML translations with that `local_key`, preserving product-tag associations.
+  - If the `local_key` does not exist, it creates new tags for the languages in the payload.
+- With WPML, language maps create or update the tag's translations.
+- If the payload contains language maps but WPML is not installed or active, the request returns `500 wpml_required`.
+- Tags are assigned to products through the `tags` field of `POST /woocommerce/products`, using the tag's `local_key` (integer or string), for example `"tags": [7001]`.
 
 Response `200`:
 
@@ -1148,7 +1298,7 @@ Response `200`:
 
 ### DELETE `/woocommerce/tags`
 
-Elimina tag prodotto WooCommerce per `local_key`. Se piu' termini condividono lo stesso `local_key` (es. traduzioni WPML), vengono eliminati tutti.
+Deletes WooCommerce product tags by `local_key`. If several terms share the same `local_key` (e.g. WPML translations), all of them are deleted.
 
 Body:
 
@@ -1156,7 +1306,7 @@ Body:
 [7001]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -1170,11 +1320,11 @@ null
 
 ### GET `/woocommerce/products`
 
-Restituisce prodotti WooCommerce. Senza query restituisce tutti i prodotti.
+Returns WooCommerce products. Without a query, it returns every product.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i prodotti che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`. Su cataloghi molto grandi la risposta puo' essere pesante.
+**Pagination:** none. The response always contains **all** products matching the filters; there is no `per_page`/`page`. On very large catalogs the response can be heavy.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=501
@@ -1183,15 +1333,15 @@ Query opzionale:
 ?name[it]=Sedia Rossa&name[en]=Red Chair
 ```
 
-- `id` e `local_key` restituiscono il singolo prodotto corrispondente. Poiche' tutte le traduzioni WPML condividono la `local_key`, `?local_key=` restituisce il prodotto in **lingua di default** del gruppo (stesso criterio di rappresentante usato da `?name=`), con gli altri id nella mappa `translations`.
-- `name` esegue una ricerca per **titolo esatto**. I risultati sono raggruppati per gruppo di traduzione: viene restituito **un solo oggetto per gruppo** (rappresentante in lingua di default quando disponibile), e la mappa `translations` contiene tutti gli id multilang.
-- `name` accetta due forme:
-  - **stringa** (`?name=Red Chair`): ricerca il titolo nella lingua corrente della richiesta.
-  - **mappa lingua** (`?name[it]=Sedia Rossa&name[en]=Red Chair`): ricerca ogni titolo nel contesto della rispettiva lingua WPML e restituisce **l'unione** dei risultati, deduplicati per gruppo di traduzione.
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** tra i match:
-  - se i valori passati sono le traduzioni dello **stesso** prodotto → **un solo oggetto** (con tutte le lingue nella mappa `translations`);
-  - se i valori corrispondono a prodotti di **gruppi diversi** → **più oggetti** (uno per gruppo);
-  - una lingua il cui titolo non matcha nulla non contribuisce risultati (nessun errore).
+- `id` and `local_key` return the single matching product.
+- All WPML translations share the same `local_key`, so `?local_key=` returns the product in the group's **default language** (the same representative used by `?name=`). The other IDs are in the `translations` map.
+- `name` performs an **exact-title** search. It accepts two forms:
+  - **string** (`?name=Red Chair`): searches the title in the current language of the request;
+  - **language map** (`?name[it]=Sedia Rossa&name[en]=Red Chair`): searches each title in the context of its WPML language and returns the **union** of the results, de-duplicated by translation group.
+- Results are grouped by translation group. The response is **always a list** with **one object per distinct translation group** among the matches (the default-language product is the representative when available). The `translations` map contains all language IDs.
+  - If the values are translations of the **same** product → **one object**, with every language in `translations`.
+  - If the values match products from **different groups** → **several objects**, one per group.
+  - A language whose title matches nothing contributes no results (no error).
 
 Response `200`:
 
@@ -1235,15 +1385,15 @@ Response `200`:
 ]
 ```
 
-Note sulla risposta:
+Response notes:
 
-- `acf_fields` contiene i valori risolti da `get_fields()`: i repeater vengono restituiti nativamente come liste di oggetti (uno per riga). I sub-field `image`/`file` sono attachment ID o array a seconda del `return_format` impostato sul field group
-- i campi ACF di tipo `tab` non compaiono in `acf_fields` (sono separatori UI senza valore)
-- `translations` mappa ogni codice lingua all'ID del prodotto in quella lingua (gruppo di traduzione WPML). Senza WPML attivo la mappa puo' essere vuota. L'`id` di primo livello e' quello del rappresentante restituito
+- `acf_fields` holds the values resolved by `get_fields()`. Repeaters are returned natively as lists of objects (one per row). `image`/`file` sub-fields are attachment IDs or arrays, depending on the `return_format` set on the field group.
+- ACF `tab` fields do not appear in `acf_fields` (they are UI separators with no value).
+- `translations` maps each language code to the product ID in that language (WPML translation group). Without WPML the map may be empty. The top-level `id` is the ID of the returned representative.
 
 ### POST `/woocommerce/products`
 
-Crea o aggiorna prodotti WooCommerce usando un payload specifico per i prodotti.
+Creates or updates WooCommerce products, using a product-specific payload.
 
 Body:
 
@@ -1342,55 +1492,107 @@ Body:
 ]
 ```
 
-Comportamento:
+#### Identity and resolution
 
-- `local_key` e `name` sono obbligatori; `name` puo' essere una stringa o una mappa lingua WPML
-- se `name` e' una stringa, lo stesso nome viene usato invariato per tutte le traduzioni create da altri campi multilingua; per nomi diversi per lingua, usare una mappa WPML
-- se l'elemento contiene `id`, aggiorna il prodotto esistente; se manca `id` ma `local_key` esiste gia', aggiorna quel prodotto; altrimenti crea un prodotto WooCommerce
-- `long_description` imposta la descrizione lunga WooCommerce del prodotto; puo' essere una stringa o una mappa lingua WPML
-- `short_description` imposta la descrizione breve WooCommerce del prodotto; puo' essere una stringa o una mappa lingua WPML
-- `long_description` e `short_description` vanno passati come campi top-level del prodotto, non dentro `props` o `acf_fields`
-- per compatibilita', `content` e `description` sono ancora accettati come alias di `long_description` e `short_description`; se sono presenti entrambi, prevalgono `long_description` e `short_description`
-- `status` e' opzionale e vale `publish` se omesso
-- `slug` e' opzionale e personalizza il permalink del prodotto (`post_name`); il valore viene sanificato con `sanitize_title`. Se omesso, lo slug resta invariato (in creazione WordPress lo genera dal titolo, in update non viene toccato); cambiare solo `name` non modifica il permalink. Puo' essere una stringa o una mappa lingua WPML, ad esempio `{ "it": "sedia-rossa", "en": "red-chair" }`; se passi una stringa singola con piu' traduzioni, WordPress rende gli slug unici aggiungendo un suffisso. Uno `slug` vuoto o `null` viene ignorato (non azzera lo slug esistente)
-- `update_slug` e' opzionale, booleano, default `false`. Controlla quando lo `slug` inviato viene applicato: con `false` lo slug viene impostato **solo in creazione** e gli update successivi non lo toccano (preserva i permalink esistenti); con `true` lo slug viene riscritto **anche in update**. Ha effetto solo se `slug` e' presente nel payload
-- `local_key` viene salvato come post meta `onpage_local_key` e deve essere unico fra i prodotti
-- la `local_key` viene scritta su **tutte** le lingue del gruppo di traduzione WPML (identifica lo stesso elemento On Page®, non una singola lingua), e viene scritta prima del lavoro lento dell'import (media, ACF, termini) perche' un'interruzione non lasci traduzioni senza chiave
-- se altri prodotti fuori dal gruppo portano ancora la stessa `local_key` (residui di un import interrotto o di due import concorrenti sullo stesso elemento), l'update li riconcilia invece di rifiutare la richiesta: chi occupa una lingua ancora libera viene agganciato al gruppo, chi duplica una lingua gia' presente viene eliminato. `409 duplicate_local_key` resta solo quando la richiesta indica un `id` esplicito e quella `local_key` appartiene a un altro prodotto
-- i campi WooCommerce nativi vanno passati dentro `props`: `sku`, `regular_price`, `sale_price`, `price`, `manage_stock`, `stock_quantity`, `stock_status`, `backorders`, `sold_individually`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `featured`, `catalog_visibility`, `tax_status`, `tax_class`, `purchase_note`, `menu_order`, `reviews_allowed`, `product_type`
-- `props.product_type` puo' essere `simple` oppure `variable`; se omesso, in creazione vale `simple`
-- `image` puo' essere un URL remoto da importare e assegnare come immagine principale del prodotto, oppure l'`attachment_id` (intero JSON) di un file gia' presente in Media Library (es. caricato con `POST /media`); `image: null` rimuove l'immagine; se omesso, lascia invariata quella esistente
-- `image` puo' essere una mappa lingua WPML, ad esempio `{ "en": "https://cdn.example.com/en/chair.jpg", "it": "https://cdn.example.com/it/chair.jpg" }`; ogni traduzione riceve la propria immagine
-- `gallery` sostituisce l'intera galleria immagini del prodotto con la lista inviata, i cui elementi possono essere URL remoti e/o `attachment_id`; ogni URL viene importato/riusato in Media Library con le stesse regole di `image` (gli URL gia' importati riusano l'attachment esistente, senza duplicati nemmeno all'interno della stessa lista), mentre un `attachment_id` viene assegnato direttamente senza download; l'ordine della lista determina l'ordine in galleria; se omesso, la galleria resta invariata, mentre `gallery: []` o `gallery: null` la svuota
-- `gallery` puo' essere una mappa lingua WPML di liste, ad esempio `{ "en": ["https://cdn.example.com/en/1.jpg"], "it": ["https://cdn.example.com/it/1.jpg"] }`; ogni traduzione riceve la propria galleria. Il valore risolto per ogni lingua deve essere una lista di URL (un oggetto o una stringa singola ritornano `400 invalid_param`)
-- `attributes` sostituisce l'intero set di attributi custom del prodotto con quelli inviati nel payload; il valore puo' essere stringa/numero, lista di valori o mappa lingua WPML
-- quando `product_type` e' `variable`, gli `attributes` inviati vengono marcati come attributi usabili dalle variazioni (`variation=true`)
-- se `attributes` e' omesso, gli attributi esistenti non vengono modificati; se vale `null` o `{}`, tutti gli attributi custom vengono rimossi
-- dentro `attributes`, una chiave con valore `null` o lista vuota viene ignorata nel nuovo set finale
-- `acf_fields` resta dedicato ai campi ACF del prodotto; le chiavi devono essere nomi tecnici ACF o field key ACF esistenti sul field group del prodotto (campi non esistenti ritornano `400 invalid_param`). Per la semantica completa dei tipi (`tab`, `repeater`, `image`/`file` URL → `attachment_id`, ecc.) vedi la sezione [Gestione `acf_fields`](#gestione-acf_fields)
-- `downloads` gestisce i file scaricabili nativi WooCommerce, separati da ACF; puo' essere una lista di oggetti oppure `null`
-- ogni elemento di `downloads` accetta `url` oppure `file` con un URL remoto valido, oppure l'`attachment_id` (intero JSON) di un file gia' presente in Media Library (es. caricato con `POST /media`); il valore puo' essere `null` o stringa vuota per saltare quel download nella lingua risolta; `name` e `id` sono opzionali
-- per i PDF prodotto Sigil usare `id` stabili: `scheda_tecnica` per la scheda tecnica generata da Publisher e `scheda_sicurezza` per la scheda di sicurezza caricata dal team prodotto
-- se `downloads.file` non punta gia' a un URL dentro `wp-content/uploads`, il file viene importato/riusato in Media Library e WooCommerce usera' l'URL locale importato (compatibile con le approved download directories)
-- se `downloads.file` e' un `attachment_id`, il plugin non scarica nulla: verifica solo che l'ID corrisponda a un attachment esistente e usa direttamente il suo URL locale
-- se l'URL remoto e' gia' stato importato, viene riusato l'attachment esistente senza riscaricare il file
-- se un PDF remoto cambia mantenendo lo stesso URL, passare `refresh: true` sul download per sostituire l'attachment in Media Library mantenendo lo stesso attachment ID quando possibile
-- i download gestiti da questo endpoint vengono collegati al prodotto parent in Media Library e mostrati pubblicamente nella pagina prodotto WooCommerce
-- se `downloads` contiene almeno un file valido, il prodotto viene marcato automaticamente come scaricabile (`downloadable=true`)
-- per prodotti `variable`, WooCommerce mostra i download nell'admin sulle singole variazioni: l'endpoint copia automaticamente i download del parent sulle variazioni esistenti
-- `downloads: []` o `downloads: null` rimuove tutti i file scaricabili WooCommerce del prodotto
-- `name`, `url` e `file` dentro `downloads` possono essere mappe lingua WPML; ogni traduzione riceve il proprio valore risolto e i valori `null` o vuoti vengono ignorati
-- `brand` assegna un singolo riferimento della tassonomia `product_brand`; il riferimento e' il `local_key` (intero o stringa) del brand — gli slug non sono supportati; `null` rimuove il brand se la tassonomia esiste
-- `categories` sostituisce l'intero set di categorie `product_cat` con i riferimenti inviati; ogni riferimento e' il `local_key` (intero o stringa) della categoria — gli slug non sono supportati
-- `tags` sostituisce l'intero set di tag `product_tag` con i riferimenti inviati; ogni riferimento e' il `local_key` (intero o stringa) del tag — gli slug non sono supportati
-- `categories` e `tags` possono essere liste di `local_key`, ad esempio `[6001]` o `[7001, 7002]`
-- `categories` e `tags` possono essere mappe lingua WPML, ad esempio `{ "en": 6011, "it": 6013 }`; per ogni traduzione del prodotto viene usato il `local_key` della lingua corrispondente (il `local_key` identifica comunque il gruppo di traduzione, quindi tipicamente basta un solo valore)
-- dentro una mappa lingua, ogni valore puo' essere un `local_key` singolo, una lista di `local_key` o `null` per non assegnare termini in quella lingua
-- se `brand`, `categories` o `tags` sono omessi, l'endpoint non modifica quella tassonomia; `brand: null` rimuove il brand, mentre `categories: []`, `categories: null`, `tags: []` o `tags: null` rimuovono categorie o tag
-- `terms` e' opzionale e permette di assegnare termini di **qualsiasi tassonomia** registrata sul prodotto (incluse tassonomie ACF/custom come `tipologia`), oltre a brand/categorie/tag. E' un oggetto `{"<taxonomy_slug>": <riferimenti>}` dove i riferimenti seguono le stesse regole di `categories`/`tags`: lista di `local_key` (interi positivi), valore singolo, mappa lingua WPML, oppure `null`/`[]` per svuotare quella tassonomia. Ogni tassonomia inviata sostituisce l'intero set assegnato. I riferimenti sono risolti per `local_key`, in qualsiasi tassonomia; gli slug non sono supportati. Se una tassonomia in `terms` coincide con `product_cat`/`product_tag`/`product_brand`, prevale il campo dedicato (`categories`/`tags`/`brand`) quando presente. Una tassonomia inesistente o un termine non trovato ritornano `404`
-- per creare varianti con `/woocommerce/variant-products`, il prodotto parent deve essere `variable` e deve avere attributi di variazione configurati
+- `local_key` and `name` are required.
+- Resolution: if the element contains `id`, the existing product is updated. If `id` is missing but the `local_key` already exists, that product is updated. Otherwise a new WooCommerce product is created.
+- `local_key` is saved as the `onpage_local_key` post meta and must be unique among products.
+- The `local_key` is written on **every** language of the WPML translation group (it identifies the same On Page® element, not a single language). It is written before the slow part of the import (media, ACF, terms), so an interruption never leaves translations without a key.
+- **Leftover duplicates.** Other products outside the group may still carry the same `local_key` (leftovers of an interrupted import, or of two concurrent imports of the same element). The update reconciles them instead of rejecting the request:
+  - a product occupying a language that is still free is attached to the group;
+  - a product duplicating a language already present is deleted.
+- `409 duplicate_local_key` is returned only when the request sends an explicit `id` and that `local_key` belongs to another product.
 
-Esempio categorie multilingua:
+#### Text fields and status
+
+- `name` can be a string or a WPML language map. If it is a string, the same name is used unchanged for every translation created by other multilingual fields. For different names per language, use a WPML map.
+- `long_description` sets the WooCommerce long description. It can be a string or a WPML language map.
+- `short_description` sets the WooCommerce short description. It can be a string or a WPML language map.
+- `long_description` and `short_description` are top-level product fields, not part of `props` or `acf_fields`.
+- For compatibility, `content` and `description` are still accepted as aliases of `long_description` and `short_description`. If both are present, `long_description` and `short_description` win.
+- `status` is optional; default `publish`.
+
+#### Slug
+
+- `slug` is optional and customizes the product permalink (`post_name`). The value is sanitized with `sanitize_title`.
+- If omitted, the slug stays as it is: on create WordPress generates it from the title, on update it is not touched. Changing only `name` does not change the permalink.
+- It can be a string or a WPML language map, for example `{ "it": "sedia-rossa", "en": "red-chair" }`. If you send a single string with several translations, WordPress makes the slugs unique by adding a suffix.
+- An empty or `null` `slug` is ignored (it does not reset the existing slug).
+- `update_slug` is optional, boolean, default `false`. It controls when the sent `slug` is applied:
+  - `false`: the slug is set **on create only**; later updates do not touch it (existing permalinks are preserved);
+  - `true`: the slug is rewritten **on update too**.
+  - It only has an effect when `slug` is in the payload.
+
+#### `props` (native WooCommerce fields)
+
+- Native WooCommerce fields go inside `props`: `sku`, `regular_price`, `sale_price`, `price`, `manage_stock`, `stock_quantity`, `stock_status`, `backorders`, `sold_individually`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `featured`, `catalog_visibility`, `tax_status`, `tax_class`, `purchase_note`, `menu_order`, `reviews_allowed`, `product_type`.
+- `props.product_type` can be `simple` or `variable`. If omitted on create, it defaults to `simple`.
+
+#### Images
+
+- **`image`**:
+  - a remote URL to import and set as the main product image, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`);
+  - `image: null` removes the image; omitting it leaves the existing one unchanged;
+  - it can be a WPML language map, for example `{ "en": "https://cdn.example.com/en/chair.jpg", "it": "https://cdn.example.com/it/chair.jpg" }`. Each translation receives its own image.
+- **`gallery`**:
+  - replaces the whole product gallery with the list sent. Items can be remote URLs and/or `attachment_id`s;
+  - each URL is imported/reused in the Media Library with the same rules as `image`: already imported URLs reuse the existing attachment, with no duplicates even within the same list;
+  - an `attachment_id` is assigned directly, without download;
+  - list order determines gallery order;
+  - if omitted, the gallery is unchanged; `gallery: []` or `gallery: null` empties it;
+  - it can be a WPML language map of lists, for example `{ "en": ["https://cdn.example.com/en/1.jpg"], "it": ["https://cdn.example.com/it/1.jpg"] }`. Each translation receives its own gallery. The resolved value for each language must be a list of URLs (an object or a single string returns `400 invalid_param`).
+
+#### `attributes`
+
+- Replaces the product's whole set of custom attributes with the ones sent. A value can be a string/number, a list of values or a WPML language map.
+- When `product_type` is `variable`, the attributes sent are flagged as usable by variations (`variation=true`).
+- If `attributes` is omitted, existing attributes are not changed. If it is `null` or `{}`, all custom attributes are removed.
+- Inside `attributes`, a key whose value is `null` or an empty list is left out of the new set.
+
+#### `acf_fields`
+
+- Reserved for the product's ACF fields. Keys must be ACF technical names or ACF field keys that exist on the product's field group. Unknown fields return `400 invalid_param`.
+- For the full type semantics (`tab`, `repeater`, `image`/`file` URL → `attachment_id`, etc.) see [Handling `acf_fields`](#handling-acf_fields).
+
+#### `downloads` (native WooCommerce downloadable files)
+
+- Manages native WooCommerce downloadable files, separate from ACF. It can be a list of objects or `null`.
+- Each item accepts `url` or `file` with a valid remote URL, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`). The value can be `null` or an empty string to skip that download in the resolved language. `name` and `id` are optional.
+- For Sigil product PDFs, use stable `id`s: `scheda_tecnica` for the technical datasheet generated by Publisher, and `scheda_sicurezza` for the safety datasheet uploaded by the product team.
+- If `downloads.file` does not already point to a URL inside `wp-content/uploads`, the file is imported/reused in the Media Library and WooCommerce uses the imported local URL (compatible with approved download directories).
+- If `downloads.file` is an `attachment_id`, nothing is downloaded: the plugin only checks that the ID matches an existing attachment and uses its local URL directly.
+- If the remote URL was already imported, the existing attachment is reused without downloading the file again.
+- If a remote PDF changes while keeping the same URL, pass `refresh: true` on the download to replace the attachment in the Media Library, keeping the same attachment ID when possible.
+- Downloads managed by this endpoint are attached to the parent product in the Media Library and shown publicly on the WooCommerce product page.
+- If `downloads` contains at least one valid file, the product is automatically flagged as downloadable (`downloadable=true`).
+- For `variable` products, WooCommerce shows downloads in the admin on individual variations: the endpoint automatically copies the parent's downloads to the existing variations.
+- `downloads: []` or `downloads: null` removes all WooCommerce downloadable files from the product.
+- `name`, `url` and `file` inside `downloads` can be WPML language maps. Each translation receives its own resolved value; `null` or empty values are ignored.
+
+#### Taxonomies: `brand`, `categories`, `tags`, `terms`
+
+- `brand` assigns a single reference from the `product_brand` taxonomy. The reference is the brand's `local_key` (integer or string); slugs are not supported. `null` removes the brand if the taxonomy exists.
+- `categories` replaces the whole set of `product_cat` categories with the references sent. Each reference is the category's `local_key` (integer or string); slugs are not supported.
+- `tags` replaces the whole set of `product_tag` tags with the references sent. Each reference is the tag's `local_key` (integer or string); slugs are not supported.
+- `categories` and `tags` can be lists of `local_key`s, for example `[6001]` or `[7001, 7002]`.
+- `categories` and `tags` can be WPML language maps, for example `{ "en": 6011, "it": 6013 }`. Each product translation uses the `local_key` of its language. Since the `local_key` identifies the whole translation group anyway, a single value is usually enough.
+- Inside a language map, each value can be a single `local_key`, a list of `local_key`s, or `null` to assign no terms in that language.
+- If `brand`, `categories` or `tags` are omitted, that taxonomy is not changed. `brand: null` removes the brand; `categories: []`, `categories: null`, `tags: []` or `tags: null` remove categories or tags.
+- **`terms`** (optional) assigns terms from **any taxonomy** registered on the product (including ACF/custom taxonomies such as `tipologia`), in addition to brand/categories/tags:
+  - it is an object `{"<taxonomy_slug>": <references>}`;
+  - references follow the same rules as `categories`/`tags`: a list of `local_key`s (positive integers), a single value, a WPML language map, or `null`/`[]` to empty that taxonomy;
+  - each taxonomy sent replaces its whole assigned set;
+  - references are resolved by `local_key`, in any taxonomy; slugs are not supported;
+  - if a taxonomy in `terms` is `product_cat`/`product_tag`/`product_brand`, the dedicated field (`categories`/`tags`/`brand`) wins when present;
+  - an unknown taxonomy or a term that is not found returns `404`.
+
+#### Variations
+
+- To create variations with `/woocommerce/variant-products`, the parent product must be `variable` and must have variation attributes configured.
+
+#### More examples
+
+Multilingual categories:
 
 ```json
 "categories": {
@@ -1399,7 +1601,7 @@ Esempio categorie multilingua:
 }
 ```
 
-Esempio categorie multiple per lingua:
+Several categories per language:
 
 ```json
 "categories": {
@@ -1408,7 +1610,7 @@ Esempio categorie multiple per lingua:
 }
 ```
 
-Esempio brand, categorie e tag per `local_key`:
+Brand, categories and tags by `local_key`:
 
 ```json
 "brand": 4002,
@@ -1416,7 +1618,7 @@ Esempio brand, categorie e tag per `local_key`:
 "tags": [7001, 7002]
 ```
 
-Esempio parent variable per variazioni:
+Variable parent for variations:
 
 ```json
 [
@@ -1440,19 +1642,29 @@ Response `200`:
 [501]
 ```
 
-Errori principali:
+Main errors:
 
-- `400 invalid_param` se il body non e' un array JSON valido, se manca `local_key`/`name`, se `name` non e' una stringa o mappa lingua valida, se `slug` non e' una stringa o mappa lingua valida, se `update_slug` non e' un booleano, se `props`/`attributes`/`acf_fields` non sono oggetti, se `acf_fields` contiene campi ACF non esistenti per il prodotto, se `downloads` non e' una lista valida, se `categories`/`tags` non sono liste o mappe lingua valide o se `terms` non e' un oggetto `taxonomy => riferimenti` valido
-- `404 not_found` se un prodotto o termine referenziato non esiste
-- `409 duplicate_local_key` solo con `id` esplicito nel payload, quando quella `local_key` appartiene a un prodotto diverso; senza `id` la chiave identifica il prodotto da aggiornare e gli eventuali residui vengono riconciliati
-- `409 duplicate_title` se il titolo esiste gia' su un oggetto **senza `local_key`**, fuori dal gruppo di traduzione di questo elemento; un oggetto che porta una `local_key` diversa e' un altro elemento On Page® e non fa conflitto, quindi due elementi omonimi si importano entrambi
-- `500 woocommerce_required` se WooCommerce non e' attivo
-- `500 wpml_required` se il payload contiene valori multilingua ma WPML non e' installato o attivo; il sistema non puo' gestire mappe lingua finche' WPML non viene installato e attivato
-- `500 request_failed` se WooCommerce o WordPress non riescono a salvare il prodotto
+- `400 invalid_param` when:
+  - the body is not a valid JSON array;
+  - `local_key`/`name` is missing;
+  - `name` is not a valid string or language map;
+  - `slug` is not a valid string or language map;
+  - `update_slug` is not a boolean;
+  - `props`/`attributes`/`acf_fields` are not objects;
+  - `acf_fields` contains ACF fields that do not exist for the product;
+  - `downloads` is not a valid list;
+  - `categories`/`tags` are not valid lists or language maps;
+  - `terms` is not a valid `taxonomy => references` object.
+- `404 not_found` if a referenced product or term does not exist.
+- `409 duplicate_local_key` only with an explicit `id` in the payload, when that `local_key` belongs to a different product. Without `id`, the key identifies the product to update and any leftovers are reconciled.
+- `409 duplicate_title` if the title already exists on an object **without a `local_key`**, outside this element's translation group. An object carrying a different `local_key` is another On Page® element and does not conflict, so two elements with the same title are both imported.
+- `500 woocommerce_required` if WooCommerce is not active.
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active. Language maps cannot be handled until WPML is installed and activated.
+- `500 request_failed` if WooCommerce or WordPress fail to save the product.
 
 ### DELETE `/woocommerce/products`
 
-Elimina prodotti WooCommerce per `local_key`. Se piu' prodotti condividono lo stesso `local_key` (traduzioni WPML), vengono eliminati **tutti** — l'intero gruppo di traduzione, come per i brand.
+Deletes WooCommerce products by `local_key`. If several products share the same `local_key` (WPML translations), **all** of them are deleted: the whole translation group, as for brands.
 
 Body:
 
@@ -1460,7 +1672,7 @@ Body:
 [1001]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -1474,11 +1686,11 @@ null
 
 ### GET `/woocommerce/variant-products`
 
-Restituisce variazioni WooCommerce (`product_variation`). Senza query restituisce tutte le variazioni.
+Returns WooCommerce variations (`product_variation`). Without a query, it returns every variation.
 
-**Paginazione:** no — la risposta contiene sempre **tutte** le variazioni che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`. Su cataloghi molto grandi la risposta puo' essere pesante.
+**Pagination:** none. The response always contains **all** variations matching the filters; there is no `per_page`/`page`. On very large catalogs the response can be heavy.
 
-Query opzionale:
+Optional query:
 
 ```text
 ?id=701
@@ -1486,6 +1698,8 @@ Query opzionale:
 ?parent_id=501
 ?parent=1002
 ```
+
+- `parent_id` is the WordPress ID of the parent product; `parent` is the parent product's `local_key`.
 
 Response `200`:
 
@@ -1520,7 +1734,7 @@ Response `200`:
 
 ### POST `/woocommerce/variant-products`
 
-Crea o aggiorna variazioni WooCommerce per un parent product `variable` gia' esistente.
+Creates or updates WooCommerce variations for an existing `variable` parent product.
 
 Body:
 
@@ -1551,32 +1765,54 @@ Body:
 ]
 ```
 
-Comportamento:
+#### Identity and parent
 
-- `local_key` e' obbligatorio e viene salvato come post meta `onpage_local_key` sulla variazione
-- bisogna passare `parent_id` oppure `parent`; se sono presenti entrambi devono riferirsi allo stesso prodotto
-- il parent deve essere un prodotto WooCommerce `variable`; puo' essere creato o convertito con `POST /woocommerce/products` usando `props.product_type: "variable"`
-- `attributes` e' obbligatorio in creazione e deve essere un oggetto non vuoto; in update puo' essere omesso per lasciare invariati gli attributi della variazione
-- ogni attributo inviato deve esistere sul parent ed essere marcato come attributo per variazioni (`variation=true`)
-- ogni attributo della variazione deve risolvere a una singola opzione scalare; sono accettate anche mappe lingua WPML come `{ "en": "Red", "it": "Rosso" }`, mentre liste come `["Petrol", "Hybrid"]` non sono valide per una singola variante
-- se un attributo della variazione contiene una mappa lingua ma WPML non e' installato o attivo, ritorna `500 wpml_required`
-- per attributi globali (`pa_color`) il valore puo' essere slug, nome o ID del termine; sulla variazione viene salvato lo slug termine WooCommerce
-- per attributi custom il valore deve essere una delle opzioni configurate sul parent
-- se l'elemento contiene `id`, aggiorna quella variazione; se manca `id` ma `local_key` esiste gia', aggiorna quella variazione; altrimenti crea una nuova variazione
-- `props` accetta: `sku`, `regular_price`, `sale_price`, `price`, `manage_stock`, `stock_quantity`, `stock_status`, `backorders`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `tax_class`, `menu_order`, `image_id`
-- con WPML attivo, `props.sku` viene applicato solo alla variazione sorgente: WooCommerce richiede SKU globalmente univoci e le variazioni tradotte non possono salvare lo stesso SKU
-- `status` sulle variazioni accetta `publish`/`enabled` per una variazione abilitata e `private`/`disabled` per una variazione disabilitata; per compatibilita' `draft` e `pending` vengono salvati come `private`, perche' WooCommerce admin non mostra variazioni con status `draft`
-- `image` puo' essere un URL remoto da importare e assegnare come immagine della variazione, oppure l'`attachment_id` (intero JSON) di un file gia' presente in Media Library (es. caricato con `POST /media`); `image: null` rimuove l'immagine
-- `image` puo' essere una mappa lingua WPML, ad esempio `{ "en": "https://cdn.example.com/en/shirt.jpg", "it": "https://cdn.example.com/it/shirt.jpg" }`; ogni variazione tradotta riceve la propria immagine
-- `acf_fields` opzionale, oggetto associativo `field_name => value` per campi ACF associati al post type `product_variation`; le chiavi devono essere nomi tecnici ACF o field key ACF esistenti sul field group della variazione (campi non esistenti ritornano `400 invalid_param`)
-- se un valore dentro `acf_fields` appartiene a un campo ACF di tipo `image` o `file` ed e' un URL valido, il file viene importato o riusato dalla Media Library e nel campo viene salvato l'`attachment_id`; per svuotare un campo `image` o `file` passare `null` o stringa vuota
-- ogni valore in `acf_fields` accetta una mappa lingua WPML; ogni variazione tradotta riceve il valore della propria lingua
-- se il field group ACF della variazione definisce un campo `local_key`, viene popolato automaticamente con il `local_key` della variazione
-- se il parent variable product ha download nativi WooCommerce, la variazione li eredita automaticamente cosi' risultano visibili nella UI WooCommerce
-- dopo il salvataggio della variazione l'endpoint sincronizza il parent variable product e pulisce i transient WooCommerce del parent
-- l'endpoint non crea ne' configura automaticamente gli attributi del parent variable product
-- con WPML attivo, se `name`, `description`, `short_description`, `long_description`, `image`, `attributes` o `acf_fields` contengono mappe lingua, l'endpoint aggiorna la variazione del parent risolto e crea o aggiorna le variazioni nelle lingue del payload che hanno gia' una traduzione del parent; le lingue senza parent tradotto vengono ignorate finche' il parent non esiste
-- la response contiene l'ID della variazione nella lingua del parent risolto da `parent_id` o `parent`; le altre variazioni tradotte vengono create o aggiornate nello stesso batch
+- `local_key` is required and is saved as the `onpage_local_key` post meta on the variation.
+- Resolution: if the element contains `id`, that variation is updated. If `id` is missing but the `local_key` already exists, that variation is updated. Otherwise a new variation is created.
+- You must send `parent_id` (WordPress ID) or `parent` (`local_key`). If both are present, they must refer to the same product (`409 parent_mismatch` otherwise).
+- The parent must be a `variable` WooCommerce product. It can be created or converted with `POST /woocommerce/products` using `props.product_type: "variable"`.
+- The endpoint does not create or configure the parent's attributes automatically.
+
+#### `attributes`
+
+- Required on create, and must be a non-empty object. On update it can be omitted to leave the variation's attributes unchanged.
+- Each attribute sent must exist on the parent and be flagged as a variation attribute (`variation=true`).
+- Each variation attribute must resolve to a single scalar option. WPML language maps such as `{ "en": "Red", "it": "Rosso" }` are accepted. Lists such as `["Petrol", "Hybrid"]` are not valid for a single variation.
+- If a variation attribute contains a language map but WPML is not installed or active, the request returns `500 wpml_required`.
+- For global attributes (`pa_color`) the value can be the term slug, name or ID. The variation stores the WooCommerce term slug.
+- For custom attributes, the value must be one of the options configured on the parent.
+
+#### `props`, `status`, `image`
+
+- `props` accepts: `sku`, `regular_price`, `sale_price`, `price`, `manage_stock`, `stock_quantity`, `stock_status`, `backorders`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `tax_class`, `menu_order`, `image_id`.
+- With WPML, `props.sku` is applied only to the source variation: WooCommerce requires globally unique SKUs, so translated variations cannot store the same SKU.
+- `status` on variations:
+  - `publish`/`enabled` → enabled variation;
+  - `private`/`disabled` → disabled variation;
+  - for compatibility, `draft` and `pending` are saved as `private`, because the WooCommerce admin does not show variations with status `draft`.
+- `image`:
+  - a remote URL to import and set as the variation image, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`);
+  - `image: null` removes the image;
+  - it can be a WPML language map, for example `{ "en": "https://cdn.example.com/en/shirt.jpg", "it": "https://cdn.example.com/it/shirt.jpg" }`. Each translated variation receives its own image.
+
+#### `acf_fields`
+
+- Optional associative object `field_name => value` for ACF fields attached to the `product_variation` post type.
+- Keys must be ACF technical names or ACF field keys that exist on the variation's field group. Unknown fields return `400 invalid_param`.
+- An `image` or `file` ACF field with a valid URL is imported or reused from the Media Library, and the field stores the `attachment_id`. To clear an `image` or `file` field, pass `null` or an empty string.
+- Every value in `acf_fields` accepts a WPML language map. Each translated variation receives the value for its language.
+- If the variation's ACF field group defines a `local_key` field, it is filled automatically with the variation's `local_key`.
+
+#### Side effects
+
+- If the variable parent has native WooCommerce downloads, the variation inherits them automatically, so they are visible in the WooCommerce UI.
+- After saving the variation, the endpoint syncs the variable parent and clears the parent's WooCommerce transients.
+
+#### Multilingual behaviour (WPML)
+
+- If `name`, `description`, `short_description`, `long_description`, `image`, `attributes` or `acf_fields` contain language maps, the endpoint updates the variation of the resolved parent. It then creates or updates the variations for the payload languages that already have a translation of the parent.
+- Languages without a translated parent are ignored until that parent translation exists.
+- The response contains the variation ID in the language of the parent resolved from `parent_id` or `parent`. The other translated variations are created or updated in the same batch.
 
 Response `200`:
 
@@ -1584,19 +1820,26 @@ Response `200`:
 [701]
 ```
 
-Errori principali:
+Main errors:
 
-- `400 invalid_param` se il body non e' un array JSON valido, se manca `local_key`, se manca il parent, se il parent non e' `variable`, se `attributes` o `acf_fields` non sono oggetti validi, se un attributo non e' configurato come variation attribute sul parent o se `acf_fields` contiene campi ACF non esistenti per la variazione
-- `404 not_found` se il parent, la variazione o un termine attributo non esiste
+- `400 invalid_param` when:
+  - the body is not a valid JSON array;
+  - `local_key` is missing;
+  - the parent is missing;
+  - the parent is not `variable`;
+  - `attributes` or `acf_fields` are not valid objects;
+  - an attribute is not configured as a variation attribute on the parent;
+  - `acf_fields` contains ACF fields that do not exist for the variation.
+- `404 not_found` if the parent, the variation or an attribute term does not exist.
 - `409 duplicate_local_key`
 - `409 parent_mismatch`
-- `500 woocommerce_required` se WooCommerce non e' attivo
-- `500 wpml_required` se il payload contiene valori multilingua ma WPML non e' installato o attivo
-- `500 request_failed` se WooCommerce o WordPress non riescono a salvare la variazione
+- `500 woocommerce_required` if WooCommerce is not active.
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active.
+- `500 request_failed` if WooCommerce or WordPress fail to save the variation.
 
 ### DELETE `/woocommerce/variant-products`
 
-Elimina variazioni WooCommerce per `local_key`. Se piu' variazioni condividono lo stesso `local_key` (una per lingua del gruppo del parent), vengono eliminate **tutte**.
+Deletes WooCommerce variations by `local_key`. If several variations share the same `local_key` (one per language of the parent's group), **all** of them are deleted.
 
 Body:
 
@@ -1604,7 +1847,7 @@ Body:
 [2001]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
@@ -1620,11 +1863,11 @@ null
 
 ### GET `/media`
 
-Restituisce la lista degli attachment media (Media Library), con filtri opzionali. Utile per individuare gli `attachment_id` da passare poi a `DELETE /media`, e per ritrovare per `token` i file gia' presenti in libreria senza ricaricarli.
+Returns the list of media attachments (Media Library), with optional filters. Use it to find the `attachment_id`s to pass to `DELETE /media`, and to find files already in the library by `token` without uploading them again.
 
-**Paginazione:** si', tramite `per_page`/`page` e header `X-WP-Total`/`X-WP-TotalPages` (dettagli sotto).
+**Pagination:** yes, through `per_page`/`page` and the `X-WP-Total`/`X-WP-TotalPages` headers (details below).
 
-Query opzionale:
+Optional query:
 
 ```text
 ?post_id=321
@@ -1636,17 +1879,20 @@ Query opzionale:
 ?per_page=100
 ```
 
-Note:
+| Parameter | Description |
+| --- | --- |
+| `post_id` | Filters by parent post (`post_parent`). |
+| `mime_type` | Filters by the attachment's exact MIME type. |
+| `token` | Filters by On Page® storage segment (`_onpage_file_token`, see `POST /media`). Accepts **several comma-separated tokens**, so files already in the library can be re-adopted in bulk with one request instead of one per file. Empty tokens are ignored; if none is left, the request returns `400 invalid_param`. |
+| `source_url` | Filters by exact source URL (`_onpage_source_url`). Single value. |
+| `per_page` | Default `100`, maximum `100`. |
+| `page` | Default `1`. |
 
-- `post_id` filtra per post genitore (`post_parent`).
-- `mime_type` filtra per MIME type esatto dell'attachment.
-- `token` filtra per segmento di storage On Page® (`_onpage_file_token`, vedi `POST /media`) e accetta **piu' token separati da virgola**: e' il modo per riadottare in blocco i file gia' presenti in libreria con una sola richiesta invece di una per file. I token vuoti vengono ignorati; se non ne resta nessuno la richiesta e' `400 invalid_param`.
-- `source_url` filtra per URL di origine esatto (`_onpage_source_url`), valore singolo.
-- la lista resta paginata anche con `token`: chiedendo piu' di `per_page` token (max `100`) i risultati arrivano su piu' pagine. Ogni riga riporta il proprio `token`, quindi l'associazione token → attachment si fa dalla response.
-- `token` e `source_url` si combinano con gli altri filtri (`post_id`, `mime_type`) in AND.
-- `per_page` ha massimo `100` e default `100`.
-- `page` ha default `1`.
-- Ordinamento per data di creazione decrescente.
+Notes:
+
+- The list stays paginated with `token` too: if you ask for more than `per_page` tokens (max `100`), results span several pages. Each row reports its own `token`, so map tokens to attachments from the response.
+- `token` and `source_url` are combined with the other filters (`post_id`, `mime_type`) with AND.
+- Results are sorted by creation date, newest first.
 
 Response `200`:
 
@@ -1677,29 +1923,29 @@ Response `200`:
 ]
 ```
 
-Note sulla response:
+Response notes:
 
-- `hash` e' il checksum SHA-256 del contenuto del file fisico, calcolato **al volo ad ogni richiesta** (`hash_file('sha256', ...)` su `get_attached_file()`) e **non persistito** in `post_meta`. E' `null` se il file fisico non e' presente/leggibile sul filesystem.
-- `token` e' il segmento di storage On Page® indicizzato sull'attachment, `null` per i media caricati per altre vie (a mano in Media Library, o importati prima che il segmento venisse indicizzato — vedi `POST /migration`).
-- `source_url` e' l'URL remoto da cui il media e' stato importato, `null` per i file caricati direttamente.
+- `hash` is the SHA-256 checksum of the physical file's content. It is computed **on the fly on every request** (`hash_file('sha256', ...)` on `get_attached_file()`) and is **not persisted** in `post_meta`. It is `null` if the physical file is missing or unreadable.
+- `token` is the On Page® storage segment indexed on the attachment. It is `null` for media added in other ways (manually in the Media Library, or imported before the segment was indexed; see `POST /migration`).
+- `source_url` is the remote URL the media was imported from. It is `null` for files uploaded directly.
 
-Header di paginazione:
+Pagination headers:
 
-- `X-WP-Total`: numero totale di attachment che soddisfano i filtri (`post_id`/`mime_type`), indipendentemente dalla pagina.
-- `X-WP-TotalPages`: numero totale di pagine, calcolato come `ceil(X-WP-Total / per_page)`.
-- Il client sa gia' dalla risposta corrente se e' l'ultima pagina (`page >= X-WP-TotalPages`): non serve chiamare una pagina in piu' per scoprirlo tramite un array vuoto.
+- `X-WP-Total`: total number of attachments matching the filters (`post_id`/`mime_type`), regardless of the page.
+- `X-WP-TotalPages`: total number of pages, `ceil(X-WP-Total / per_page)`.
+- The client knows from the current response whether it is on the last page (`page >= X-WP-TotalPages`). There is no need to request an extra page and wait for an empty array.
 
-Esempio di scorrimento (250 attachment, `per_page=100` → 3 pagine):
+Walk-through (250 attachments, `per_page=100` → 3 pages):
 
 ```text
-GET /media?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continua)
-GET /media?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continua)
-GET /media?page=3&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (page == X-WP-TotalPages → stop, nessuna richiesta a page=4)
+GET /media?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /media?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /media?page=3&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (page == X-WP-TotalPages → stop, no request for page=4)
 ```
 
 ### POST `/media`
 
-Carica uno o piu' file tramite `multipart/form-data` usando il flusso media nativo di WordPress.
+Uploads one or more files via `multipart/form-data`, using the native WordPress media flow.
 
 Content-Type:
 
@@ -1707,30 +1953,34 @@ Content-Type:
 multipart/form-data
 ```
 
-Campi supportati:
+Supported fields:
 
-- uno o piu' campi file, ad esempio `file`, `files[]` o altri nomi compatibili con PHP `$_FILES`
-- `post_id` opzionale, per associare gli attachment a un post esistente
-- `attachment_id` opzionale, per sostituire il contenuto di un attachment esistente quando stai caricando un solo file
-- `attachment_ids` opzionale, array allineato ai file caricati per sostituire uno o piu' attachment esistenti in richieste multi-file
-- `token` opzionale, il segmento di storage On Page® (`<token>[.<formato>]`, es. `aaa111bbb222.1920x1920-contain.jpg`) da cui proviene il file, quando stai caricando un solo file
-- `tokens` opzionale, array allineato ai file caricati con lo stesso significato in richieste multi-file (anche come stringa JSON); le posizioni vuote (`null` o stringa vuota) valgono "nessun token per quel file"
+| Field | Description |
+| --- | --- |
+| file fields | One or more file fields, e.g. `file`, `files[]` or any other name compatible with PHP `$_FILES`. |
+| `post_id` | Optional. Attaches the attachments to an existing post. |
+| `attachment_id` | Optional. Replaces the content of an existing attachment, when uploading a single file. |
+| `attachment_ids` | Optional. Array aligned with the uploaded files, to replace one or more existing attachments in multi-file requests. |
+| `token` | Optional. The On Page® storage segment the file comes from (`<token>[.<format>]`, e.g. `aaa111bbb222.1920x1920-contain.jpg`), when uploading a single file. |
+| `tokens` | Optional. Array aligned with the uploaded files, same meaning, for multi-file requests (also accepted as a JSON string). Empty positions (`null` or empty string) mean "no token for that file". |
 
-Comportamento:
+Behaviour:
 
-- il controller accetta sia file singoli sia array di file nello stesso campo
-- i file vengono normalizzati in una lista piatta e processati in ordine
-- ogni file viene salvato con `wp_handle_upload()`
-- se non viene passato un attachment esistente, il controller crea un nuovo attachment con `wp_insert_attachment()`
-- se viene passato `attachment_id` o un valore in `attachment_ids`, il controller mantiene lo stesso attachment WordPress e sostituisce solo il file fisico e i metadata
-- il `token` viene salvato sull'attachment nel meta `_onpage_file_token`, esattamente come e' stato inviato: identifica il **contenuto** del file, non la sua posizione, quindi lo stesso file richiesto in formati diversi (`.1920x1920-contain.jpg`, `.600x600-contain.webp`) resta su attachment distinti
-- l'endpoint e' **idempotente sul token**: se arriva un `token` gia' presente su un attachment della libreria (e il suo file fisico esiste ancora), i byte caricati vengono scartati e viene restituito quell'attachment con `action: "linked"`, senza creare nulla; con `post_id` valorizzato l'attachment esistente viene comunque riagganciato a quel post
-- un `attachment_id`/`attachment_ids` esplicito ha la precedenza: la sostituzione avviene comunque, e il `token` eventualmente presente viene riscritto sull'attachment sostituito. Una sostituzione **senza** `token` rimuove il token registrato, perche' descriveva i byte appena sovrascritti
-- vengono generati i metadata con `wp_generate_attachment_metadata()`
-- quando sostituisce un attachment esistente, il vecchio file e le sue size generate vengono rimossi
-- in caso di errore su un file, la richiesta si interrompe immediatamente e ritorna `WP_Error`
+- The controller accepts both single files and arrays of files in the same field.
+- Files are flattened into one list and processed in order.
+- Each file is saved with `wp_handle_upload()`.
+- If no existing attachment is given, the controller creates a new attachment with `wp_insert_attachment()`.
+- If `attachment_id` or a value in `attachment_ids` is given, the controller keeps the same WordPress attachment and replaces only the physical file and metadata.
+- **Token:**
+  - The `token` is saved on the attachment in the `_onpage_file_token` meta, exactly as sent.
+  - It identifies the file's **content**, not its location. The same file requested in different formats (`.1920x1920-contain.jpg`, `.600x600-contain.webp`) therefore stays on separate attachments.
+  - The endpoint is **idempotent on the token**: if a `token` is already on an attachment in the library (and its physical file still exists), the uploaded bytes are discarded and that attachment is returned with `action: "linked"`, without creating anything. If `post_id` is set, the existing attachment is still re-attached to that post.
+  - An explicit `attachment_id`/`attachment_ids` takes precedence: the replacement always happens, and any `token` sent is rewritten on the replaced attachment. A replacement **without** a `token` removes the stored token, because it described the bytes just overwritten.
+- Metadata is generated with `wp_generate_attachment_metadata()`.
+- When an existing attachment is replaced, the old file and its generated sizes are removed.
+- If a file fails, the request stops immediately and returns a `WP_Error`.
 
-Esempio upload multiplo:
+Multiple upload:
 
 ```bash
 curl -X POST \
@@ -1741,7 +1991,7 @@ curl -X POST \
   -F "post_id=321"
 ```
 
-Esempio upload con campo singolo:
+Single-field upload:
 
 ```bash
 curl -X POST \
@@ -1750,7 +2000,7 @@ curl -X POST \
   -F "file=@/path/brochure.pdf"
 ```
 
-Esempio replace di un attachment esistente:
+Replacing an existing attachment:
 
 ```bash
 curl -X POST \
@@ -1760,7 +2010,7 @@ curl -X POST \
   -F "attachment_id=501"
 ```
 
-Esempio upload con il token di storage On Page®:
+Upload with the On Page® storage token:
 
 ```bash
 curl -X POST \
@@ -1770,7 +2020,7 @@ curl -X POST \
   -F "token=aaa111bbb222.1920x1920-contain.jpg"
 ```
 
-Esempio upload multiplo con token allineati ai file:
+Multiple upload with tokens aligned to the files:
 
 ```bash
 curl -X POST \
@@ -1782,7 +2032,7 @@ curl -X POST \
   -F "tokens[]=ccc333ddd444.1920x1920-contain.png"
 ```
 
-Esempio misto create + replace nello stesso upload multiplo:
+Mixed create + replace in the same multiple upload:
 
 ```bash
 curl -X POST \
@@ -1823,28 +2073,31 @@ Response `200`:
 ]
 ```
 
-Note sulla response:
+Response notes:
 
-- `field` indica il nome del campo file ricevuto nel form
-- `key` rappresenta la posizione originale del file nel payload; per `files[]` tipicamente e' `"0"`, `"1"`, ecc.
-- `action` vale `created` per nuovi attachment, `replaced` quando viene aggiornato un attachment esistente e `linked` quando il `token` inviato era gia' in libreria e l'attachment e' stato riusato senza caricare niente
-- `token` e' presente solo se il file e' stato inviato con un token, e riporta il valore indicizzato sull'attachment
-- `post_id` vale `0` se il file non e' stato associato a un post
+- `field` is the name of the file field received in the form.
+- `key` is the original position of the file in the payload. For `files[]` it is typically `"0"`, `"1"`, and so on.
+- `action` is:
+  - `created` for new attachments;
+  - `replaced` when an existing attachment was updated;
+  - `linked` when the `token` sent was already in the library and the attachment was reused without uploading anything.
+- `token` is present only if the file was sent with a token, and reports the value indexed on the attachment.
+- `post_id` is `0` if the file was not attached to a post.
 
-Errori principali:
+Main errors:
 
-- `400 invalid_param` se non ci sono file nel request o se `post_id` non e' valido
-- `400 invalid_param` se `attachment_id` e `attachment_ids` vengono usati insieme o con formato non valido
-- `400 invalid_param` se `token` e `tokens` vengono usati insieme, se `token` viene usato con piu' di un file, o se un token non e' una stringa non vuota
-- `400 upload_failed` se PHP segnala un errore di upload sul file
-- `404 not_found` se `post_id` e' valorizzato ma il post non esiste
-- `404 not_found` se un `attachment_id` referenziato non esiste
-- `500 upload_failed` se WordPress rifiuta il salvataggio del file
-- `500 request_failed` se non viene creato o aggiornato correttamente l'attachment WordPress
+- `400 invalid_param` if the request contains no files or `post_id` is invalid.
+- `400 invalid_param` if `attachment_id` and `attachment_ids` are used together or have an invalid format.
+- `400 invalid_param` if `token` and `tokens` are used together, if `token` is used with more than one file, or if a token is not a non-empty string.
+- `400 upload_failed` if PHP reports an upload error on the file.
+- `404 not_found` if `post_id` is set but the post does not exist.
+- `404 not_found` if a referenced `attachment_id` does not exist.
+- `500 upload_failed` if WordPress refuses to save the file.
+- `500 request_failed` if the WordPress attachment is not created or updated correctly.
 
 ### POST `/media/link`
 
-Importa uno o piu' file remoti da URL (oppure collega attachment gia' presenti in Media Library tramite `attachment_id`), li salva/verifica nella Media Library, li collega a un post esistente tramite `post_parent` e aggiorna il campo ACF il cui nome coincide con la chiave dentro `files`.
+Imports one or more remote files by URL (or links attachments already in the Media Library by `attachment_id`). It saves/verifies them in the Media Library, attaches them to an existing post through `post_parent`, and updates the ACF field whose name matches the key inside `files`.
 
 Content-Type:
 
@@ -1864,20 +2117,23 @@ Body:
 }
 ```
 
-Comportamento:
+Behaviour:
 
-- `post_id` e' obbligatorio e deve riferirsi a un post esistente
-- `files` e' obbligatorio e deve essere un oggetto JSON non vuoto
-- ogni chiave di `files` rappresenta il nome del campo ACF da aggiornare sul post
-- ogni valore di `files` deve essere un URL valido e raggiungibile da WordPress, oppure l'`attachment_id` (intero JSON) di un file gia' presente in Media Library (es. caricato con `POST /media`)
-- ogni file remoto viene scaricato e importato nella Media Library tramite il flusso di sideload WordPress; un `attachment_id` viene invece verificato e ricollegato al `post_id` richiesto, senza download
-- se lo stesso URL e' gia' stato importato in precedenza dal plugin, viene riusato lo stesso attachment e ricollegato al `post_id` richiesto
-- dopo l'import, il riuso o il collegamento diretto, il controller salva l'`attachment_id` risultante nel campo ACF corrispondente
-- per gli URL, il controller salva l'URL sorgente nel meta `_onpage_source_url`
-- se l'URL e' un URL di storage On Page® (`https://storage.onpage.it/<token>[.<formato>]/<nome>` o `https://app.onpage.it/api/storage/<token>[.<formato>]/<nome>`), il controller ne estrae il segmento e lo salva anche nel meta `_onpage_file_token`, lo stesso indice usato da `POST /media`. Il riuso cerca **prima** per segmento e poi per URL esatto: un file rinominato su On Page® cambia URL ma non segmento, quindi non viene riscaricato ne' duplicato. Gli URL di altra provenienza non producono nessun segmento e continuano a essere riusati per URL esatto
-- la response restituisce un elemento per ogni voce di `files`, incluso il nome del campo originario; l'elemento risolto da `attachment_id` non ha `source_url` in response
+- `post_id` is required and must refer to an existing post.
+- `files` is required and must be a non-empty JSON object.
+- Each key of `files` is the name of the ACF field to update on the post.
+- Each value of `files` must be a valid URL reachable by WordPress, or the `attachment_id` (JSON integer) of a file already in the Media Library (e.g. uploaded with `POST /media`).
+- Each remote file is downloaded and imported into the Media Library through the WordPress sideload flow. An `attachment_id` is instead verified and re-attached to the requested `post_id`, without download.
+- If the same URL was already imported by the plugin, the same attachment is reused and re-attached to the requested `post_id`.
+- After the import, reuse or direct link, the controller saves the resulting `attachment_id` in the matching ACF field.
+- For URLs, the controller saves the source URL in the `_onpage_source_url` meta.
+- **On Page® storage URLs** (`https://storage.onpage.it/<token>[.<format>]/<name>` or `https://app.onpage.it/api/storage/<token>[.<format>]/<name>`):
+  - the controller extracts the segment and also saves it in the `_onpage_file_token` meta, the same index used by `POST /media`;
+  - reuse looks up the segment **first**, then the exact URL. A file renamed on On Page® changes URL but not segment, so it is neither downloaded again nor duplicated;
+  - URLs from other sources produce no segment and are still reused by exact URL.
+- The response returns one item per entry in `files`, including the original field name. An item resolved from an `attachment_id` has no `source_url` in the response.
 
-Esempio:
+Example:
 
 ```bash
 curl -X POST \
@@ -1922,18 +2178,18 @@ Response `200`:
 ]
 ```
 
-Errori principali:
+Main errors:
 
-- `400 invalid_param` se il body non e' un oggetto JSON valido
-- `400 invalid_param` se `post_id` non e' un intero positivo
-- `400 invalid_param` se `files` non e' un oggetto non vuoto
-- `400 invalid_param` se uno dei valori in `files` non e' un `attachment_id` esistente o un URL valido
-- `404 not_found` se `post_id` non esiste
-- `500 request_failed` se il download o l'import del file remoto falliscono
+- `400 invalid_param` if the body is not a valid JSON object.
+- `400 invalid_param` if `post_id` is not a positive integer.
+- `400 invalid_param` if `files` is not a non-empty object.
+- `400 invalid_param` if a value in `files` is neither an existing `attachment_id` nor a valid URL.
+- `404 not_found` if `post_id` does not exist.
+- `500 request_failed` if downloading or importing the remote file fails.
 
 ### DELETE `/media`
 
-Elimina uno o piu' attachment media per ID numerico.
+Deletes one or more media attachments by numeric ID.
 
 Body:
 
@@ -1941,22 +2197,22 @@ Body:
 [501, 502, 503]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
 ```
 
-Comportamento:
+Behaviour:
 
-- il body deve essere un array JSON non vuoto
-- ogni elemento deve essere un ID numerico positivo
-- vengono eliminati solo post di tipo `attachment`
-- l'eliminazione usa `wp_delete_attachment($id, true)`, quindi e' forzata e rimuove anche il file fisico e tutti i metadata associati, indice On Page® compreso (`_onpage_file_token` e `_onpage_source_url`): dopo la cancellazione quel media non e' piu' riadottabile per token
-- in caso di errore su un elemento, la richiesta si interrompe immediatamente
-- con `?ignore=1`, gli attachment non trovati vengono saltati senza errore; per quegli ID viene comunque rimosso l'eventuale indice On Page® rimasto orfano (attachment cancellato fuori da WordPress)
+- The body must be a non-empty JSON array.
+- Each element must be a positive numeric ID.
+- Only posts of type `attachment` are deleted.
+- Deletion uses `wp_delete_attachment($id, true)`, so it is forced. It also removes the physical file and all associated metadata, including the On Page® index (`_onpage_file_token` and `_onpage_source_url`). After deletion the media can no longer be re-adopted by token.
+- If an element fails, the request stops immediately.
+- With `?ignore=1`, attachments that are not found are skipped without error. For those IDs, any orphaned On Page® index left behind (attachment deleted outside WordPress) is still removed.
 
-Esempio:
+Example:
 
 ```bash
 curl -X DELETE \
@@ -1972,19 +2228,19 @@ Response `200`:
 null
 ```
 
-Errori principali:
+Main errors:
 
-- `400 invalid_param` se il body non e' un array JSON valido o contiene ID non validi
-- `404 not_found` se un attachment non esiste e `ignore` non e' presente
-- `500 delete_failed` se WordPress non riesce a cancellare un attachment
+- `400 invalid_param` if the body is not a valid JSON array or contains invalid IDs.
+- `404 not_found` if an attachment does not exist and `ignore` is not set.
+- `500 delete_failed` if WordPress fails to delete an attachment.
 
 ## Taxonomies
 
 ### GET `/taxonomies`
 
-Restituisce tutte le tassonomie ACF.
+Returns all ACF taxonomies.
 
-**Paginazione:** no — la risposta contiene sempre **tutte** le tassonomie in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** taxonomies; there is no `per_page`/`page`.
 
 Response `200`:
 
@@ -2007,15 +2263,13 @@ Response `200`:
 ]
 ```
 
-Note:
-
-- `singular_label` e `plural_label` possono essere stringhe semplici oppure mappe lingua => label, in base ai dati statici salvati dal plugin
+- `singular_label` and `plural_label` can be plain strings or `language => label` maps, depending on the static data saved by the plugin.
 
 ### POST `/taxonomies`
 
-Crea o aggiorna una o piu' tassonomie ACF (upsert per chiave `key`).
+Creates or updates one or more ACF taxonomies (upsert by `key`).
 
-Payload esempio:
+Example payload:
 
 ```json
 [
@@ -2035,21 +2289,23 @@ Payload esempio:
 ]
 ```
 
-Campi importanti:
+| Field | Required |
+| --- | --- |
+| `key` | yes |
+| `singular_label` | yes |
+| `plural_label` | yes |
+| `description` | no |
+| `hierarchical` | no |
 
-- `key` richiesto
-- `singular_label` richiesto
-- `plural_label` richiesto
+Behaviour:
 
-Note:
-
-- **Upsert idempotente**: se esiste gia' una tassonomia con la stessa `key` viene aggiornata in-place (stesso ID ACF), altrimenti viene creata. Re-inviare lo stesso payload converge sullo stesso record senza errori di duplicato.
-- La `key` e' l'identificatore stabile della tassonomia (usata anche come slug); non esiste un `local_key` separato.
-- Le label possono essere stringhe semplici o mappe per lingua.
-- Se le label sono mappe per lingua ma WPML non e' installato o attivo, ritorna `500 wpml_required`.
-- Se le label sono multilingua, il service salva una mappa custom in option (`onpage_taxonomy_label_translations`) e prova anche a registrarle in ACFML.
-- La tassonomia viene marcata come traducibile in WPML, se disponibile.
-- Alla fine viene eseguito `flush_rewrite_rules()`.
+- **Idempotent upsert.** If a taxonomy with the same `key` exists, it is updated in place (same ACF ID); otherwise it is created. Sending the same payload again converges on the same record, with no duplicate errors.
+- The `key` is the stable identifier of the taxonomy (also used as its slug). There is no separate `local_key`.
+- Labels can be plain strings or per-language maps.
+- If labels are per-language maps but WPML is not installed or active, the request returns `500 wpml_required`.
+- If labels are multilingual, the service saves a custom map in an option (`onpage_taxonomy_label_translations`) and also tries to register them in ACFML.
+- The taxonomy is flagged as translatable in WPML, when available.
+- `flush_rewrite_rules()` runs at the end.
 
 Response `200`:
 
@@ -2057,14 +2313,14 @@ Response `200`:
 [67]
 ```
 
-Errori principali:
+Main errors:
 
 - `500 acf_error`
-- `500 wpml_required` se il payload contiene valori multilingua ma WPML non e' installato o attivo
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
 
 ### DELETE `/taxonomies`
 
-Elimina tassonomie per ID ACF oppure per slug.
+Deletes taxonomies by ACF ID or by slug.
 
 Body:
 
@@ -2072,40 +2328,40 @@ Body:
 [67, "brand"]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?ignore=1
 ```
 
-Comportamento:
+Steps performed, in order:
 
-- Prima elimina tutti i termini della tassonomia.
-- Poi elimina la tassonomia ACF.
-- Elimina i field group ACF con location `taxonomy == <slug>`.
-- Rimuove le label tradotte salvate.
-- Rimuove la tassonomia dall'elenco WPML delle tassonomie traducibili.
-- Esegue `flush_rewrite_rules()`.
+1. Deletes all terms of the taxonomy.
+2. Deletes the ACF taxonomy.
+3. Deletes the ACF field groups with location `taxonomy == <slug>`.
+4. Removes the saved translated labels.
+5. Removes the taxonomy from WPML's list of translatable taxonomies.
+6. Runs `flush_rewrite_rules()`.
 
 ## Terms
 
-Tutte le operazioni sui termini avvengono su `/terms`: lettura/ricerca (`GET`), creazione/aggiornamento (`POST`) ed eliminazione (`DELETE`). La tassonomia si passa come `?taxonomy=` (query, opzionale in `GET`/`DELETE`) o come campo `taxonomy` nel body (richiesto in `POST`).
+All term operations go through `/terms`: list/search (`GET`), create/update (`POST`) and delete (`DELETE`).
 
 ```text
 /terms    (GET: list/search, POST: create/update, DELETE)
 ```
 
-`taxonomy` (query o body) identifica la tassonomia e accetta sia lo **slug** (es. `product_cat`, `brand`, `pa_color`) sia l'**ID ACF numerico**. Lo slug ha la precedenza ed e' consigliato (stabile tra ambienti e valido anche per tassonomie non-ACF); l'ID numerico resta supportato per retrocompatibilita'. Esempio: `/terms?taxonomy=product_cat`.
+The taxonomy is passed as `?taxonomy=` (query string, optional on `GET`/`DELETE`) or as the `taxonomy` body field (required on `POST`). It accepts either the **slug** (e.g. `product_cat`, `brand`, `pa_color`) or the **numeric ACF ID**. The slug takes precedence and is recommended (stable across environments, and valid for non-ACF taxonomies too). The numeric ID is still supported for backward compatibility. Example: `/terms?taxonomy=product_cat`.
+
+There are no `/taxonomies/{id}/terms` routes: the taxonomy is never part of the path.
 
 ### GET `/terms`
 
-Elenca o cerca i termini. La tassonomia si passa nella query string (`?taxonomy=`), come `GET /posts?type=`.
+Lists or searches terms. The taxonomy goes in the query string (`?taxonomy=`), like `GET /posts?type=`.
 
-**Paginazione:** no — la risposta contiene sempre **tutti** i termini che soddisfano i filtri in un'unica chiamata, nessun `per_page`/`page`.
+**Pagination:** none. The response always contains **all** terms matching the filters; there is no `per_page`/`page`.
 
-> **Nota:** sostituisce il precedente `GET /taxonomies/{id}/terms` (rimosso). La tassonomia, prima nel path `{id}`, va ora passata come query `?taxonomy=`.
-
-Query opzionale:
+Optional query:
 
 ```text
 ?taxonomy=brand
@@ -2117,15 +2373,18 @@ Query opzionale:
 ?taxonomy=product_cat&parent_lk=6000
 ```
 
-- `taxonomy` (**opzionale**) identifica la tassonomia e accetta sia lo **slug** (es. `product_cat`, `brand`, `pa_color`) sia l'**ID ACF numerico**, con le stesse regole del path `{id}` degli altri endpoint annidati. Se passata ma non risolta ritorna `404 not_found`. Se **omessa**, il listing e la ricerca per `name` spaziano su **tutte le tassonomie** (la tassonomia di ciascun termine è risolta dal termine stesso).
-- `name` esegue una ricerca per **nome esatto** del termine e accetta due forme:
-  - **stringa** (`?name=Chairs`): ricerca nella lingua corrente della richiesta;
-  - **mappa lingua** (`?name[it]=Sedie&name[en]=Chairs`): ricerca ogni nome nel contesto della rispettiva lingua WPML e ne restituisce l'**unione**.
-- `parent_id` (WP term id) e `parent_lk` (local_key del parent) filtrano restituendo i **figli diretti** del parent. `parent_lk` viene espanso a **tutte le traduzioni WPML** del parent (i figli vengono cercati sotto ognuna) e **richiede `taxonomy`** (per risolvere il local_key in quella tassonomia; `400` se assente); `parent_id` funziona anche senza `taxonomy`. I due parametri sono **mutuamente esclusivi** (`400` se passati insieme); un `parent_lk` che non risolve nessun termine restituisce lista vuota. Hanno precedenza inferiore a `name`.
-- Senza `name` né `parent_*` restituisce l'elenco completo dei termini (della tassonomia indicata, o di tutte le tassonomie se `taxonomy` è omessa).
-- La risposta è **sempre una lista** con **un oggetto per ogni gruppo di traduzione distinto** (rappresentante in lingua di default quando disponibile), con la mappa `translations`: nomi che sono traduzioni dello stesso termine → un solo oggetto; nomi di gruppi diversi → più oggetti. Stesso comportamento di `GET /woocommerce/products?name=`.
+| Parameter | Description |
+| --- | --- |
+| `taxonomy` | Optional. Slug or numeric ACF ID. If sent but not resolved → `404 not_found`. If **omitted**, listing and `name` search cover **all taxonomies** (each term's taxonomy is taken from the term itself). |
+| `name` | Exact-name search: a **string** (`?name=Chairs`, current request language) or a **language map** (`?name[it]=Sedie&name[en]=Chairs`, each name searched in its WPML language, **union** of the results). |
+| `parent_id` | WP term ID of the parent: returns its **direct children**. Works without `taxonomy`. |
+| `parent_lk` | `local_key` of the parent: returns its **direct children**. Expanded to **all WPML translations** of the parent (children are searched under each). **Requires `taxonomy`** to resolve the local_key (`400` if missing). |
 
-> **Nota:** senza `taxonomy` e senza `name` l'endpoint restituisce **tutti** i termini di tutte le tassonomie; su installazioni grandi conviene sempre passare `taxonomy` e/o `name`.
+- `parent_id` and `parent_lk` are **mutually exclusive** (`400` if both are sent). A `parent_lk` that resolves to no term returns an empty list. Both have lower precedence than `name`.
+- Without `name` or `parent_*`, the full list of terms is returned (of the given taxonomy, or of all taxonomies if `taxonomy` is omitted).
+- The response is **always a list** with **one object per distinct translation group** (the default-language term is the representative when available), carrying the `translations` map. Names that are translations of the same term → one object. Names from different groups → several objects. This mirrors `GET /woocommerce/products?name=`.
+
+> **Note:** without `taxonomy` and without `name`, the endpoint returns **all** terms of all taxonomies. On large installations, always pass `taxonomy` and/or `name`.
 
 Response `200`:
 
@@ -2151,19 +2410,17 @@ Response `200`:
 ]
 ```
 
-- `translations` mappa ogni codice lingua all'ID del termine in quella lingua (gruppo di traduzione WPML). Senza WPML attivo la mappa e' vuota. E' presente in tutte le response dei termini (singolo, lista e ricerca).
+- `translations` maps each language code to the term ID in that language (WPML translation group). Without WPML it is an empty map. It is present in every term response (single, list and search).
 
-Errori:
+Errors:
 
-- `404 not_found` se `taxonomy` è passata ma non viene risolta
+- `404 not_found` if `taxonomy` is sent but cannot be resolved
 
 ### POST `/terms`
 
-Crea o aggiorna termini in batch. Ogni elemento del payload indica la propria `taxonomy` (al posto del path `{id}`), quindi una stessa richiesta può scrivere termini di tassonomie diverse.
+Creates or updates terms in batch. Each payload element states its own `taxonomy`, so a single request can write terms of different taxonomies.
 
-> **Nota:** sostituisce il precedente `POST /taxonomies/{id}/terms` (rimosso). La tassonomia, prima nel path `{id}`, va ora passata come campo `taxonomy` in ogni elemento del body.
-
-Payload semplice:
+Simple payload:
 
 ```json
 [
@@ -2182,39 +2439,39 @@ Payload semplice:
 ]
 ```
 
-Campi:
+| Field | Required | Notes |
+| --- | --- | --- |
+| `taxonomy` | yes | Slug (e.g. `product_cat`, `brand`, `pa_color`) or numeric ACF ID. Missing → `400 invalid_param`; not resolved → `404 not_found`. |
+| `id` | no | If present, the term is updated. |
+| `name` | yes | |
+| `slug` | no | |
+| `description` | no | |
+| `local_key` | no | Stable external identifier. |
+| `parent` | no | Default `0`. |
+| `acf_fields` | no | Associative object `field_name => value`. |
 
-- `taxonomy` **richiesto** per ogni elemento; accetta lo **slug** (es. `product_cat`, `brand`, `pa_color`) oppure l'**ID ACF numerico** della tassonomia, con le stesse regole del path `{id}` degli altri endpoint. Manca → `400 invalid_param`; non risolta → `404 not_found`
-- `id` opzionale, se presente tenta update del termine
-- `name` richiesto
-- `slug` opzionale
-- `description` opzionale
-- `local_key` opzionale, usato come identificatore esterno stabile
-- `parent` opzionale, default `0`
-- `acf_fields` opzionale, oggetto associativo `field_name => value`
+`acf_fields` behaviour (see also [Handling `acf_fields`](#handling-acf_fields)):
 
-Comportamento `acf_fields`:
+- Text and scalar fields are saved directly on the term.
+- An `image` ACF field receiving a valid URL: the file is imported or reused from the Media Library, and the `attachment_id` is saved.
+- Remote SVGs are accepted only after validation/sanitization, and are imported as `image/svg+xml`.
+- An `image` ACF field receiving `null` or an empty string is cleared.
 
-- i campi testuali o scalari vengono salvati direttamente sul termine
-- se un campo ACF di tipo `image` riceve un URL valido, il file viene importato o riusato dalla Media Library e viene salvato l'`attachment_id`
-- gli SVG remoti vengono accettati solo dopo validazione/sanificazione e importati come `image/svg+xml`
-- se un campo ACF di tipo `image` riceve `null` o stringa vuota, il campo viene svuotato
+Resolving the term to update:
 
-Risoluzione del termine da aggiornare:
+1. `id` first, if present (it must exist, otherwise `404 not_found`).
+2. Otherwise, a term with the same `local_key`.
 
-- priorita' a `id` se presente (deve esistere, altrimenti `404 not_found`)
-- altrimenti prova a trovare un termine con lo stesso `local_key`
+`local_key` behaviour:
 
-Comportamento `local_key`:
+- Saved as the `onpage_local_key` term meta.
+- Written on the **whole WPML translation group** of the resolved term. When a term is updated (even by `id` only), the `local_key` is also applied to translations not included in the payload.
+- If the term has an ACF field named `local_key`, it is filled automatically.
+- If the `local_key` already exists on another translation group of the same taxonomy, the request returns `409 duplicate_local_key`.
 
-- viene salvato come term meta `onpage_local_key`
-- viene scritto su **tutto il gruppo di traduzione WPML** del termine risolto: aggiornando un termine (anche solo per `id`) il `local_key` viene applicato anche alle traduzioni non presenti nel payload
-- se esiste un campo ACF del Term chiamato `local_key`, viene valorizzato automaticamente
-- se `local_key` esiste gia' su un altro gruppo traduzioni della stessa tassonomia, ritorna `409 duplicate_local_key`
+#### Multilingual support with WPML
 
-#### Supporto multilingua con WPML
-
-I campi `name`, `slug`, `description` e i valori dentro `acf_fields` possono essere inviati come mappa per lingua:
+`name`, `slug`, `description` and the values inside `acf_fields` can be sent as per-language maps:
 
 ```json
 [
@@ -2247,16 +2504,23 @@ I campi `name`, `slug`, `description` e i valori dentro `acf_fields` possono ess
 ]
 ```
 
-Se `name` e' multilingua ma `slug` e' una stringa singola, lo slug viene applicato solo al termine base; per le traduzioni senza `slug` esplicito WordPress genera uno slug dalla traduzione del nome. Se invece il nome della traduzione coincide con quello della lingua base — perche' `name` e' una stringa condivisa oppure perche' la mappa lingua ripete lo stesso valore (es. `{"it":"Legno","en":"Legno"}`) — l'endpoint genera uno slug tecnico distinto per lingua (`<slug-base>-<lingua>`), necessario perche' WordPress rifiuta termini omonimi con lo stesso genitore. Per controllare gli slug tradotti, inviare `slug` come mappa lingua-valore.
+Slugs of translations:
 
-Regole:
+- If `name` is multilingual but `slug` is a single string, the slug is applied only to the base term. For translations without an explicit `slug`, WordPress generates a slug from the translated name.
+- If a translation's name equals the base-language name (because `name` is a shared string, or because the language map repeats the same value, e.g. `{"it":"Legno","en":"Legno"}`), the endpoint generates a distinct technical slug per language (`<slug-base>-<language>`). This is needed because WordPress rejects same-name terms under the same parent.
+- To control translated slugs, send `slug` as a language-value map.
 
-- Se sono presenti valori multilingua e WPML non e' installato o attivo, ritorna `500 wpml_required`.
-- La lingua base usata per creare il termine e' la default WPML, oppure la prima lingua che nel payload ha effettivamente un nome valorizzato.
-- **Valori `null` per lingua**: dentro una mappa `name` (o `slug`/`description`) una lingua puo' valere `null` per indicare "traduzione assente" (es. `{"it": "Sigillante Ibrido", "en": null, "es": null}`). Le lingue a `null` vengono ignorate: non producono traduzioni e non contano come nome. Il termine base viene creato nella prima lingua che ha un nome valorizzato — anche quando la lingua default WPML e' proprio una di quelle a `null`. La richiesta fallisce con `400 invalid_param` (`Name is required`) **solo** se nessuna lingua della mappa ha un nome non vuoto.
-- **Lingue non attive in WPML**: se il payload include codici lingua non configurati in WPML (es. il sito ha solo `it` attivo ma arriva `{"it": "...", "en": null, "es": null}`), la mappa non viene riconosciuta come multilingua; il plugin usa comunque il nome della lingua attiva presente (qui `it`) per creare il termine e ignora i codici non attivi. Serve almeno un nome valorizzato per una lingua, altrimenti `400 invalid_param`.
-- Le traduzioni vengono create o aggiornate nello stesso gruppo WPML del termine base.
-- `local_key` viene propagato anche ai termini tradotti, sia come term meta sia come campo ACF se presente.
+Rules:
+
+- If multilingual values are present and WPML is not installed or active, the request returns `500 wpml_required`.
+- The base language used to create the term is the WPML default language, or else the first language in the payload that actually has a name.
+- **`null` values per language.** Inside a `name` map (or `slug`/`description`), a language can be `null` to mean "no translation" (e.g. `{"it": "Sigillante Ibrido", "en": null, "es": null}`).
+  - `null` languages are ignored: they produce no translation and do not count as a name.
+  - The base term is created in the first language that has a name, even when the WPML default language is one of the `null` ones.
+  - The request fails with `400 invalid_param` (`Name is required`) **only** if no language in the map has a non-empty name.
+- **Languages not active in WPML.** If the payload includes language codes not configured in WPML (e.g. the site only has `it` active but receives `{"it": "...", "en": null, "es": null}`), the map is not recognized as multilingual. The plugin still uses the name of the active language present (here `it`) to create the term, and ignores inactive codes. At least one language must have a name, otherwise `400 invalid_param`.
+- Translations are created or updated in the same WPML group as the base term.
+- `local_key` is propagated to the translated terms too, both as term meta and as an ACF field if present.
 
 Response `200`:
 
@@ -2264,21 +2528,19 @@ Response `200`:
 [10, 11]
 ```
 
-Errori principali:
+Main errors:
 
 - `400 invalid_param`
 - `404 not_found`
 - `409 duplicate_local_key`
 - `500 request_failed`
 - `500 acf_error`
-- `500 wpml_required` se il payload contiene valori multilingua ma WPML non e' installato o attivo
+- `500 wpml_required` if the payload contains multilingual values but WPML is not installed or active
 - `500 wpml_error`
 
 ### DELETE `/terms`
 
-Elimina termini per ID. Il body è una lista di ID termine.
-
-> **Nota:** sostituisce il precedente `DELETE /taxonomies/{id}/terms` (rimosso). La tassonomia non è più nel path.
+Deletes terms by ID. The body is a list of term IDs.
 
 Body:
 
@@ -2286,13 +2548,15 @@ Body:
 [10, 11]
 ```
 
-Query opzionale:
+Optional query:
 
 ```text
 ?taxonomy=brand
 ```
 
-- `taxonomy` (**opzionale**) scopa la cancellazione a una tassonomia (slug o ID ACF numerico); se non risolta ritorna `404 not_found`. Se **omessa**, la tassonomia di ciascun termine viene risolta dal termine stesso, quindi una stessa richiesta può eliminare termini di tassonomie diverse.
+- `taxonomy` (**optional**) restricts deletion to one taxonomy (slug or numeric ACF ID). If it cannot be resolved → `404 not_found`.
+- If **omitted**, each term's taxonomy is taken from the term itself, so a single request can delete terms of different taxonomies.
+- `?ignore=1` is not supported: a missing term always returns `404`.
 
 Response `200`:
 
@@ -2300,18 +2564,18 @@ Response `200`:
 null
 ```
 
-Errori:
+Errors:
 
-- `404 not_found` se `taxonomy` è passata ma non viene risolta, o se un termine non esiste
-- `500 delete_failed` se WordPress non riesce a eliminare il termine
+- `404 not_found` if `taxonomy` is sent but cannot be resolved, or if a term does not exist
+- `500 delete_failed` if WordPress fails to delete the term
 
-## Manutenzione
+## Maintenance
 
 ### DELETE `/indexes`
 
-Rimuove **tutte** le associazioni `local_key` di On Page® (gli "indici") da post e termini. Da chiamare quando il sistema sorgente **rigenera le proprie local_key**: azzerando le chiavi nella destinazione, l'import successivo può riassegnarle da zero senza creare doppioni.
+Removes **all** On Page® `local_key` associations (the "indexes") from posts and terms. Call it when the source system **regenerates its local_keys**: once the keys are cleared at the destination, the next import can reassign them from scratch without creating duplicates.
 
-Non accetta payload.
+No payload.
 
 ```bash
 curl -X DELETE https://<host>/wp-json/onpage/v1/indexes \
@@ -2324,34 +2588,34 @@ Response `200`:
 { "posts_removed": 1240, "terms_removed": 312 }
 ```
 
-Cancella la meta canonica `onpage_local_key` e le copie legacy `local_key` / `_local_key`, sia da `wp_postmeta` sia da `wp_termmeta`. È idempotente.
+It deletes the canonical `onpage_local_key` meta and the legacy copies `local_key` / `_local_key`, from both `wp_postmeta` and `wp_termmeta`. It is idempotent.
 
-Note operative importanti:
+Important operational notes:
 
-- **Termini**: dopo l'azzeramento i termini diventano "non posseduti" e il re-import li **ri-adotta** per identità strutturale (nome/slug + parent), riscrivendo la nuova `local_key`, senza creare doppioni.
-- **Ordine top-down**: il re-import deve processare **i parent prima dei figli**; subito dopo l'azzeramento il `parent` di una categoria viene risolto per `local_key` e, se il parent non è ancora stato re-importato, ritorna `404 not_found`.
-- **Doppioni preesistenti**: termini duplicati creati da import falliti restano (orfani, senza chiave); per un'adozione deterministica conviene inviare lo `slug` reale nel payload o ripulire i doppioni vuoti.
-- **Prodotti**: i prodotti **non** hanno adozione strutturale. Dopo l'azzeramento un prodotto con titolo già esistente ma senza `local_key` viene rifiutato con `409 duplicate_title`: vanno **re-importati** (per `id` esistente o ricreando il legame). Tieni conto di questo prima di azzerare anche i `postmeta`.
+- **Terms.** After clearing, terms become "unowned". The re-import **re-adopts** them by structural identity (name/slug + parent) and writes the new `local_key`, without creating duplicates.
+- **Top-down order.** The re-import must process **parents before children**. Right after clearing, a category's `parent` is resolved by `local_key`; if the parent has not been re-imported yet, the request returns `404 not_found`.
+- **Pre-existing duplicates.** Duplicate terms created by failed imports remain (orphaned, without a key). For deterministic adoption, send the real `slug` in the payload or clean up the empty duplicates.
+- **Products.** Products have **no** structural adoption. After clearing, a product whose title already exists but has no `local_key` is rejected with `409 duplicate_title`. Such products must be **re-imported** (by existing `id`, or by recreating the link). Keep this in mind before clearing the `postmeta` too.
 
-Errori:
+Errors:
 
-- `500 delete_failed` se la cancellazione delle meta fallisce.
+- `500 delete_failed` if deleting the meta fails.
 
 ### POST `/migration`
 
-Esegue le migrazioni dati del plugin: adeguamenti una tantum ai dati gia' presenti sul sito, resi necessari da un cambio di formato interno. Va chiamato **una volta per sito** dopo un aggiornamento del plugin; e' idempotente, quindi rieseguirlo non fa danni ed e' un no-op se non c'e' niente da migrare.
+Runs the plugin's data migrations: one-off adjustments to data already on the site, required by a change of internal format. Call it **once per site** after a plugin update. It is idempotent: running it again does no harm, and it is a no-op when there is nothing to migrate.
 
-Non accetta payload.
+No payload.
 
 ```bash
 curl -X POST https://<host>/wp-json/onpage/v1/migration \
   -H "Authorization: Bearer <token>"
 ```
 
-Cosa fa, in ordine:
+What it does, in order:
 
-1. **Rinomina della `local_key`** (`local_key` → `onpage_local_key`). La chiave On Page® dei post era scritta implicitamente da un campo ACF sotto `local_key`; ora la meta canonica e' `onpage_local_key`. La migrazione rinomina le righe in `wp_postmeta`, elimina la meta di riferimento ACF orfana `_local_key` e le copie legacy in `wp_termmeta` (i termini salvavano gia' la chiave canonica, quelle erano duplicati).
-2. **Backfill del segmento di storage On Page®** (`_onpage_file_token`). Gli attachment importati per URL prima che il segmento venisse indicizzato hanno solo `_onpage_source_url`: senza segmento nessuno puo' riconoscerli quando lo stesso file arriva su `POST /media`, e vengono duplicati. Il segmento viene estratto dall'URL di origine e scritto sull'attachment. Gli attachment che ce l'hanno gia' e gli URL che non sono di storage On Page® vengono saltati.
+1. **Renames the `local_key`** (`local_key` → `onpage_local_key`). The On Page® key of posts used to be written implicitly by an ACF field under `local_key`; the canonical meta is now `onpage_local_key`. The migration renames the rows in `wp_postmeta`, deletes the orphaned ACF reference meta `_local_key`, and deletes the legacy copies in `wp_termmeta` (terms already stored the canonical key, so those were duplicates).
+2. **Backfills the On Page® storage segment** (`_onpage_file_token`). Attachments imported by URL before the segment was indexed only have `_onpage_source_url`. Without the segment, nothing can recognize them when the same file arrives on `POST /media`, so they get duplicated. The segment is extracted from the source URL and written on the attachment. Attachments that already have it, and URLs that are not On Page® storage URLs, are skipped.
 
 Response `200`:
 
@@ -2371,20 +2635,20 @@ Response `200`:
 }
 ```
 
-Note sulla response:
+Response notes:
 
-- `renamed` e' il numero di righe `wp_postmeta` rinominate; `acf_reference_removed` e `term_legacy_removed` il numero di righe legacy eliminate rispettivamente da `wp_postmeta` e `wp_termmeta`.
-- `items` elenca i post interessati dalla rinomina con la chiave trovata, per verifica. E' catturato **prima** della rinomina e su un sito grande puo' essere lungo. La `local_key` qui e' il valore grezzo della meta, quindi sempre una stringa (a differenza degli altri endpoint, che restituiscono un intero quando la chiave e' intero-canonica).
-- `media_tokens.scanned` e' il numero di attachment esaminati (quelli con `_onpage_source_url` e senza segmento), `media_tokens.written` quelli a cui e' stato scritto il segmento: la differenza sono i media importati da URL non On Page®, che non hanno un segmento e restano deduplicati per URL esatto.
-- Su una seconda esecuzione tutti i contatori sono `0`.
+- `renamed` is the number of `wp_postmeta` rows renamed. `acf_reference_removed` and `term_legacy_removed` are the number of legacy rows deleted from `wp_postmeta` and `wp_termmeta` respectively.
+- `items` lists the posts affected by the rename, with the key found, for verification. It is captured **before** the rename and can be long on a large site. The `local_key` here is the raw meta value, so it is always a string (unlike other endpoints, which return an integer when the key is a canonical integer).
+- `media_tokens.scanned` is the number of attachments examined (those with `_onpage_source_url` and no segment). `media_tokens.written` is the number that received a segment. The difference is media imported from non-On Page® URLs: they have no segment and remain de-duplicated by exact URL.
+- On a second run every counter is `0`.
 
-Errori:
+Errors:
 
-- `500 migration_failed` se una delle letture o scritture sui metadati fallisce. La migrazione non e' transazionale: i passi gia' completati restano applicati e la chiamata puo' essere ripetuta.
+- `500 migration_failed` if any metadata read or write fails. The migration is not transactional: steps already completed stay applied, and the call can be repeated.
 
-## Esempi cURL
+## cURL examples
 
-### Lista tassonomie
+### List taxonomies
 
 ```bash
 curl -X GET \
@@ -2392,7 +2656,7 @@ curl -X GET \
   -H "Authorization: Bearer <token>"
 ```
 
-### Upsert post type
+### Upsert a post type
 
 ```bash
 curl -X POST \
@@ -2409,7 +2673,7 @@ curl -X POST \
   ]'
 ```
 
-### Upsert termini multilingua
+### Upsert multilingual terms
 
 ```bash
 curl -X POST \
@@ -2434,9 +2698,9 @@ curl -X POST \
   ]'
 ```
 
-## Note implementative
+## Implementation notes
 
-- Le API si appoggiano a funzioni ACF plugin come `acf_update_field_group`, `acf_update_post_type` e `acf_update_taxonomy`.
-- Molti endpoint assumono che ACF sia presente e inizializzato correttamente.
-- La semantica dei payload e' guidata dal codice attuale dei controller, non da uno schema OpenAPI formale.
-- Gli update sono parziali solo in alcuni casi: ad esempio nei post vengono aggiornati solo i campi passati, ma le tassonomie inviate vengono riassegnate completamente.
+- The API relies on ACF plugin functions such as `acf_update_field_group`, `acf_update_post_type` and `acf_update_taxonomy`.
+- Many endpoints assume ACF is present and correctly initialized.
+- Payload semantics are driven by the current controller code, not by a formal OpenAPI schema.
+- Updates are partial only in some cases. For example, posts update only the fields sent, but the taxonomies sent are fully reassigned.

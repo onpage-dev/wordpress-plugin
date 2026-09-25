@@ -1,19 +1,22 @@
-# Analisi tecnica degli endpoint POST WooCommerce
+# Technical Analysis of the WooCommerce POST Endpoints
 
-Studio della logica di validazione e scrittura degli endpoint `POST /woocommerce/*`, con
-mappatura del flusso, dei costi per elemento e dei punti di accumulo di overhead.
+This document studies how the `POST /woocommerce/*` endpoints validate and write data. It maps:
 
-Riferimenti principali:
+- the request flow;
+- the cost of each element in a batch;
+- the places where overhead accumulates.
 
-- Routing: [routes.php](wp-content/plugins/wordpress-plugin/routes.php)
-- Router: [Router.php](wp-content/plugins/wordpress-plugin/src/Router.php)
-- Controllers: [src/Controllers/WooCommerce/](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/)
-- Services: [src/Services/WooCommerce/](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/) +
-  [src/Services/](wp-content/plugins/wordpress-plugin/src/Services/) (Acf, MultiLang, Wpml, RemoteMedia, Term, TermRepository, Input)
+Main references:
+
+- Routing: [routes.php](../routes.php)
+- Router: [Router.php](../src/Router.php)
+- Controllers: [src/Controllers/WooCommerce/](../src/Controllers/WooCommerce/)
+- Services: [src/Services/WooCommerce/](../src/Services/WooCommerce/) and
+  [src/Services/](../src/Services/) (Acf, MultiLang, Wpml, RemoteMedia, Term, TermRepository, Input)
 
 ---
 
-## 1. Pipeline comune a tutti i POST
+## 1. Pipeline shared by all POST endpoints
 
 ```
 HTTP POST
@@ -22,524 +25,514 @@ HTTP POST
             └─ Middleware Auth (Bearer token)
                  └─ Controller::save (per endpoint)
                       └─ foreach ($request->get_json_params() as $i => $params)
-                           └─ Service::save($params, $i)   ←  vero hot loop
+                           └─ Service::save($params, $i)   ←  the real hot loop
 ```
 
-Punti rilevanti:
+Key points:
 
-- Il dispatch è registrato in [routes.php:48-95](wp-content/plugins/wordpress-plugin/routes.php#L48-L95).
-  Tutte le rotte POST WooCommerce passano per `AuthMiddleware`, che invoca
-  `AuthService::check()` una sola volta a richiesta.
-- Il corpo è SEMPRE un array JSON. I controller iterano l'array e processano un
-  elemento alla volta — non c'è batching reale a livello di persistenza
-  (nessuna transazione, nessuna preallocazione, nessun bulk insert).
-- In caso di errore su un elemento la `HttpException` viene catturata in
-  [Router.php:61](wp-content/plugins/wordpress-plugin/src/Router.php#L61) e
-  restituita come `WP_Error` — gli elementi precedenti restano scritti. Stato
-  parziale per design.
+- Dispatch is registered in [routes.php:48-95](../routes.php#L48-L95).
+  Every WooCommerce POST route goes through `AuthMiddleware`, which calls
+  `AuthService::check()` once per request.
+- The body is ALWAYS a JSON array. Controllers iterate over the array and process one element at a time.
+- There is no real batching at the persistence layer: no transaction, no preallocation, no bulk insert.
+- If an element fails, the `HttpException` is caught in
+  [Router.php:61](../src/Router.php#L61) and returned as a `WP_Error`.
+  Elements processed before the failure stay written. Partial state is by design.
 
-Tabella controller → service:
+Controller → service map:
 
-| Endpoint | Controller | Service entrypoint |
+| Endpoint | Controller | Service entry point |
 |---|---|---|
-| `POST /woocommerce/products` | [Product.php:25-39](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/Product.php#L25-L39) | [Services/WooCommerce/Product::save](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L709) |
-| `POST /woocommerce/categories` | [Category.php:31-45](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/Category.php#L31-L45) | [Services/WooCommerce/Term::save](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Term.php#L231) |
-| `POST /woocommerce/tags` | [Tag.php:31-45](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/Tag.php#L31-L45) | stesso `Services/WooCommerce/Term::save` |
-| `POST /woocommerce/brands` | [Brand.php:23-37](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/Brand.php#L23-L37) | [Services/WooCommerce/Brand::save](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Brand.php#L242) (→ `Term::upsertFromParams`) |
-| `POST /woocommerce/attributes` | [Attribute.php:22-30](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/Attribute.php#L22-L30) | [Services/WooCommerce/Attribute::save](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Attribute.php#L445) |
-| `POST /woocommerce/attributes/{attribute}/terms` | [AttributeTerm.php:37-52](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/AttributeTerm.php#L37-L52) | stesso `Services/WooCommerce/Term::save` |
-| `POST /woocommerce/variant-products` | [VariantProduct.php:22-34](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/VariantProduct.php#L22-L34) | [Services/WooCommerce/VariantProduct::save](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L520) |
+| `POST /woocommerce/products` | [Product.php:25-39](../src/Controllers/WooCommerce/Product.php#L25-L39) | [Services/WooCommerce/Product::save](../src/Services/WooCommerce/Product.php#L709) |
+| `POST /woocommerce/categories` | [Category.php:31-45](../src/Controllers/WooCommerce/Category.php#L31-L45) | [Services/WooCommerce/Term::save](../src/Services/WooCommerce/Term.php#L231) |
+| `POST /woocommerce/tags` | [Tag.php:31-45](../src/Controllers/WooCommerce/Tag.php#L31-L45) | same `Services/WooCommerce/Term::save` |
+| `POST /woocommerce/brands` | [Brand.php:23-37](../src/Controllers/WooCommerce/Brand.php#L23-L37) | [Services/WooCommerce/Brand::save](../src/Services/WooCommerce/Brand.php#L242) (→ `Term::upsertFromParams`) |
+| `POST /woocommerce/attributes` | [Attribute.php:22-30](../src/Controllers/WooCommerce/Attribute.php#L22-L30) | [Services/WooCommerce/Attribute::save](../src/Services/WooCommerce/Attribute.php#L445) |
+| `POST /woocommerce/attributes/{attribute}/terms` | [AttributeTerm.php:37-52](../src/Controllers/WooCommerce/AttributeTerm.php#L37-L52) | same `Services/WooCommerce/Term::save` |
+| `POST /woocommerce/variant-products` | [VariantProduct.php:22-34](../src/Controllers/WooCommerce/VariantProduct.php#L22-L34) | [Services/WooCommerce/VariantProduct::save](../src/Services/WooCommerce/VariantProduct.php#L520) |
 
-Caratteristiche trasversali:
+Cross-cutting traits:
 
-- Prima del loop il controller chiama `Acf::loadFieldTypeMap(['post'])` o
-  `['term']` ([Acf.php:148](wp-content/plugins/wordpress-plugin/src/Services/Acf.php#L148)).
-  Costo amortizzato (una volta per request).
-- Tutti i servizi sollevano `HttpException` via `httpException()`
-  ([helpers.php:137](wp-content/plugins/wordpress-plugin/src/helpers.php#L137)) — niente codici di
-  errore aggregati, errore fatale al primo problema dell'elemento.
+- Before the loop, the controller calls `Acf::loadFieldTypeMap(['post'])` or
+  `['term']` ([Acf.php:148](../src/Services/Acf.php#L148)).
+  The cost is amortized: it runs once per request.
+- All services raise `HttpException` through `httpException()`
+  ([helpers.php:137](../src/helpers.php#L137)).
+  Errors are not aggregated: the first problem in an element is fatal.
 
 ---
 
-## 2. Validazione: schema comune e costo
+## 2. Validation: shared schema and cost
 
-Lo "schema" non è dichiarativo, è implementato come catena di `is_scalar`/`is_array`/`array_is_list`
-sparsa nei service. Pattern ricorrenti:
+The "schema" is not declarative. It is a chain of `is_scalar` / `is_array` / `array_is_list`
+checks spread across the services. The recurring patterns follow.
 
-### 2.1 Helpers cardine
+### 2.1 Core helpers
 
-- `Input::positiveInt`, `Input::stringOrNull`, `Input::requireStringParam`,
-  `Input::localKey` / `Input::requireLocalKeyParam` / `Input::localKeyOut` (normalizzazione del
-  `local_key` intero-o-stringa in input e rendering in output)
-  ([Input.php](wp-content/plugins/wordpress-plugin/src/Services/Input.php)) — economici.
-- `MultiLang::getLanguages`, `isLanguageMapShape`,
-  `requireWpmlForLanguageMap`, `requireWpmlForFieldMap`,
-  `requireWpmlForNestedLanguageMaps`
-  ([MultiLang.php](wp-content/plugins/wordpress-plugin/src/Services/MultiLang.php)). Tutti
-  ricamminano il payload e ognuno chiama `getWpmlLanguages()` ([helpers.php:104](wp-content/plugins/wordpress-plugin/src/helpers.php#L104)) che
-  esegue `apply_filters('wpml_active_languages', ...)`. **Non c'è caching
-  request-scoped** del risultato — viene rieseguito centinaia di volte in un batch.
-- `httpException()` produce errori uniformi `Service :: Element {i} :: ...`.
+- **Input helpers** ([Input.php](../src/Services/Input.php)) — cheap:
+  `Input::positiveInt`, `Input::stringOrNull`, `Input::requireStringParam`,
+  `Input::localKey` / `Input::requireLocalKeyParam` / `Input::localKeyOut`.
+  The `local_key` helpers normalize an integer-or-string `local_key` on input and render it on output.
+- **MultiLang helpers** ([MultiLang.php](../src/Services/MultiLang.php)):
+  `MultiLang::getLanguages`, `isLanguageMapShape`, `requireWpmlForLanguageMap`,
+  `requireWpmlForFieldMap`, `requireWpmlForNestedLanguageMaps`.
+  - Each one walks the payload again.
+  - Each one calls `getWpmlLanguages()` ([helpers.php:104](../src/helpers.php#L104)),
+    which runs `apply_filters('wpml_active_languages', ...)`.
+  - **The result is not cached per request.** It is recomputed hundreds of times in a batch.
+- **`httpException()`** produces uniform errors of the form `Service :: Element {i} :: ...`.
 
-### 2.2 Validazione prodotti
+### 2.2 Product validation
 
 `Product::normalizeProductPayload`
-([Product.php:339-408](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L339-L408))
-fa, in ordine, per ogni elemento:
+([Product.php:339-408](../src/Services/WooCommerce/Product.php#L339-L408))
+runs these steps, in order, for every element:
 
-1. `local_key` obbligatorio.
-2. `name` obbligatorio (scalar o mappa WPML; valida ogni lingua).
-3. `status` opzionale.
-4. `acf_fields`: oggetto + `requireWpmlForFieldMap` (ricorsivo).
+1. `local_key`: required.
+2. `name`: required. Scalar or WPML map; each language is validated.
+3. `status`: optional.
+4. `acf_fields`: object, plus `requireWpmlForFieldMap` (recursive).
 5. `long_description`/`content`, `short_description`/`description`: WPML check.
-6. `props`: oggetto + `requireWpmlForProductPropLanguageMaps`
-   ([Product.php:144-153](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L144-L153))
-   che itera tutti i 22 campi WC noti.
+6. `props`: object, plus `requireWpmlForProductPropLanguageMaps`
+   ([Product.php:144-153](../src/Services/WooCommerce/Product.php#L144-L153)),
+   which iterates over all 22 known WC fields.
 7. `image`: WPML check.
-8. `attributes`: per ogni attributo `validateAttributeValue` ricorsiva
-   ([Product.php:156-194](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L156-L194)).
-9. `downloads`: lista; per ogni download valida `file`/`url`, `name`, `id` —
-   ognuno con check WPML.
-10. `id`: opzionale, intero positivo.
-11. `Taxonomy::buildFromParams` ([Taxonomy.php:30-50](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Taxonomy.php#L30-L50))
-    per `categories`, `tags`, `brand`. Ognuno richiama nuovamente le funzioni
-    WPML per riconoscere mappe per lingua.
+8. `attributes`: recursive `validateAttributeValue` for each attribute
+   ([Product.php:156-194](../src/Services/WooCommerce/Product.php#L156-L194)).
+9. `downloads`: list. Each download validates `file`/`url`, `name` and `id`, each with a WPML check.
+10. `id`: optional, positive integer.
+11. `Taxonomy::buildFromParams` ([Taxonomy.php:30-50](../src/Services/WooCommerce/Taxonomy.php#L30-L50))
+    for `categories`, `tags` and `brand`. Each call runs the WPML functions again to detect per-language maps.
 
-Complessità di validazione per un prodotto medio (≈10 props, ≈8 attributi, ≈4
-download, 3 lingue, 20 campi ACF):
+Validation cost for an average product (about 10 props, 8 attributes, 4 downloads, 3 languages, 20 ACF fields):
 
-- ≈ 60–80 invocazioni di `getWpmlLanguages()` → altrettanti `apply_filters` →
-  filtri WPML registrati internamente fanno query SQL su `icl_languages`.
-- Ricamminazione completa del payload almeno 3 volte (validazione, calcolo
-  `getLanguageContext`, applicazione).
+- About 60–80 calls to `getWpmlLanguages()`. Each is an `apply_filters` call, and the
+  filters WPML registers internally run SQL queries against `icl_languages`.
+- The full payload is walked at least 3 times: validation, `getLanguageContext`, and application.
 
-### 2.3 Validazione term (categories/tags/attribute-terms/brands)
+### 2.3 Term validation (categories / tags / attribute terms / brands)
 
-`Term::upsertFromParams` ([Term.php:1076-1088](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L1076-L1088)):
+`Term::upsertFromParams` ([Term.php:1076-1088](../src/Services/Term.php#L1076-L1088)):
 
-1. `requireWpmlForPayloadLanguageMaps` su `name`, `slug`, `description`,
-   `acf_fields`.
-2. `parseTermPayload` ([Term.php:461-501](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L461-L501)) — splitta
-   ogni valore in `shared`/`translated` con `MultiLang::splitValueByLanguage`.
-3. `validateParsedPayload` ([Term.php:516-546](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L516-L546)) —
-   risolve subito `findByLocalKey` (DB) e `findByLocalKeyForLanguage` per `parent_local_key`,
-   quindi parte della validazione è già fetch dal DB.
+1. `requireWpmlForPayloadLanguageMaps` on `name`, `slug`, `description`, `acf_fields`.
+2. `parseTermPayload` ([Term.php:461-501](../src/Services/Term.php#L461-L501))
+   splits every value into `shared`/`translated` with `MultiLang::splitValueByLanguage`.
+3. `validateParsedPayload` ([Term.php:516-546](../src/Services/Term.php#L516-L546))
+   immediately resolves `findByLocalKey` (DB) and `findByLocalKeyForLanguage` for `parent_local_key`.
+   Part of the validation is therefore already a DB fetch.
 
-Per category-specifico, `WooCommerceTerm::prepareParentPayload`
-([Services/WooCommerce/Term.php:172-198](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Term.php#L172-L198))
-risolve `parent` come `local_key` con un ulteriore lookup
-`TermService::findIdByLocalKey`.
+For categories, `WooCommerceTerm::prepareParentPayload`
+([Services/WooCommerce/Term.php:172-198](../src/Services/WooCommerce/Term.php#L172-L198))
+resolves `parent` as a `local_key` with one more lookup, `TermService::findIdByLocalKey`.
 
-### 2.4 Validazione variation
+### 2.4 Variation validation
 
-`VariantProduct::save` ([VariantProduct.php:520-543](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L520-L543))
-fa pochissima validazione strutturale (oggetto, `local_key` richiesto) ma forza:
+`VariantProduct::save` ([VariantProduct.php:520-543](../src/Services/WooCommerce/VariantProduct.php#L520-L543))
+does very little structural validation (object, required `local_key`). However, it forces:
 
-- `requireParentProduct` ([VariantProduct.php:241-269](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L241-L269)):
-  sempre 1 `get_posts` (per id o per local_key); se sono dati ENTRAMBI
-  `parent_id` e `parent`, fa 2 lookup distinti per verificare coerenza.
+- `requireParentProduct` ([VariantProduct.php:241-269](../src/Services/WooCommerce/VariantProduct.php#L241-L269)):
+  always 1 `get_posts` (by id or by local_key). If BOTH `parent_id` and `parent` are given,
+  it runs 2 separate lookups to check they match.
 - Attribute resolution in `applyAttributes`
-  ([VariantProduct.php:856-904](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L856-L904))
-  fa, per ciascun attributo della variation:
-  - `get_term` (per id), poi `get_term_by('slug')`, poi `get_term_by('name')`
-    in cascata ([VariantProduct.php:953-963](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L953-L963)).
+  ([VariantProduct.php:856-904](../src/Services/WooCommerce/VariantProduct.php#L856-L904)).
+  For each attribute of the variation it cascades through `get_term` (by id), then
+  `get_term_by('slug')`, then `get_term_by('name')`
+  ([VariantProduct.php:953-963](../src/Services/WooCommerce/VariantProduct.php#L953-L963)).
 
-### 2.5 Validazione attributi globali
+### 2.5 Global attribute validation
 
-`Attribute::save` ([Services/WooCommerce/Attribute.php:445-501](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Attribute.php#L445-L501)) costruisce
-gli args con `buildAttributeArgs` ed esegue `wc_update_attribute` /
-`wc_create_attribute` di WooCommerce. La validazione è leggera; il vero costo è
-nelle scansioni di `wp_options` (vedi §3).
+`Attribute::save` ([Services/WooCommerce/Attribute.php:445-501](../src/Services/WooCommerce/Attribute.php#L445-L501))
+builds its args with `buildAttributeArgs`, then calls WooCommerce's
+`wc_update_attribute` / `wc_create_attribute`. Validation is light.
+The real cost is in the `wp_options` scans (see §3).
 
 ---
 
-## 3. Catalogazione delle query e degli I/O per elemento
+## 3. Queries and I/O per element
 
-Tabella riassuntiva — costo "per elemento" del batch (best case, senza WPML attivo).
-"H" = chiamata HTTP esterna, "Q" = query DB esplicita, "S" = `$product->save()`.
+The tables below show the cost **per batch element** (best case, WPML inactive).
 
-### 3.1 `POST /woocommerce/products` — caso INSERT (no WPML)
+Legend: **Q** = explicit DB query, **H** = external HTTP call, **S** = `$product->save()`.
 
-| Fase | Sorgente | Q | H | S | Note |
+### 3.1 `POST /woocommerce/products` — INSERT (no WPML)
+
+| Step | Source | Q | H | S | Notes |
 |---|---|---|---|---|---|
-| Lookup esistente (no id, con local_key) | `findCanonicalProductIdByLocalKey` → `findProductIdsByLocalKey` ([Product.php:514-532](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L514-L532)) | 1 |  |  | `get_posts` con `meta_query` su `onpage_local_key` |
-| Pre-check unicità local_key | `findProductIdByLocalKey` ([Product.php:758](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L758)) | 1 |  |  | RIDONDANTE: il lookup sopra l'ha già fatto |
-| Pre-check unicità title | `findDuplicateProductIdByTitle` ([Product.php:762](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L762)) | 1 |  |  | `get_posts` con `title` |
-| Save iniziale | `persistProductFromParams` → `$product->save()` ([Product.php:956](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L956)) | molte |  | 1 | `wp_insert_post` + meta_input + lookup_table sync + hooks WC |
-| `update_post_meta(onpage_local_key)` ([Product.php:965](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L965)) | 1 |  |  |  |
-| `linkAttachmentsToProduct` ([ProductDownloads.php:89-110](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/ProductDownloads.php#L89-L110)) | per download |  |  | `attachment_url_to_postid` + `wp_update_post` |
-| `syncPublicIdsMeta` ([ProductDownloads.php:113-140](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/ProductDownloads.php#L113-L140)) | 1 |  |  | `update_post_meta` |
-| `applyImage` (se `image` presente) | `RemoteMedia::urlToPost` ([RemoteMedia.php:394-400](wp-content/plugins/wordpress-plugin/src/Services/RemoteMedia.php#L394-L400)) | ≥3 | 1 |  | `findAttachmentBySourceUrl` (`get_posts`), `download_url` (HTTP), `wp_update_post`. Poi `$product->save()` di nuovo ([Product.php:1337](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L1337)) | + 1 |
-| `applyImage` save aggiuntivo | | | | 1 | save #2 del prodotto |
-| `syncVariableProductToVariations` ([ProductDownloads.php:143-166](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/ProductDownloads.php#L143-L166)) | N children |  |  | N | una `save()` per ogni variazione figlia |
-| `saveAcfFields` ([Product.php](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php)) | per campo |  | per immagine | | Itera i campi e li passa a `Acf::updateFieldValue` (centralizzato): skip `tab`, `image`/`file` URL → `attachment_id` via `RemoteMedia::urlToPost`/`urlToMediaLibrary`, repeater normalizzati da `Acf::resolveRepeaterValue` (ricorsivo, valida shape, risolve sub-field image/file). Stessa logica condivisa da `Post::savePostAssociations` e `Term::updateAcfFields` |
-| `Taxonomy::apply` ([Taxonomy.php:53-104](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Taxonomy.php#L53-L104)) | per termine ≥1 |  |  | | `get_term_by` per slug, eventuale `wpml_object_id`, infine `wp_set_object_terms` |
+| Find existing (no id, with local_key) | `findCanonicalProductIdByLocalKey` → `findProductIdsByLocalKey` ([Product.php:514-532](../src/Services/WooCommerce/Product.php#L514-L532)) | 1 | | | `get_posts` with a `meta_query` on `onpage_local_key` |
+| local_key uniqueness pre-check | `findProductIdByLocalKey` ([Product.php:758](../src/Services/WooCommerce/Product.php#L758)) | 1 | | | REDUNDANT: the lookup above already did this |
+| Title uniqueness pre-check | `findDuplicateProductIdByTitle` ([Product.php:762](../src/Services/WooCommerce/Product.php#L762)) | 1 | | | `get_posts` by `title` |
+| Initial save | `persistProductFromParams` → `$product->save()` ([Product.php:956](../src/Services/WooCommerce/Product.php#L956)) | many | | 1 | `wp_insert_post` + meta_input + lookup table sync + WC hooks |
+| Store local_key | `update_post_meta(onpage_local_key)` ([Product.php:965](../src/Services/WooCommerce/Product.php#L965)) | 1 | | | |
+| Link attachments | `linkAttachmentsToProduct` ([ProductDownloads.php:89-110](../src/Services/WooCommerce/ProductDownloads.php#L89-L110)) | per download | | | `attachment_url_to_postid` + `wp_update_post` |
+| Sync public IDs | `syncPublicIdsMeta` ([ProductDownloads.php:113-140](../src/Services/WooCommerce/ProductDownloads.php#L113-L140)) | 1 | | | `update_post_meta` |
+| Image (if `image` is set) | `applyImage` → `RemoteMedia::urlToPost` ([RemoteMedia.php:394-400](../src/Services/RemoteMedia.php#L394-L400)) | ≥3 | 1 | | `findAttachmentBySourceUrl` (`get_posts`), `download_url` (HTTP), `wp_update_post` |
+| Extra save after image | `applyImage` → `$product->save()` ([Product.php:1337](../src/Services/WooCommerce/Product.php#L1337)) | | | 1 | Product save #2 |
+| Sync variations | `syncVariableProductToVariations` ([ProductDownloads.php:143-166](../src/Services/WooCommerce/ProductDownloads.php#L143-L166)) | N children | | N | One `save()` per child variation |
+| ACF fields | `saveAcfFields` ([Product.php](../src/Services/WooCommerce/Product.php)) | per field | per image | | See note below |
+| Taxonomies | `Taxonomy::apply` ([Taxonomy.php:53-104](../src/Services/WooCommerce/Taxonomy.php#L53-L104)) | ≥1 per term | | | `get_term_by` by slug, optional `wpml_object_id`, then `wp_set_object_terms` |
 
-Per ogni download il sideload può scatenare anche
-`normalizeDownloadFileUrl` ([ProductDownloads.php:444-485](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/ProductDownloads.php#L444-L485))
-che fa HTTP download (`RemoteMedia::urlToMediaLibrary` con timeout 12s), poi
-`get_attached_file`, `wp_get_attachment_url`.
+Notes:
 
-**Conteggio realistico per 1 prodotto "ricco"** (1 immagine, 4 download
-remoti, 8 attributi, 6 categorie/tag, 15 campi ACF di cui 2 immagini, no
-varianti, no WPML): ~12-25 query SQL, 7 chiamate HTTP esterne, **3 save
-diversi dello stesso `WC_Product`** (init, post-image, eventuale variabile-sync).
+- **`saveAcfFields`** iterates the fields and passes each one to the central `Acf::updateFieldValue`:
+  - `tab` fields are skipped;
+  - `image`/`file` URLs become an `attachment_id` via `RemoteMedia::urlToPost` / `urlToMediaLibrary`;
+  - repeaters are normalized by `Acf::resolveRepeaterValue`, which is recursive, validates the shape
+    and resolves image/file sub-fields.
 
-### 3.2 `POST /woocommerce/products` — moltiplicatori WPML
+  `Post::savePostAssociations` and `Term::updateAcfFields` share the same logic.
+- **Downloads.** Each download may also trigger `normalizeDownloadFileUrl`
+  ([ProductDownloads.php:444-485](../src/Services/WooCommerce/ProductDownloads.php#L444-L485)).
+  This does an HTTP download (`RemoteMedia::urlToMediaLibrary`, 12s timeout), then
+  `get_attached_file` and `wp_get_attachment_url`.
 
-Con WPML attivo + 3 lingue:
+**Realistic count for one "rich" product** (1 image, 4 remote downloads, 8 attributes,
+6 categories/tags, 15 ACF fields including 2 images, no variations, no WPML):
 
-- `getLanguageContext` ([Product.php:426-468](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L426-L468)) cammina
-  tutti i campi traducibili per estrarre la lista lingue.
-- Pre-check titolo: 1 query in più per OGNI lingua tradotta
-  ([Product.php:766-778](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L766-L778)).
-- `insertTranslatedProducts` ([Product.php:981-1048](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L981-L1048))
-  esegue `persistProductFromParams` UNA VOLTA PER LINGUA → moltiplicatore
-  ×N_lingue dei save, dei `applyProductFields`, `applyProductAttributes`,
-  `ProductDownloads::apply` (RIIMPORTANDO i file remoti — viene riutilizzato l'attachment
-  via `findAttachmentBySourceUrl`, ma il check è una `get_posts`/lingua),
-  `applyImage`, `saveAcfFields`, `Taxonomy::apply`. Lo switch lingua è
-  `Wpml::runWithLanguage` ([Wpml.php:12-36](wp-content/plugins/wordpress-plugin/src/Services/Wpml.php#L12-L36)).
-- L'UPDATE path
-  ([Product.php:833-909](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L833-L909))
-  rifa lo stesso lavoro: `findDuplicateProductIdByTitle` esegue
-  un `get_posts` per ogni lingua presente nelle traduzioni.
-- Risoluzione gruppo traduzioni: `getTranslationProductIds`
-  ([Product.php:1429-1494](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L1429-L1494))
-  chiama 3–4 filtri WPML differenti, ciascuno con query interna.
+- about 12–25 SQL queries;
+- 7 external HTTP calls;
+- **3 separate saves of the same `WC_Product`** (initial, after image, optional variable sync).
 
-Risultato realistico con 3 lingue: ~3x query + ~3x save + ~3x scrittura ACF.
+### 3.2 `POST /woocommerce/products` — WPML multipliers
 
-### 3.3 `POST /woocommerce/categories` (e tags / attribute-terms)
+With WPML active and 3 languages:
 
-Per ogni elemento `Term::upsertFromParams`:
+- `getLanguageContext` ([Product.php:426-468](../src/Services/WooCommerce/Product.php#L426-L468))
+  walks every translatable field to extract the list of languages.
+- Title pre-check: 1 extra query for EACH translated language
+  ([Product.php:766-778](../src/Services/WooCommerce/Product.php#L766-L778)).
+- `insertTranslatedProducts` ([Product.php:981-1048](../src/Services/WooCommerce/Product.php#L981-L1048))
+  runs `persistProductFromParams` ONCE PER LANGUAGE. This multiplies by the number of languages:
+  - saves;
+  - `applyProductFields`, `applyProductAttributes`;
+  - `ProductDownloads::apply` (remote files are RE-IMPORTED; the attachment is reused via
+    `findAttachmentBySourceUrl`, but that check is one `get_posts` per language);
+  - `applyImage`, `saveAcfFields`, `Taxonomy::apply`.
 
-1. `requireWpmlForPayloadLanguageMaps` — solo validazione.
-2. `validateParsedPayload` → `findByLocalKey` (1 query `wpdb->get_col`
-   da [TermRepository.php:38-56](wp-content/plugins/wordpress-plugin/src/Services/TermRepository.php#L38-L56)).
+  Language switching is done by `Wpml::runWithLanguage` ([Wpml.php:12-36](../src/Services/Wpml.php#L12-L36)).
+- The UPDATE path ([Product.php:833-909](../src/Services/WooCommerce/Product.php#L833-L909))
+  repeats the same work. `findDuplicateProductIdByTitle` runs one `get_posts` for each language
+  in the translations.
+- Translation group resolution: `getTranslationProductIds`
+  ([Product.php:1429-1494](../src/Services/WooCommerce/Product.php#L1429-L1494))
+  calls 3–4 different WPML filters, each with its own internal query.
+
+Realistic result with 3 languages: about 3x queries, 3x saves and 3x ACF writes.
+
+### 3.3 `POST /woocommerce/categories` (and tags / attribute terms)
+
+For each element, `Term::upsertFromParams` runs:
+
+1. `requireWpmlForPayloadLanguageMaps` — validation only.
+2. `validateParsedPayload` → `findByLocalKey` (1 `wpdb->get_col` query from
+   [TermRepository.php:38-56](../src/Services/TermRepository.php#L38-L56)).
 3. `upsertBaseTerm`:
-   - `findByLocalKeyForLanguage` (1 query, eventualmente molteplici lookup WPML
-     per lingua) ([Term.php:232-259](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L232-L259)).
-   - `upsertTermData` ([Term.php:879-923](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L879-L923)):
-     - `findTermIdByDataSlug` (almeno 1 query).
-     - `wp_update_term` o `wp_insert_term` dentro `Wpml::runWithLanguage`.
-     - Recupero da errore `duplicate_term_slug` con `forceUpdateTermWithExistingSlug`
-       ([Term.php:759-830](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L759-L830))
-       fa direttamente `wpdb->update` su `wp_terms` e `wp_term_taxonomy`.
+   - `findByLocalKeyForLanguage` ([Term.php:232-259](../src/Services/Term.php#L232-L259)):
+     1 query, possibly several WPML lookups per language.
+   - `upsertTermData` ([Term.php:879-923](../src/Services/Term.php#L879-L923)):
+     - `findTermIdByDataSlug` (at least 1 query);
+     - `wp_update_term` or `wp_insert_term` inside `Wpml::runWithLanguage`;
+     - on a `duplicate_term_slug` error, `forceUpdateTermWithExistingSlug`
+       ([Term.php:759-830](../src/Services/Term.php#L759-L830))
+       recovers by running `wpdb->update` directly on `wp_terms` and `wp_term_taxonomy`.
    - `setTermLocalKey` (`update_term_meta`).
    - `ensureBaseTermLanguage` (WPML action).
-   - `updateAcfFields` per ogni campo (può scatenare `RemoteMedia::urlToMediaLibrary`).
-4. `syncTranslations` ([Term.php:998-1073](wp-content/plugins/wordpress-plugin/src/Services/Term.php#L998-L1073))
-   ripete per ogni lingua: lookup translation, `upsertTermData`,
-   `setTermLanguage`, `updateAcfFields`.
-5. `WooCommerceTerm::syncThumbnail` ([Services/WooCommerce/Term.php:111-133](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Term.php#L111-L133))
-   fa un'altra `findTermIdsByLocalKey` (query) + eventuale `RemoteMedia::urlToMediaLibrary`
-   (HTTP) + `update_term_meta` per ogni term ID trovato. Solo per
-   `product_cat` e branding.
+   - `updateAcfFields` for each field (can trigger `RemoteMedia::urlToMediaLibrary`).
+4. `syncTranslations` ([Term.php:998-1073](../src/Services/Term.php#L998-L1073))
+   repeats, for each language: translation lookup, `upsertTermData`, `setTermLanguage`, `updateAcfFields`.
+5. `WooCommerceTerm::syncThumbnail` ([Services/WooCommerce/Term.php:111-133](../src/Services/WooCommerce/Term.php#L111-L133))
+   runs another `findTermIdsByLocalKey` (query), an optional `RemoteMedia::urlToMediaLibrary` (HTTP),
+   and one `update_term_meta` per term ID found. Only for `product_cat` and brands.
 
 ### 3.4 `POST /woocommerce/attributes`
 
-`Attribute::save` ([Services/WooCommerce/Attribute.php:445-501](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Attribute.php#L445-L501)):
+`Attribute::save` ([Services/WooCommerce/Attribute.php:445-501](../src/Services/WooCommerce/Attribute.php#L445-L501)):
 
 - `findAttributeByLocalKey` → `findExistingAttributeIdsByLocalKey` →
-  `findAttributeIdsByLocalKey` ([Services/WooCommerce/Attribute.php:143-172](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Attribute.php#L143-L172))
-  esegue **una query con `LIKE %`** su `wp_options` (`option_name LIKE 'onpage_wc_attribute_local_key_%'`).
-  Su siti con tante options può diventare costoso.
-- `wc_create_attribute`/`wc_update_attribute` internamente chiama
-  `flush_rewrite_rules`, invalida transients, ricrea taxonomy.
-- `persistLocalKeyForAttribute` ([Services/WooCommerce/Attribute.php:209-213](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Attribute.php#L209-L213))
-  rifa `findAttributeIdsByLocalKey` per garantire unicità → un'altra query LIKE.
-  ✅ **Ottimizzato (2026-05-27):** `findAttributeIdsByLocalKey` ha una memo
-  request-scoped (`self::$localKeyIdsCache`) invalidata su ogni scrittura di
-  option local_key (`persistLocalKeyForAttribute`/`deleteLocalKeyForAttribute`),
-  così la seconda LIKE per save diventa cache-hit. La singola LIKE resta.
+  `findAttributeIdsByLocalKey` ([Services/WooCommerce/Attribute.php:143-172](../src/Services/WooCommerce/Attribute.php#L143-L172))
+  runs **one `LIKE %` query** on `wp_options` (`option_name LIKE 'onpage_wc_attribute_local_key_%'`).
+  This can get expensive on sites with many options.
+- `wc_create_attribute` / `wc_update_attribute` internally call `flush_rewrite_rules`,
+  invalidate transients and re-create the taxonomy.
+- `persistLocalKeyForAttribute` ([Services/WooCommerce/Attribute.php:209-213](../src/Services/WooCommerce/Attribute.php#L209-L213))
+  runs `findAttributeIdsByLocalKey` again to enforce uniqueness, which is a second LIKE query.
+
+✅ **Optimized (2026-05-27):** `findAttributeIdsByLocalKey` now has a request-scoped memo
+(`self::$localKeyIdsCache`). It is invalidated on every local_key option write
+(`persistLocalKeyForAttribute` / `deleteLocalKeyForAttribute`).
+The second LIKE per save is now a cache hit. The single LIKE remains.
 
 ### 3.5 `POST /woocommerce/brands`
 
-Prima del lavoro term-level vero e proprio
-([Services/WooCommerce/Brand.php:102-123](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Brand.php#L102-L123)):
+Before the actual term-level work
+([Services/WooCommerce/Brand.php:102-123](../src/Services/WooCommerce/Brand.php#L102-L123)):
 
-- `ensureTaxonomy(true)` può chiamare `Taxonomy::insertFromParams` (crea
-  ACF taxonomy) + `register_taxonomy` + **`flush_rewrite_rules()`**. Costoso ma
-  pagato solo la prima volta che il brand non esiste.
+- `ensureTaxonomy(true)` may call `Taxonomy::insertFromParams` (creates the ACF taxonomy),
+  `register_taxonomy` and **`flush_rewrite_rules()`**. This is expensive, but only paid
+  the first time, when the brand taxonomy does not exist yet.
 
-Successivamente identico a categories. Il `syncThumbnail`
-([Services/WooCommerce/Brand.php:182-204](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Brand.php#L182-L204)) ripete il
-pattern: query per local_key + HTTP download + meta update.
-✅ **Ottimizzato (2026-05-27):** `findTermIdsByLocalKey` non usa più
-`get_terms(meta_query)` (che si invalidava a ogni scrittura termine durante
-l'import) ma una query `$wpdb` diretta come `WooCommerce/Term` e
-`TermRepository`. Effetto collaterale voluto: list/delete-by-local_key dei brand
-ora coprono tutte le varianti-lingua (coerente con categories/tags).
+After that, the flow is identical to categories. `syncThumbnail`
+([Services/WooCommerce/Brand.php:182-204](../src/Services/WooCommerce/Brand.php#L182-L204))
+repeats the same pattern: query by local_key, HTTP download, meta update.
+
+✅ **Optimized (2026-05-27):** `findTermIdsByLocalKey` no longer uses `get_terms(meta_query)`,
+whose cache was invalidated on every term write during an import. It now uses a direct `$wpdb`
+query, like `WooCommerce/Term` and `TermRepository`. Intended side effect: brand list and
+delete-by-local_key now cover all language variants, consistent with categories and tags.
 
 ### 3.6 `POST /woocommerce/variant-products`
 
 `VariantProduct::saveOneFromParams`
-([VariantProduct.php:632-695](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L632-L695)):
+([VariantProduct.php:632-695](../src/Services/WooCommerce/VariantProduct.php#L632-L695)):
 
-- `findVariationIdByLocalKeyForParent` (1 query) +
-  `getAllowedParentIdsForLocalKey` (filtri WPML) +
-  `assertLocalKeyAvailableForParentSet` → un'altra `findVariationIdsByLocalKey`
-  (1 query). Poi per ogni variation trovata, `wp_get_post_parent_id`.
-- Costruisce `\WC_Product_Variation`, applica fields, attributes (con risoluzione
-  termine fino a 3 fallback `get_term_by`).
-- **`$variation->save()`** (1 save).
+- Lookups: `findVariationIdByLocalKeyForParent` (1 query),
+  `getAllowedParentIdsForLocalKey` (WPML filters), and
+  `assertLocalKeyAvailableForParentSet`, which runs another `findVariationIdsByLocalKey` (1 query).
+  Then `wp_get_post_parent_id` for each variation found.
+- Builds a `\WC_Product_Variation` and applies fields and attributes
+  (term resolution with up to 3 `get_term_by` fallbacks).
+- **`$variation->save()`** (save #1).
 - `update_post_meta(onpage_local_key)`.
-- `applyImage` con `RemoteMedia::urlToPost` (HTTP) → **`$variation->save()` di nuovo**.
-- `Product::syncParentDownloadsToVariation` ([ProductDownloads.php:169-190](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/ProductDownloads.php#L169-L190))
-  → `wc_get_product(parent)`, costruisce payload downloads, **`$variation->save()` di nuovo**.
-- `syncParentProduct` ([VariantProduct.php:907-920](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L907-L920))
-  → `WC_Product_Variable::sync($parent_id)` che ricalcola prezzi min/max
-  iterando TUTTE le variation del parent + `wc_delete_product_transients` +
-  `clean_post_cache`. **Costoso: O(num_variazioni) per ogni singola variation salvata.**
+- `applyImage` with `RemoteMedia::urlToPost` (HTTP), then **`$variation->save()` again**.
+- `Product::syncParentDownloadsToVariation` ([ProductDownloads.php:169-190](../src/Services/WooCommerce/ProductDownloads.php#L169-L190)):
+  `wc_get_product(parent)`, builds the downloads payload, then **`$variation->save()` again**.
+- `syncParentProduct` ([VariantProduct.php:907-920](../src/Services/WooCommerce/VariantProduct.php#L907-L920)):
+  `WC_Product_Variable::sync($parent_id)` recomputes min/max prices by iterating over ALL
+  variations of the parent, then runs `wc_delete_product_transients` and `clean_post_cache`.
+  **Expensive: O(number of variations) for every single variation saved.**
 
-In modalità WPML `saveTranslatedFromParams`
-([VariantProduct.php:546-629](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L546-L629))
-moltiplica `saveOneFromParams` per ogni traduzione del parent → ognuna richiama
-`syncParentProduct` per il parent tradotto.
+In WPML mode, `saveTranslatedFromParams`
+([VariantProduct.php:546-629](../src/Services/WooCommerce/VariantProduct.php#L546-L629))
+runs `saveOneFromParams` once per translation of the parent.
+Each run calls `syncParentProduct` for the translated parent.
 
 ---
 
-## 4. Bottleneck principali e cause
+## 4. Main bottlenecks and their causes
 
-### 4.1 Save ripetuti dello stesso CRUD object
+### 4.1 Repeated saves of the same CRUD object
 
-`$product->save()`/`$variation->save()` viene invocato 2–4 volte per elemento
-anche nel caso semplice (init, post-image, syncVariableProductToVariations,
-parent sync). Ogni save:
+`$product->save()` / `$variation->save()` is called 2–4 times per element, even in the simple case
+(initial, after image, `syncVariableProductToVariations`, parent sync). Each save:
 
-- Esegue `wp_insert_post`/`wp_update_post`.
-- Fa partire `save_post`, `transition_post_status`, `clean_post_cache`,
-  hooks WooCommerce (`woocommerce_new_product`, `woocommerce_update_product`,
-  ricalcolo lookup table `wc_product_meta_lookup`, `wc_delete_product_transients`).
-- Riallinea termini, ricontano (deferred ma comunque triggerati).
+- runs `wp_insert_post` / `wp_update_post`;
+- fires `save_post`, `transition_post_status`, `clean_post_cache`, and WooCommerce hooks
+  (`woocommerce_new_product`, `woocommerce_update_product`, `wc_product_meta_lookup` lookup table
+  recalculation, `wc_delete_product_transients`);
+- re-syncs terms and triggers recounts (deferred, but still triggered).
 
-**Dimezzare i save** dimezza all'incirca il tempo wall-clock di un import "ricco".
+**Halving the saves roughly halves the wall-clock time of a "rich" import.**
 
-### 4.2 Query ripetute con `get_posts` + `meta_query` su `onpage_local_key`/title
+### 4.2 Repeated `get_posts` + `meta_query` lookups on `onpage_local_key` / title
 
-Pattern in [Product.php:514-532](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L514-L532),
-[Product.php:563-576](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L563-L576),
-[VariantProduct.php:179-225](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L179-L225).
-Per ogni elemento del batch:
+The pattern appears in [Product.php:514-532](../src/Services/WooCommerce/Product.php#L514-L532),
+[Product.php:563-576](../src/Services/WooCommerce/Product.php#L563-L576) and
+[VariantProduct.php:179-225](../src/Services/WooCommerce/VariantProduct.php#L179-L225).
+For every batch element:
 
-- 1 lookup per local_key (canonical resolve).
-- 1 lookup ripetuto subito dopo per check unicità (RIDONDANTE).
-- 1 lookup per title.
-- 1 lookup per ogni lingua tradotta.
+- 1 lookup by local_key (canonical resolve);
+- 1 repeated lookup right after, for the uniqueness check (REDUNDANT);
+- 1 lookup by title;
+- 1 lookup per translated language.
 
-Tutte queste query passano dal motore generico `WP_Query` con filtri WPML
-applicati (cost elevato in WPML siti con `icl_translations` grande).
+All of these go through the generic `WP_Query` engine with WPML filters applied.
+This is costly on WPML sites with a large `icl_translations` table.
 
 `TermRepository::findTermIdsByLocalKey`
-([TermRepository.php:38-56](wp-content/plugins/wordpress-plugin/src/Services/TermRepository.php#L38-L56))
-fa già la versione `wpdb->prepare` diretta, più economica — andrebbe estesa al
-contesto post.
+([TermRepository.php:38-56](../src/Services/TermRepository.php#L38-L56))
+already uses a cheaper direct `wpdb->prepare` query. The same approach should be extended to posts.
 
-### 4.3 `WC_Product_Variable::sync` invocata per ogni variation
+### 4.3 `WC_Product_Variable::sync` runs for every variation
 
-`VariantProduct::syncParentProduct` viene chiamata in `saveOneFromParams`
-([VariantProduct.php:691](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/VariantProduct.php#L691)).
-Se si importano N variation dello stesso parent in un batch, la sync gira N
-volte, ognuna O(N) → **O(N²)** sull'insieme di figlie del parent variabile.
+`VariantProduct::syncParentProduct` is called in `saveOneFromParams`
+([VariantProduct.php:691](../src/Services/WooCommerce/VariantProduct.php#L691)).
+Importing N variations of the same parent in one batch runs the sync N times, each O(N).
+The total is **O(N²)** over the parent's children.
 
-### 4.4 Download remoti seriali
+### 4.4 Serial remote downloads
 
-`RemoteMedia::downloadRemoteFile` ([RemoteMedia.php:211-223](wp-content/plugins/wordpress-plugin/src/Services/RemoteMedia.php#L211-L223))
-è sincrono con timeout 45s (12s per `downloads_*`). Per ogni:
+`RemoteMedia::downloadRemoteFile` ([RemoteMedia.php:211-223](../src/Services/RemoteMedia.php#L211-L223))
+is synchronous, with a 45s timeout (12s for `downloads_*`). It runs for each:
 
-- `image` del prodotto/variation
-- `image`/`file` ACF field
-- `downloads.*.file` non già locale
-- `thumbnail` di category/brand
+- product/variation `image`;
+- ACF `image`/`file` field;
+- `downloads.*.file` that is not already local;
+- category/brand `thumbnail`.
 
-…fa un HTTP `download_url` + sideload + `wp_generate_attachment_metadata`
-(genera thumbnail = risorsa CPU). Tutto bloccante. Un singolo prodotto con
-4 immagini + 4 download può consumare > 30s di sola I/O.
+Each one does an HTTP `download_url`, a sideload, and `wp_generate_attachment_metadata`
+(which generates thumbnails and is CPU-heavy). All of it blocks.
+A single product with 4 images and 4 downloads can spend more than 30s on I/O alone.
 
-`findAttachmentBySourceUrl` ([RemoteMedia.php:37-49](wp-content/plugins/wordpress-plugin/src/Services/RemoteMedia.php#L37-L49))
-viene chiamata per ogni URL ma il risultato non è memoizzato a livello di
-batch — due prodotti che condividono un'immagine fanno 2 query identiche.
+`findAttachmentBySourceUrl` ([RemoteMedia.php:37-49](../src/Services/RemoteMedia.php#L37-L49))
+runs for every URL, but its result is not memoized across the batch.
+Two products that share an image run 2 identical queries.
 
-### 4.5 `getWpmlLanguages()` non memoizzato
+### 4.5 `getWpmlLanguages()` is not memoized
 
-Chiamato decine di volte per ogni elemento — direttamente o tramite
-`MultiLang::getLanguages`. Ogni call esegue
-`apply_filters('wpml_active_languages', null, ['skip_missing' => 0])`,
-che WPML risolve con una query SQL contro `icl_languages` (a meno della
-cache interna WPML che funziona ma costa comunque function-call).
+It is called dozens of times per element, directly or through `MultiLang::getLanguages`.
+Each call runs `apply_filters('wpml_active_languages', null, ['skip_missing' => 0])`.
+WPML resolves this with a SQL query against `icl_languages`. WPML's internal cache helps,
+but each call still costs a function call chain.
 
-### 4.6 Validazione walking ripetuto del payload
+### 4.6 The payload is walked repeatedly during validation
 
-Per ogni prodotto:
+For each product:
 
-- 1° walk: `normalizeProductPayload` (validazione + estrazione).
-- 2° walk: `getLanguageContext` ([Product.php:426-468](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L426-L468))
-  attraversa di nuovo acf_fields, props, attributes, downloads, name, content, description, image.
-- 3° walk: durante l'applicazione per ogni lingua, `resolveFieldsForLanguage`,
-  `resolveValue`, ecc. riattraversano i campi.
+1. **Walk 1:** `normalizeProductPayload` (validation and extraction).
+2. **Walk 2:** `getLanguageContext` ([Product.php:426-468](../src/Services/WooCommerce/Product.php#L426-L468))
+   goes over acf_fields, props, attributes, downloads, name, content, description and image again.
+3. **Walk 3:** while applying each language, `resolveFieldsForLanguage`, `resolveValue`, etc.
+   traverse the fields once more.
 
-Lo stesso vale per term: `parseTermPayload` + `validateParsedPayload` + costruzione
-`buildTermData` per ogni lingua.
+Terms behave the same way: `parseTermPayload`, then `validateParsedPayload`, then `buildTermData` for each language.
 
-### 4.7 `Taxonomy::apply` con resolution per termine
+### 4.7 `Taxonomy::apply` resolves each term individually
 
-[Taxonomy.php:53-104](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Taxonomy.php#L53-L104) → per ogni
-termine: `findTermForAssignment` → `findTermByLocalKeyForAssignment`
-(1 query + filtri WPML) → fallback `findTermBySlugForAssignment`
-(`get_term_by` per ciascuna lingua attiva). Su 6 categorie × 3 lingue ⇒
-~36 lookup. Nessuna pre-risoluzione batch.
+[Taxonomy.php:53-104](../src/Services/WooCommerce/Taxonomy.php#L53-L104) does, for each term:
 
-### 4.8 ACF: caching parziale, scrittura sequenziale
+1. `findTermForAssignment` → `findTermByLocalKeyForAssignment` (1 query + WPML filters);
+2. fallback `findTermBySlugForAssignment` (`get_term_by` for each active language).
 
-`Acf::loadFieldTypeMap` ([Acf.php:148-161](wp-content/plugins/wordpress-plugin/src/Services/Acf.php#L148-L161))
-è il punto forte (caricato una volta per request). MA:
+With 6 categories × 3 languages this is about 36 lookups. Nothing is pre-resolved in batch.
 
-- `Acf::getFieldType` ([Acf.php:170-206](wp-content/plugins/wordpress-plugin/src/Services/Acf.php#L170-L206))
-  itera "groups" o "group_fields" se non trova nel context scoped — chiamata
-  per OGNI campo ACF da scrivere.
-- `Acf::updateFieldValue` ([Acf.php:271-301](wp-content/plugins/wordpress-plugin/src/Services/Acf.php#L271-L301))
-  chiama `acf_update_value` per campo: scrittura postmeta singola, niente bulk.
-  Quando il valore è image/file e arriva URL remoto, scatena `RemoteMedia::urlToPost`
-  in linea ([Product.php:1358-1363](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L1358-L1363)) — HTTP sincrono.
+### 4.8 ACF: partial caching, sequential writes
 
-### 4.9 `Attribute` LIKE su `wp_options`
+`Acf::loadFieldTypeMap` ([Acf.php:148-161](../src/Services/Acf.php#L148-L161))
+is the strong point: it is loaded once per request. However:
 
-`findAttributeIdsByLocalKey` ([Services/WooCommerce/Attribute.php:143-172](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Attribute.php#L143-L172))
-fa `option_name LIKE '%onpage_wc_attribute_local_key_%' AND option_value = %s`.
-Su sito con migliaia di options, la LIKE non usa l'autoload index. Inoltre la
-query girava **2 volte** per ogni save (uniqueness + assert).
-✅ **Ottimizzato (2026-05-27):** memo request-scoped → 1 sola LIKE per local_key
-per richiesta. La LIKE residua resta non-indicizzata su `option_value`: per
-volumi alti di attributi valutare un indice o uno store dedicato (vedi §6).
+- `Acf::getFieldType` ([Acf.php:170-206](../src/Services/Acf.php#L170-L206))
+  iterates over "groups" or "group_fields" when the field is not in the scoped context.
+  It is called for EVERY ACF field being written.
+- `Acf::updateFieldValue` ([Acf.php:271-301](../src/Services/Acf.php#L271-L301))
+  calls `acf_update_value` per field: one postmeta write each, no bulk write.
+  For an image/file field with a remote URL, it triggers `RemoteMedia::urlToPost` inline
+  ([Product.php:1358-1363](../src/Services/WooCommerce/Product.php#L1358-L1363)) — a synchronous HTTP call.
+
+### 4.9 `Attribute` LIKE query on `wp_options`
+
+`findAttributeIdsByLocalKey` ([Services/WooCommerce/Attribute.php:143-172](../src/Services/WooCommerce/Attribute.php#L143-L172))
+runs `option_name LIKE '%onpage_wc_attribute_local_key_%' AND option_value = %s`.
+On a site with thousands of options, the LIKE cannot use the autoload index.
+The query also used to run **twice** per save (uniqueness + assert).
+
+✅ **Optimized (2026-05-27):** a request-scoped memo means only 1 LIKE per local_key per request.
+The remaining LIKE is still not indexed on `option_value`. For high attribute volumes,
+consider an index or a dedicated store (see §6).
 
 ---
 
-## 5. Stima complessità per batch
+## 5. Estimated cost per batch
 
-Con N elementi nel batch, L lingue attive, D download/immagini per prodotto:
+Variables: N = elements in the batch, L = active languages, D = downloads/images per product.
 
-| Endpoint | Query/elemento (no WPML) | Query/elemento (WPML × L) | Save WC per elemento |
+| Endpoint | Queries/element (no WPML) | Queries/element (WPML × L) | WC saves per element |
 |---|---|---|---|
-| products INSERT | ~10–15 + ~3·D | ~10–15 + L · (4–6 query) | 2–3 + N_children |
-| products UPDATE | ~8–12 | ~8–12 + L · (3 query) | 1–2 + N_children |
-| variant-products | ~10 + sync O(N_variations_parent) | ~10 · L_parent · L_variation | 3 + ricreazione |
-| categories/tags | ~4–6 | ~4–6 + L · (~3 query) | (term updates) |
-| brands (prima volta) | ~6–8 + flush_rewrite | come categories | come categories |
-| attributes | ~3 LIKE su options + 1 WC | n/a | n/a |
-| attribute-terms | come categories | come categories | n/a |
+| products INSERT | ~10–15 + ~3·D | ~10–15 + L · (4–6 queries) | 2–3 + N_children |
+| products UPDATE | ~8–12 | ~8–12 + L · (3 queries) | 1–2 + N_children |
+| variant-products | ~10 + sync O(N_variations_parent) | ~10 · L_parent · L_variation | 3 + re-creation |
+| categories/tags | ~4–6 | ~4–6 + L · (~3 queries) | (term updates) |
+| brands (first time) | ~6–8 + flush_rewrite | same as categories | same as categories |
+| attributes | ~3 LIKE on options + 1 WC | n/a | n/a |
+| attribute-terms | same as categories | same as categories | n/a |
 
-Per 1000 prodotti, 3 lingue, 4 download ciascuno: vicino a 100k query SQL e
-4000–8000 download HTTP sequenziali. È il caso più realistico per un import
-massivo On Page® → WooCommerce.
-
----
-
-## 6. Aree di intervento per velocizzare insert/update
-
-Suddivise per costo/beneficio. **Solo analisi**, nessuna scrittura sul codice.
-
-### 6.1 Quick wins (basso rischio, alto rendimento)
-
-1. **Memoizzare le helper WPML request-scoped**:
-   `getWpmlLanguages`, `getWpmlDefaultLanguage`, `getWpmlCurrentLanguage`,
-   `isWpmlActive` — chiamate centinaia di volte per batch
-   ([helpers.php:72-124](wp-content/plugins/wordpress-plugin/src/helpers.php#L72-L124)).
-   Cache statica per request.
-2. **Eliminare i lookup ridondanti** subito dopo
-   `findCanonicalProductIdByLocalKey`: il check `findProductIdByLocalKey`
-   in `insertFromParams` ([Product.php:758](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L758))
-   ripete il lavoro appena fatto. Idem per attributi (uniqueness assert dopo
-   findExisting).
-3. **Cache batch-locale dei `findAttachmentBySourceUrl`** in
-   `RemoteMedia::urlToMediaLibrary` ([RemoteMedia.php:340-376](wp-content/plugins/wordpress-plugin/src/Services/RemoteMedia.php#L340-L376)).
-   Una map `url → attachment_id` riempita dal primo lookup risparmia tante
-   `get_posts` su file condivisi tra prodotti.
-4. **Coalescere `WC_Product_Variable::sync`**: invece di chiamarlo dentro
-   `saveOneFromParams`, raccogliere i parent_id toccati nel controller e
-   chiamarlo UNA volta per parent a fine batch (lo si può fare a livello di
-   `VariantProduct::save` Controller con un piccolo helper).
-5. **Sospendere `wp_defer_term_counting(true)` + `wp_suspend_cache_invalidation(true)`**
-   intorno al loop nei controller. Il ricalcolo viene fatto in coda. Sicuro
-   se ricalcolato a fine batch.
-6. **Sostituire i `get_posts(meta_query)` su `onpage_local_key`** (postmeta) con
-   query `wpdb->prepare` dirette stile `TermRepository::findTermIdsByLocalKey`
-   — niente filtri di `WP_Query`/WPML, niente object caching superfluo. Aggiungere
-   un indice su `postmeta(meta_key, meta_value)` non aiuta perché WP ce l'ha
-   già (`meta_key`), ma la query diretta riduce il path di esecuzione.
-7. **Eliminare il secondo `$product->save()` in `applyImage`** ([Product.php:1334-1341](wp-content/plugins/wordpress-plugin/src/Services/WooCommerce/Product.php#L1334-L1341)):
-   spostare `set_image_id` prima del primo save in `persistProductFromParams`.
-   Stessa cosa per `VariantProduct::applyImage`.
-
-### 6.2 Refactor medio (cambia ordine di operazioni, basso rischio funzionale)
-
-8. **Cache request-scoped del field type map ACF** già esistente — ma
-   aggiungere short-circuit per il path globale di `getFieldType` quando
-   `context`/`target` sono noti (oggi se non trova nel context scoped fa
-   comunque la scansione globale, costoso). Lo si vede al [Acf.php:170-206](wp-content/plugins/wordpress-plugin/src/Services/Acf.php#L170-L206).
-9. **Risoluzione termini in batch** per `Taxonomy::apply`: raccogliere prima
-   tutti gli slug/local_key richiesti, fare 1 query per taxonomy che ritorna
-   tutti i term_id, e poi assegnare. Lo si fa una volta per prodotto se serve.
-10. **Riusare la build della validazione + normalizzazione** in unica fase:
-    il payload viene attraversato ≥3 volte. Costruire una struttura
-    "normalized DTO" e farne il consumer single-pass.
-11. **Per le traduzioni** evitare di riapplicare campi `shared` (SKU, prezzi,
-    dimensioni, downloads, attributi non localizzati). Oggi
-    `persistProductFromParams` applica tutto sempre, anche se il valore non
-    è cambiato. Distinguere "shared once" da "per language" già al primo
-    save risparmia ×N_lingue scritture di postmeta.
-12. **Pre-resolution remote media per batch**: prima del loop, raccogliere
-    tutti gli URL univoci nel payload e importarli in un solo passaggio
-    (oppure marcarli come "già visti" così il primo elemento li scarica e
-    gli altri trovano l'attachment via cache).
-
-### 6.3 Refactor architetturale (richiede testing più ampio)
-
-13. **Sospendere temporaneamente gli hook costosi WooCommerce** (lookup table
-    sync, search indexer di HPOS, term recount) dentro un blocco di import e
-    rigenerare a fine batch. Esiste API WooCommerce
-    (`WC_Background_Process`, `wc_update_product_lookup_tables_column`).
-14. **Download asincrono dei media** via Action Scheduler. La risposta REST
-    ritorna immediatamente con `attachment_id` pendente, l'import HTTP avviene
-    fuori richiesta. Permette di sovrapporre I/O e dare ack al chiamante più
-    in fretta. Compatibile con la struttura `RemoteMedia::ACTION_*`.
-15. **Sostituire `get_posts` con query `wpdb` mirate** per tutti i lookup
-    `local_key` (post type, variations, term). La latenza dei filtri di
-    WP_Query è significativa quando si ripetono migliaia di volte.
-16. **Introdurre un "session cache" condiviso** tra service (es. `BatchContext`)
-    che contiene: lingue WPML, mappa local_key→post_id già risolti, mappa
-    URL→attachment_id, mappa term reference→term_id, ACF field type map già
-    in `Acf`. Tutti i service lo leggono invece di rifare ogni lookup.
-
-### 6.4 Possibili effetti collaterali da considerare
-
-- Sospendere hook può rompere plugin terzi (SEO, search index, cache CDN).
-  Va isolato dietro un flag con default attuale.
-- Importare media in background cambia il contratto della risposta REST (oggi
-  ritorna `attachment_id` finale).
-- Dedup batch dei lookup local_key richiede invalidazione coerente quando un
-  elemento del batch CREA un record che un elemento successivo CERCHEREBBE.
-- Bypass di `WP_Query` perde i filtri WPML che selezionano la lingua corrente.
-  Va valutato per ogni lookup se serve il filtro lingua o no (per local_key
-  in genere NO: il local_key è invariante per lingua).
+For 1000 products, 3 languages and 4 downloads each: close to 100k SQL queries and
+4000–8000 sequential HTTP downloads. This is the most realistic case for a bulk
+On Page® → WooCommerce import.
 
 ---
 
-## 7. Riepilogo
+## 6. Ways to speed up insert/update
 
-Il pattern dominante è:
+Grouped by cost/benefit. **Analysis only** — no code has been changed.
 
-- Validazione lineare ma ripetuta più volte sullo stesso payload.
-- Lookup `local_key`/title duplicati per elemento.
-- Save ripetuti dello stesso CRUD object dentro la stessa pipeline (init →
-  set image → sync).
-- Costo amplificato ×N lingue per WPML — anche su campi che NON sono in
-  realtà tradotti.
-- I/O remoto sincrono come componente dominante del wall-clock per import
-  con immagini/download.
+### 6.1 Quick wins (low risk, high return)
 
-Le quick win (6.1) coprono il 70% del guadagno con poco rischio:
-memoizzazione WPML, eliminazione di save/lookup ridondanti, deferimento di
-`Variable::sync` e term-counting, batch cache per `findAttachmentBySourceUrl`.
-I refactor medi (6.2) recuperano l'altro 20%. Le scelte architetturali (6.3)
-sono pertinenti solo se il throughput necessario è molto sopra l'attuale.
+1. **Memoize the WPML helpers per request.**
+   `getWpmlLanguages`, `getWpmlDefaultLanguage`, `getWpmlCurrentLanguage` and `isWpmlActive`
+   are called hundreds of times per batch
+   ([helpers.php:72-124](../src/helpers.php#L72-L124)). Use a static per-request cache.
+2. **Remove redundant lookups.** Right after `findCanonicalProductIdByLocalKey`, the
+   `findProductIdByLocalKey` check in `insertFromParams`
+   ([Product.php:758](../src/Services/WooCommerce/Product.php#L758))
+   repeats the same work. The same applies to attributes (uniqueness assert after findExisting).
+3. **Batch-local cache for `findAttachmentBySourceUrl`** in
+   `RemoteMedia::urlToMediaLibrary` ([RemoteMedia.php:340-376](../src/Services/RemoteMedia.php#L340-L376)).
+   A `url → attachment_id` map filled on first lookup saves many `get_posts` calls
+   for files shared between products.
+4. **Coalesce `WC_Product_Variable::sync`.** Instead of calling it inside `saveOneFromParams`,
+   collect the touched parent_ids in the controller and call it ONCE per parent at the end of the batch.
+   A small helper in the `VariantProduct::save` controller is enough.
+5. **Wrap the controller loop in `wp_defer_term_counting(true)` + `wp_suspend_cache_invalidation(true)`.**
+   The recount runs at the end. Safe as long as it is recomputed at the end of the batch.
+6. **Replace `get_posts(meta_query)` on `onpage_local_key`** (postmeta) with direct
+   `wpdb->prepare` queries, in the style of `TermRepository::findTermIdsByLocalKey`.
+   This skips `WP_Query`/WPML filters and unnecessary object caching.
+   Adding an index on `postmeta(meta_key, meta_value)` does not help, because WordPress already
+   indexes `meta_key`. The gain comes from the shorter execution path.
+7. **Remove the second `$product->save()` in `applyImage`**
+   ([Product.php:1334-1341](../src/Services/WooCommerce/Product.php#L1334-L1341)).
+   Move `set_image_id` before the first save in `persistProductFromParams`.
+   Do the same in `VariantProduct::applyImage`.
+
+### 6.2 Medium refactors (reorder operations, low functional risk)
+
+8. **Short-circuit the global path of `getFieldType`.** The request-scoped ACF field type map
+   already exists. But when a field is not found in the scoped context, `getFieldType` still does
+   the expensive global scan, even when `context`/`target` are known
+   ([Acf.php:170-206](../src/Services/Acf.php#L170-L206)).
+9. **Resolve terms in batch** in `Taxonomy::apply`. Collect all requested slugs/local_keys first,
+   run 1 query per taxonomy that returns all term_ids, then assign. Once per product if needed.
+10. **Merge validation and normalization into one phase.** The payload is walked at least 3 times.
+    Build a "normalized DTO" and consume it in a single pass.
+11. **Do not re-apply `shared` fields for translations** (SKU, prices, dimensions, downloads,
+    non-localized attributes). Today `persistProductFromParams` always applies everything, even
+    unchanged values. Separating "shared, once" from "per language" at the first save saves
+    ×N_languages postmeta writes.
+12. **Pre-resolve remote media per batch.** Before the loop, collect all unique URLs in the payload
+    and import them in one pass. Alternatively, mark them as "seen" so the first element downloads
+    them and later elements find the attachment in the cache.
+
+### 6.3 Architectural refactors (need broader testing)
+
+13. **Temporarily suspend expensive WooCommerce hooks** (lookup table sync, HPOS search indexer,
+    term recount) inside an import block, and regenerate at the end of the batch.
+    WooCommerce provides APIs for this (`WC_Background_Process`, `wc_update_product_lookup_tables_column`).
+14. **Download media asynchronously** via Action Scheduler. The REST response returns immediately
+    with a pending `attachment_id`, and the HTTP import happens outside the request.
+    This overlaps I/O and acknowledges the caller sooner. It fits the existing
+    `RemoteMedia::ACTION_*` structure.
+15. **Replace `get_posts` with targeted `wpdb` queries** for all `local_key` lookups
+    (post types, variations, terms). `WP_Query` filter latency adds up over thousands of calls.
+16. **Introduce a shared "session cache"** across services (e.g. `BatchContext`). It would hold:
+    WPML languages, resolved local_key → post_id, URL → attachment_id, term reference → term_id,
+    and the ACF field type map already in `Acf`. Every service reads from it instead of repeating lookups.
+
+### 6.4 Side effects to consider
+
+- Suspending hooks can break third-party plugins (SEO, search index, CDN cache).
+  It should sit behind a flag that defaults to the current behavior.
+- Importing media in the background changes the REST response contract
+  (today it returns the final `attachment_id`).
+- Deduplicating local_key lookups across a batch needs consistent invalidation when one element
+  CREATES a record that a later element would LOOK UP.
+- Bypassing `WP_Query` loses the WPML filters that select the current language.
+  Check each lookup to see whether it needs the language filter. For local_key it usually does NOT,
+  because local_key is the same in every language.
+
+---
+
+## 7. Summary
+
+The dominant patterns are:
+
+- Linear validation, but repeated several times on the same payload.
+- Duplicate `local_key` / title lookups per element.
+- Repeated saves of the same CRUD object within one pipeline (initial → set image → sync).
+- Cost multiplied ×N languages under WPML, even for fields that are NOT actually translated.
+- Synchronous remote I/O as the dominant share of wall-clock time for imports with images/downloads.
+
+Expected gains:
+
+- **Quick wins (6.1): about 70% of the gain, at low risk.** WPML memoization, removal of redundant
+  saves/lookups, deferring `Variable::sync` and term counting, batch cache for `findAttachmentBySourceUrl`.
+- **Medium refactors (6.2): the next 20%.**
+- **Architectural changes (6.3):** only worth it if the required throughput is far above today's.

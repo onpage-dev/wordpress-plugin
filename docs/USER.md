@@ -1,176 +1,168 @@
-# Guida Utente
+# User Guide
 
-## Cos'è On Page®
+This guide is for WordPress site administrators. It explains what the **On Page®** plugin does, what it needs, and how to set it up.
 
-Il plugin **On Page®** ha lo scopo di sincronizzare dati provenienti dal PIM di On Page® verso WordPress.
+## What is On Page®?
 
-In pratica:
+The **On Page®** plugin syncs data from the On Page® PIM into WordPress.
 
-- **On Page®** contiene i dati sorgente
-- l'**Integrazione custom per il cliente** trasferisce i dati a WordPress
-- il plugin **On Page®** riceve questi dati tramite **API REST**
-- WordPress li salva come contenuti strutturati
+Here is how the pieces fit together:
 
-Questo permette di usare WordPress come sito di pubblicazione, mantenendo i dati gestiti centralmente su On Page®.
+- **On Page®** holds the source data.
+- A **custom integration built for your project** sends that data to WordPress.
+- The **On Page®** plugin receives the data through its **REST API**.
+- WordPress stores it as structured content.
 
-## A cosa serve
+This way WordPress is your publishing site, while the data is still managed in one central place: On Page®.
 
-Il plugin è utile quando si vogliono importare e aggiornare in WordPress raccolte di contenuti strutturati, per esempio:
+## What is it for?
 
-- auto
-- immobili
-- prodotti
-- sedi
-- cataloghi
+Use the plugin when you want to import structured collections into WordPress and keep them up to date. For example:
 
-Esempio pratico:
+- cars
+- real estate
+- products
+- store locations
+- catalogs
 
-- una raccolta On Page® chiamata **Car**
-- in WordPress diventa un **Post Type**
-- ogni singolo oggetto della raccolta diventa un contenuto del sito
+A practical example:
 
-## Dipendenze e integrazioni
+- On Page® has a collection called **Car**.
+- In WordPress it becomes a **Post Type**.
+- Each item in the collection becomes a piece of content on the site.
 
-Il plugin si appoggia ad alcuni plugin WordPress esterni:
+## Requirements
 
-- **Advanced Custom Fields (ACF)** — **obbligatorio**  
-  Serve per creare e gestire campi personalizzati strutturati collegati ai contenuti importati: permette di esporre e organizzare quei dati nel backend WordPress e nei template del sito. Il plugin lo interroga a ogni chiamata delle API, quindi deve essere attivo anche quando non servono campi personalizzati.
+| Requirement | Status | Why |
+|---|---|---|
+| **WordPress 7.1+** | Required | |
+| **PHP 8.2+** | Required | |
+| **Advanced Custom Fields (ACF)** | **Required** | Creates and manages the structured custom fields attached to the imported content, so the data can be shown and organized in the WordPress admin and in your site templates. |
+| **WooCommerce** | Optional | Only needed if the integration syncs products, categories, brands or other e-commerce data. |
+| **WPML** | Optional | Only needed if the site manages synced multilingual content. It links content, terms, labels and translated data to the languages configured in WordPress. |
 
-- **WPML**  
-  Serve se il sito deve gestire contenuti multilingua sincronizzati. Permette di associare contenuti, termini, label e dati tradotti alle lingue configurate in WordPress.
+Important notes:
 
-- **WooCommerce**  
-  Serve solo se l'integrazione deve sincronizzare prodotti, categorie, brand o altri dati e-commerce.
+- **ACF is always required.** The plugin checks ACF on every API call, so it must be active even if you don't need any custom fields. Without ACF, the plugin's API responds with a critical error (`500`). This applies to WooCommerce-only syncs too, and even if products need no custom fields.
+- **ACF PRO** is only needed for advanced field types (repeater, flexible content, gallery).
+- **WPML** is only needed for multilingual syncs. It is a **paid plugin**.
+- Without WPML, the multilingual features are not available.
 
-Nota importante:
+## How syncing works
 
-- **ACF è obbligatorio, sempre**: senza ACF attivo le API del plugin rispondono con un errore critico (`500`). Vale anche per la sola sincronizzazione WooCommerce e anche se non servono campi personalizzati sui prodotti
-- **ACF PRO** serve solo per i tipi di campo avanzati (repeater, flexible content, gallery)
-- **WPML** è richiesto solo per le sincronizzazioni multilingua, ed è un **plugin a pagamento**
-- senza WPML le funzioni multilingua non saranno disponibili
+1. The data is prepared in **On Page®**.
+2. The **custom integration** calls the plugin's REST API on your WordPress site.
+3. The plugin creates or updates:
+   - **Post Types**
+   - **ACF fields**, if the configuration includes them
+   - **taxonomies**
+   - **terms**
+   - **content**
+   - **WooCommerce products and data**, if the e-commerce integration is active
+4. The data becomes available in the WordPress admin and on the site.
 
-## Come funziona la sincronizzazione
+## How On Page® maps to WordPress
 
-Il flusso generale è questo:
+| On Page® | WordPress |
+|---|---|
+| Collection | Post Type |
+| Item | A piece of content in that Post Type |
+| Field | ACF custom field (when the project uses ACF) |
+| Classification | Taxonomy |
+| Product | WooCommerce product (when the e-commerce integration is active) |
 
-1. I dati vengono preparati in **On Page®**
-2. l'**Integrazione custom per il cliente** chiama le API REST del plugin su WordPress
-3. Il plugin crea o aggiorna:
-   - **Post Type**
-   - **campi ACF**, se previsti dalla configurazione
-   - **tassonomie**
-   - **termini**
-   - **contenuti**
-   - **prodotti e dati WooCommerce**, se l'integrazione e-commerce è attiva
-4. I dati diventano disponibili nel backend WordPress e nel sito
+Example:
 
-## Corrispondenza tra On Page® e WordPress
+| On Page® | WordPress |
+|---|---|
+| Collection `Car` | Post Type `Car` |
+| Field `model` | ACF field `model` |
+| Field `year` | ACF field `year` |
 
-Per capire meglio come vengono trasformati i dati:
+## What you will see in WordPress
 
-- una **raccolta** di On Page® corrisponde a un **Post Type** in WordPress
-- un **oggetto** di On Page® corrisponde a un **contenuto** del Post Type
-- un **campo** di On Page® può corrispondere a un **campo personalizzato ACF**, quando ACF è usato nel progetto
-- una **classificazione** di On Page® può corrispondere a una **tassonomia**
-- un **prodotto** di On Page® può corrispondere a un **prodotto WooCommerce**, quando l'integrazione e-commerce è attiva
+After a sync, the WordPress admin will show:
 
-Esempio:
+- new **content types**
+- new **custom fields**
+- any **taxonomies** and **custom categories**
+- content already filled in with the data from On Page®
 
-- Raccolta On Page®: `Car`
-- Post Type WordPress: `Car`
-- Campo On Page®: `model`
-- Campo ACF WordPress: `model`
-- Campo On Page®: `year`
-- Campo ACF WordPress: `year`
+You can then:
 
-## Cosa vede l'utente in WordPress
+- view the content in the admin
+- use it in your site templates
+- filter it by taxonomy
+- manage it in multiple languages, if WPML is configured
 
-Dopo la sincronizzazione, nel pannello WordPress l’utente vedrà:
+## Before you start
 
-- nuovi **tipi di contenuto**
-- nuovi **campi personalizzati**
-- eventuali **tassonomie** e **categorie custom**
-- contenuti già compilati con i dati arrivati da On Page®
+> **Warning:** the **On Page®** plugin and its REST API need WordPress **Permalinks** set to **Post name** (Settings > Permalinks).
+> Do not use **Plain**: it can stop the plugin's endpoints from working.
 
-L’utente può quindi:
+Also make sure that:
 
-- visualizzare i contenuti nel backend
-- usarli nei template del sito
-- filtrarli tramite tassonomie
-- gestirli anche in più lingue, se WPML è configurato
+- ACF is installed and active (always required)
+- WPML is installed and active, if the project uses multiple languages
+- WooCommerce is installed and active, if the project syncs e-commerce data
+- the On Page® plugin is installed and active
+- the **custom integration** is configured to call the plugin's REST API
+- your WordPress site can be reached by the **custom integration**
 
-## Requisiti per l'uso corretto
+## API security
 
-> **Attenzione:** per usare correttamente il plugin **On Page®** e le sue API REST, in WordPress le impostazioni dei **Permalink** devono essere configurate su **Post name**.  
-> Non usare l'impostazione **Plain**, perché può impedire il corretto funzionamento degli endpoint del plugin.
+The plugin's REST API is protected by an **authentication token**. This means:
 
-Per un utilizzo corretto è consigliato che:
+- only the authorized **custom integration** can send data to WordPress
+- outside users cannot use the API without a valid token
 
-- ACF sia installato e attivo se il progetto sincronizza Post Type e campi personalizzati ACF
-- WPML sia installato e attivo se il progetto usa più lingue
-- WooCommerce sia installato e attivo se il progetto sincronizza dati e-commerce
-- il plugin On Page® sia installato e attivo
-- l'**Integrazione custom per il cliente** sia configurata per chiamare le API REST del plugin
-- WordPress sia raggiungibile dall'**Integrazione custom per il cliente**
+You manage the token from the WordPress admin.
 
-## Sicurezza delle API
+Only **administrators** (WordPress capability `manage_options`) can open the **On Page®** page and generate or regenerate the token. Other roles (editors, authors, contributors, subscribers) don't see the **On Page®** menu item. They cannot create, view or regenerate the token, even by opening the page URL directly.
 
-Le API REST del plugin sono protette con un **token di autenticazione**.
+### Setting up the token
 
-Questo significa che:
+1. Install and activate the **On Page®** plugin (upload the .zip file under **Plugins** in WordPress).
+2. Open the **On Page®** menu item in the WordPress admin.
+3. Click **Genera token** ("Generate token"). If a token already exists, the button reads **Rigenera token** ("Regenerate token").
+4. Copy the token shown under **Token corrente** ("Current token") and give it to the On Page® team that will build your **custom integration**.
+5. REST calls are sent with the header `Authorization: Bearer <token>`.
 
-- solo l'**Integrazione custom per il cliente** autorizzata può inviare dati a WordPress
-- utenti esterni non possono usare le API senza token valido
+Good to know:
 
-Il token viene gestito dal plugin direttamente nel pannello WordPress.
+- The token is saved in the WordPress configuration.
+- If you regenerate the token, the old one stops working.
 
-La pagina **On Page®** e la generazione/rigenerazione del token sono accessibili **solo agli utenti amministratori** (capability WordPress `manage_options`). Gli altri ruoli (editor, autori, collaboratori, sottoscrittori) non vedono la voce di menu **On Page®** e non possono creare, vedere o rigenerare il token, nemmeno accedendo direttamente all'URL della pagina.
+## Multilingual sites
 
-Flusso operativo:
+If your site uses more than one language:
 
-1. installare e attivare il plugin **On Page®** (caricando file .zip nella sezione Plugins di Wordpress)
-2. aprire la voce di menu **On Page®** nel backend WordPress
-3. cliccare sul pulsante **Genera token**
-4. copiare il token e fornirlo al team di On Page® che svilupperà l'**Integrazione custom per il cliente**
-5. inviare le chiamate REST con header `Authorization: Bearer <token>`
+- WPML makes the synced content available in multiple languages.
+- The plugin can handle multilingual data for content and some labels.
+- Translations are **not** generated automatically. The plugin uses the values sent by the source system or set in the configuration.
 
-Nota:
+## What the plugin does not do
 
-- il token viene salvato nella configurazione di WordPress
-- se si rigenera il token, il precedente smette di funzionare
+The plugin is not meant to:
 
-## Gestione multilingua
+- replace normal editorial work in WordPress
+- create content by hand from the admin for complex sync flows
+- translate content automatically with WPML credits
 
-Se il sito usa più lingue:
+Its main job is to:
 
-- WPML permette di rendere i contenuti sincronizzati disponibili in più lingue
-- il plugin può gestire dati multilingua per contenuti e alcune label
-- le traduzioni non vengono generate automaticamente: vengono usati i valori passati dal sistema sorgente o dalla configurazione prevista
+- **receive structured data**
+- **map that data into WordPress**
+- **keep it in sync with On Page® through the custom integration**
 
-## Cosa non fa il plugin
+## Summary
 
-Questo plugin non è pensato per:
+The **On Page®** plugin connects On Page® to WordPress. It lets you:
 
-- sostituire la normale gestione editoriale di WordPress
-- creare manualmente contenuti dalla UI per flussi complessi di sincronizzazione
-- tradurre automaticamente i contenuti con crediti WPML
+- receive data from the **custom integration**
+- turn collections into **Post Types**
+- turn fields into **ACF custom fields**
+- sync e-commerce data with **WooCommerce** (optional; WPML is not needed for this)
+- support complex and multilingual data structures, if WPML is configured
 
-Il suo scopo principale è:
-
-- **ricevere dati strutturati**
-- **mappare quei dati in WordPress**
-- **mantenerli sincronizzati con On Page® tramite Integrazione custom per il cliente**
-
-## In sintesi
-
-Il plugin **On Page®** collega On Page® e WordPress.
-
-Permette di:
-
-- ricevere dati dall'**Integrazione custom per il cliente**
-- trasformare le raccolte in **Post Type**
-- trasformare i campi in **ACF custom fields**, se ACF è configurato
-- sincronizzare dati e-commerce con **WooCommerce**, senza rendere obbligatori ACF o WPML
-- supportare strutture dati complesse e multilingua, se WPML è configurato
-
-È quindi una soluzione pensata per siti WordPress che devono pubblicare dati strutturati provenienti da un sistema esterno.
+It is built for WordPress sites that need to publish structured data coming from an external system.

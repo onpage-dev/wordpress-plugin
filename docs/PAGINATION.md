@@ -1,30 +1,30 @@
-# Paginazione degli endpoint GET
+# Pagination of GET endpoints
 
-Riferimento rapido su quali endpoint `GET` del plugin On Page® paginano i risultati e quali restituiscono sempre l'elenco completo. Per il dettaglio di ogni endpoint vedi [API.md](API.md).
+A quick reference showing which `GET` endpoints of the On Page® plugin paginate their results and which always return the full list. For details on each endpoint, see [API.md](API.md).
 
-## Come funziona dove e' presente
+## How pagination works
 
-Gli endpoint paginati accettano:
+Paginated endpoints accept:
 
-- `?per_page=<n>` — dimensione pagina, default `100`, massimo `100`
-- `?page=<n>` — numero pagina, default `1`
+- `?per_page=<n>` — page size. Default `100`, maximum `100`.
+- `?page=<n>` — page number. Default `1`.
 
-e restituiscono due header sulla response, stessa convenzione della REST API core di WordPress:
+They return two response headers, following the same convention as the WordPress core REST API:
 
-- `X-WP-Total` — numero totale di elementi che soddisfano i filtri, indipendentemente dalla pagina
-- `X-WP-TotalPages` — numero totale di pagine, calcolato come `ceil(X-WP-Total / per_page)`
+- `X-WP-Total` — total number of items that match the filters, regardless of the page.
+- `X-WP-TotalPages` — total number of pages, calculated as `ceil(X-WP-Total / per_page)`.
 
-Il client sa gia' dalla risposta corrente se e' l'ultima pagina (`page >= X-WP-TotalPages`): non deve chiamare una pagina in piu' e scoprirlo da un array vuoto.
+The client can tell from the current response whether it is on the last page (`page >= X-WP-TotalPages`). There is no need to request one extra page and wait for an empty array.
 
-Esempio di scorrimento (250 elementi, `per_page=100` → 3 pagine):
+Example walk-through (250 items, `per_page=100` → 3 pages):
 
 ```text
-GET /media?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continua)
-GET /media?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continua)
+GET /media?page=1&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
+GET /media?page=2&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (continue)
 GET /media?page=3&per_page=100  →  X-WP-Total: 250, X-WP-TotalPages: 3   (page == X-WP-TotalPages → stop)
 ```
 
-Pseudocodice client:
+Client pseudocode:
 
 ```text
 page = 1
@@ -37,26 +37,29 @@ loop:
   page += 1
 ```
 
-## Tabella endpoint
+## Endpoints
 
-| Endpoint | Paginato | `per_page`/`page` | `X-WP-Total`/`X-WP-TotalPages` | Note |
+| Endpoint | Paginated | `per_page`/`page` | `X-WP-Total`/`X-WP-TotalPages` | Notes |
 |---|---|---|---|---|
-| `GET /posts` | ✅ | ✅ | ✅ | Non paginato quando si usa `?id=` o `?title=` (ritornano sempre tutti i match, nessun header di paginazione in quel caso) |
+| `GET /posts` | ✅ | ✅ | ✅ | Not paginated when using `?id=` or `?title=`: these always return every match, with no pagination headers. |
 | `GET /media` | ✅ | ✅ | ✅ | — |
-| `GET /terms` | ❌ | — | — | Ritorna sempre tutti i term della tassonomia richiesta |
-| `GET /field-groups` | ❌ | — | — | Ritorna sempre tutti i field group (`acf_get_field_groups()`) |
-| `GET /taxonomies` | ❌ | — | — | Ritorna sempre tutte le tassonomie ACF (`acf_get_acf_taxonomies()`) |
-| `GET /post-types` | ❌ | — | — | Ritorna sempre tutti i post type ACF (`acf_get_acf_post_types()`) |
-| `GET /woocommerce/brands` | ❌ | — | — | Ritorna sempre tutti i brand |
-| `GET /woocommerce/attributes` | ❌ | — | — | Ritorna sempre tutti gli attributi (`wc_get_attribute_taxonomies()`) |
-| `GET /woocommerce/attributes/{attribute}/terms` | ❌ | — | — | Ritorna sempre tutti i term dell'attributo |
-| `GET /woocommerce/categories` | ❌ | — | — | Ritorna sempre tutte le categorie |
-| `GET /woocommerce/tags` | ❌ | — | — | Ritorna sempre tutti i tag |
-| `GET /woocommerce/products` | ❌ | — | — | `numberposts => -1`, esplicitamente illimitato; senza query restituisce **tutti** i prodotti |
-| `GET /woocommerce/variant-products` | ❌ | — | — | `numberposts => -1`, esplicitamente illimitato; senza query restituisce **tutte** le variazioni |
+| `GET /terms` | ❌ | — | — | Always returns every term of the requested taxonomy. |
+| `GET /field-groups` | ❌ | — | — | Always returns every field group (`acf_get_field_groups()`). |
+| `GET /taxonomies` | ❌ | — | — | Always returns every ACF taxonomy (`acf_get_acf_taxonomies()`). |
+| `GET /post-types` | ❌ | — | — | Always returns every ACF post type (`acf_get_acf_post_types()`). |
+| `GET /woocommerce/brands` | ❌ | — | — | Always returns every brand. |
+| `GET /woocommerce/attributes` | ❌ | — | — | Always returns every attribute (`wc_get_attribute_taxonomies()`). |
+| `GET /woocommerce/attributes/{attribute}/terms` | ❌ | — | — | Always returns every term of the attribute. |
+| `GET /woocommerce/categories` | ❌ | — | — | Always returns every category. |
+| `GET /woocommerce/tags` | ❌ | — | — | Always returns every tag. |
+| `GET /woocommerce/products` | ❌ | — | — | `numberposts => -1`, explicitly unlimited. Without a query it returns **all** products. |
+| `GET /woocommerce/variant-products` | ❌ | — | — | `numberposts => -1`, explicitly unlimited. Without a query it returns **all** variations. |
 
-## Perche' non tutti paginano
+## Why not every endpoint paginates
 
-La scelta segue il volume atteso di elementi: `posts` e `media` (Media Library) possono facilmente crescere a migliaia di elementi su un sito reale, quindi paginano per evitare query pesanti e risposte JSON enormi. Term, tassonomie, field group e post type sono tipicamente set piccoli e limitati (decine, al massimo centinaia), quindi restituire tutto in un'unica risposta e' stato considerato accettabile.
+It depends on how many items each endpoint is expected to return:
 
-I prodotti/variazioni WooCommerce sono un'eccezione degna di nota: potenzialmente numerosi quanto i post, ma **non** paginati — un catalogo molto grande puo' quindi generare risposte pesanti su `GET /woocommerce/products` e `GET /woocommerce/variant-products`.
+- **Paginated:** `posts` and `media` (Media Library) can easily grow to thousands of items on a real site. Pagination avoids heavy queries and huge JSON responses.
+- **Not paginated:** terms, taxonomies, field groups and post types are usually small, bounded sets (tens, at most hundreds of items). Returning everything in one response was considered acceptable.
+
+**Notable exception:** WooCommerce products and variations can be as numerous as posts, but they are **not** paginated. A very large catalog can therefore produce heavy responses on `GET /woocommerce/products` and `GET /woocommerce/variant-products`.

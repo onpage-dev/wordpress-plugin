@@ -8,12 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-09-25
 
 ### Added
-- API REST sotto `/wp-json/onpage/v1` per ricevere i dati strutturati di On Page® tramite Exporter, con autenticazione a token generato dalla pagina impostazioni del plugin.
-- Creazione e aggiornamento di Post Type, field group ACF, tassonomie, termini, post e media, con upsert idempotente per `local_key`.
-- Integrazione WooCommerce: prodotti, varianti, attributi globali e relativi termini, categorie, tag e brand.
-- Integrazione WPML per i progetti multilingua, con valori per lingua espressi come mappe `{"<lang>": …}`.
-- Import dei media da URL con deduplica sul segmento di storage On Page®.
-- `POST /migration` per adeguare i dati di un sito che usava un'installazione precedente del plugin.
-- Requisiti: WordPress 7.1, PHP 8.2 e Advanced Custom Fields attivo; senza ACF il plugin non registra le rotte e lo segnala in amministrazione.
+- REST API under `/wp-json/onpage/v1` that receives structured data from On Page® through Exporter. Requests authenticate with a token generated on the plugin's settings page.
+- Creation and update of post types, ACF field groups, taxonomies, terms, posts and media, as idempotent upserts keyed by `local_key`.
+- WooCommerce integration: products, variations, global attributes and their terms, categories, tags and brands.
+- WPML integration for multilingual sites. Per-language values are sent as `{"<lang>": …}` maps.
+- Media import from URL, deduplicated by On Page® storage segment.
+- `POST /migration` to upgrade the data of a site that ran an earlier installation of the plugin.
+- Requirements: WordPress 7.1, PHP 8.2 and an active Advanced Custom Fields. Without ACF the plugin registers no routes and shows a notice in the admin.
 
 [1.0.0]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.0

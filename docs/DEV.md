@@ -1,69 +1,47 @@
-# Guida Sviluppo
+# Developer Guide
 
-Questa guida riassume il ruolo dei controller del plugin e, soprattutto, la logica di business applicata da `Post.php` e `Term.php` per decidere quando creare, aggiornare e collegare contenuti multilingua.
+This guide explains what each controller does. Its main focus is the business logic in `Post.php` and `Term.php`: how they decide when to create, update and link multilingual content.
 
-## Obiettivo del plugin
+## Plugin purpose
 
-Il plugin espone endpoint REST che permettono di sincronizzare contenuti WordPress, tassonomie e configurazioni ACF da un sistema esterno.
+The plugin exposes REST endpoints. An external system uses them to sync WordPress content, taxonomies and ACF configuration.
 
-La logica non si limita a fare una chiamata diretta alle API di WordPress:
+The plugin does more than forward calls to the WordPress API. It also:
 
-- normalizza i payload in ingresso
-- rileva dati condivisi e dati tradotti per lingua
-- applica vincoli di unicita'
-- risolve la lingua base e le traduzioni WPML
-- propaga ACF e tassonomie
-- restituisce errori applicativi coerenti (`WP_Error`)
+- normalizes incoming payloads
+- detects which data is shared and which is translated per language
+- enforces uniqueness constraints
+- resolves the base language and the WPML translations
+- propagates ACF fields and taxonomies
+- returns consistent application errors (`WP_Error`)
 
-## Panoramica controller
+## Controllers at a glance
 
-### `Post.php`
+| Controller | Handles | Main responsibilities |
+|---|---|---|
+| `Post.php` | Posts and custom post types | Read a single post. Create or update posts from a batch payload. Handle multilingual content with WPML. Handle shared and translated ACF fields. Assign taxonomy terms, resolving translated terms. Delete single posts or all posts of a post type. |
+| `Term.php` | Terms of a taxonomy | List the terms of a taxonomy. Create or update multilingual terms. Store `local_key` as term meta. Link translations through WPML. Propagate taxonomy-based ACF fields. |
+| `FieldGroup.php` | ACF field groups | List field groups. Create field groups and their fields. Always add the `local_key` field. Set WPML-related options (see below). Delete field groups by ID or title. |
 
-Gestisce i post e custom post type.
+### WPML options set by `FieldGroup.php`
 
-Responsabilita' principali:
+When WPML is active, `FieldGroup.php` sets:
 
-- leggere un post singolo
-- creare o aggiornare post partendo da un payload batch
-- gestire contenuti multilingua con WPML
-- gestire ACF fields condivisi e tradotti
-- assegnare tassonomie ai post, risolvendo i termini tradotti
-- cancellare singoli post o tutti i post di un post type
+- `acfml_field_group_mode = advanced` on the group (ACFML "Expert" mode)
+- the WPML translation preference `wpml_cf_preferences = 2` ("Translate") on every field and sub-field
 
-### `Term.php`
+Rationale: the importer writes every language itself. WPML must therefore never copy values from the default language onto the translations.
 
-Gestisce i termini di una tassonomia.
+## Cross-cutting conventions
 
-Responsabilita' principali:
+### 1. Single-language or multilingual payloads
 
-- elencare i termini di una tassonomia
-- creare o aggiornare termini multilingua
-- salvare `local_key` su term meta
-- collegare le traduzioni tramite WPML
-- propagare i campi ACF taxonomy-based
+Many fields accept two shapes:
 
-### `FieldGroup.php`
+- a plain value
+- a map keyed by language
 
-Gestisce i field group ACF.
-
-Responsabilita' principali:
-
-- elencare i field group
-- creare field group e relativi campi
-- aggiungere sempre il campo `local_key`
-- impostare `acfml_field_group_mode = advanced` (modalita' "Expert" di ACFML) quando WPML e' attivo, e la preferenza di traduzione WPML `wpml_cf_preferences = 2` ("Translate") su ogni campo e sottocampo: l'importer scrive tutte le lingue, quindi WPML non deve mai copiare i valori dalla lingua di default sulle traduzioni
-- cancellare field group per ID o titolo
-
-## Convenzioni trasversali
-
-### 1. Payload monolingua o multilingua
-
-Per molti campi il plugin supporta due forme:
-
-- valore semplice
-- mappa per lingua
-
-Esempi:
+A plain value:
 
 ```json
 {
@@ -71,7 +49,7 @@ Esempi:
 }
 ```
 
-oppure:
+A language map:
 
 ```json
 {
@@ -82,349 +60,338 @@ oppure:
 }
 ```
 
-La stessa logica vale per:
+This applies to:
 
 - `title`
 - `content`
 - `name`
 - `slug`
 - `description`
-- valori ACF
+- ACF values
 
 ### 2. Shared vs translated
 
-I controller dividono il payload in due bucket:
+The controllers split the payload into two buckets:
 
-- `shared`: valore unico usato da tutte le lingue
-- `translated`: override per lingua
+- `shared`: one value used by every language
+- `translated`: per-language overrides
 
-Questo permette di combinare:
+This lets a payload mix fields common to all languages with fields specific to one language.
 
-- campi comuni a tutte le lingue
-- campi specifici per singola lingua
+**How a value is classified.** A value is treated as per-language by its shape alone: an associative array whose keys all look like language codes (`MultiLang::isLanguageMapShape()`). Everything else is `shared`.
 
-Un valore e' riconosciuto come **per lingua** dalla sua forma: array associativo le cui chiavi sembrano tutte codici lingua (`MultiLang::isLanguageMapShape()`). Tutto il resto e' `shared` e deve arrivare **intatto** alla scrittura del campo, in particolare i valori strutturati di ACF — repeater (lista di righe), group (oggetto), checkbox multipli, gallery, relazioni. Applicare la risoluzione per lingua a un valore che non e' una mappa lingua produce `null`, e un `null` e' indistinguibile dalla richiesta legittima di svuotare un campo: la scrittura non fallisce, la risposta resta `200` e il dato sparisce senza segnalazione.
+**Shared values must reach the field write untouched.** This matters most for structured ACF values: repeaters (a list of rows), groups (an object), multi-value checkboxes, galleries and relationships.
 
-La regola vive in un punto solo, `MultiLang::resolveFields()`, usata dal percorso dei post e da quello WooCommerce. I termini seguono la stessa logica da `MultiLang::splitAcfFieldsByLanguage()`. Se serve risolvere per lingua altrove, riusare queste funzioni invece di riscriverne una copia: sono state tre copie divergenti a produrre il difetto.
+**Why this matters.** Running per-language resolution on a value that is not a language map yields `null`. A `null` cannot be told apart from a legitimate request to clear the field. The write does not fail, the response is still `200`, and the data silently disappears.
 
-### 3. Lingua di fallback
+**Where the rule lives.** It lives in one place only: `MultiLang::resolveFields()`. The post path and the WooCommerce path both use it. Terms follow the same logic through `MultiLang::splitAcfFieldsByLanguage()`. If you need per-language resolution anywhere else, reuse these functions instead of writing a copy. Three diverging copies are what caused this defect in the first place.
 
-Quando un valore manca nella lingua corrente, il controller usa:
+**Known false positive.** A `group` whose sub-field keys are two or three letters long (for example `{"sku": "ABC", "alt": "testo"}`) looks like a language map. It is resolved per language and comes out as `null`. `MultiLangResolveFields.php` pins this current behavior on purpose (see [Tests](#tests)).
 
-- la lingua richiesta se disponibile
-- altrimenti la prima lingua tradotta trovata nel payload
-- altrimenti il valore condiviso
+### 3. Fallback language
 
-### 4. WPML opzionale ma obbligatorio per payload multilingua
+When a value is missing for the current language, the controller uses, in order:
 
-Se il payload contiene valori per lingua ma WPML non e' attivo, i controller non provano a degradare il comportamento: ritornano errore.
+1. the requested language, if present
+2. otherwise, the first translated language found in the payload
+3. otherwise, the shared value
+
+### 4. WPML is optional, but required for multilingual payloads
+
+If the payload contains per-language values and WPML is not active, the controllers do not try to degrade gracefully. They return an error.
 
 ### 5. `local_key`
 
-`local_key` e' l'identificativo esterno usato dal sistema chiamante per riconciliare gli oggetti. Puo' essere un **intero positivo o una stringa non vuota**: viene normalizzato con `trim` da `Input::localKey()` (rifiuta `""`, `"0"` e i non scalari), e interi e stringhe numeriche sono equivalenti perche' i meta WordPress sono comunque stringhe. In output `Input::localKeyOut()` restituisce un intero per le chiavi intero-canoniche (retrocompatibilita') e una stringa per quelle testuali.
+`local_key` is the external identifier the calling system uses to reconcile objects. It is not a WordPress ID. It lets the caller find already-synced content when the internal ID is unknown or not stable from its point of view.
 
-Non e' un ID WordPress: serve a ritrovare un contenuto gia' sincronizzato quando l'ID interno non e' noto o non e' stabile per il chiamante.
+**Accepted values.** A positive integer or a non-empty string.
 
-La persistenza cambia in base al tipo di endpoint:
+- `Input::localKey()` normalizes it with `trim`. It rejects `""`, `"0"` and non-scalar values.
+- Integers and numeric strings are equivalent, because WordPress meta values are strings anyway.
+- On output, `Input::localKeyOut()` returns an integer for integer-canonical keys (backward compatibility) and a string for text keys.
 
-- endpoint basati su post: usano `wp_postmeta`
-- endpoint basati su termini: usano `wp_termmeta`
-- endpoint attributi globali WooCommerce: usano `wp_options`
+**Where it is stored.** Storage depends on the endpoint type:
 
-Mappa pratica:
+| Endpoint | Storage | Key |
+|---|---|---|
+| `/posts` | `wp_postmeta` | meta key `onpage_local_key`, on the base post and on all its translations |
+| `/woocommerce/products` | `wp_postmeta` | meta key `onpage_local_key` |
+| `/woocommerce/variant-products` | `wp_postmeta` | meta key `onpage_local_key` |
+| `/terms` | `wp_termmeta` | meta key `onpage_local_key` |
+| `/woocommerce/categories`, `/woocommerce/tags`, `/woocommerce/brands` | `wp_termmeta` (categories, tags and brands are terms) | meta key `onpage_local_key` |
+| `/woocommerce/attributes/{attribute}/terms` | `wp_termmeta` (global attribute values are terms of the `pa_*` taxonomy) | meta key `onpage_local_key` |
+| `/woocommerce/attributes` | `wp_options` | option name `onpage_wc_attribute_local_key_{attribute_id}` |
 
-- `/posts`: salva e cerca sempre `local_key` in `wp_postmeta` con meta key `onpage_local_key`, sul post base e su tutte le sue traduzioni
-- `/woocommerce/products`: salva e cerca sempre `local_key` in `wp_postmeta` con meta key `onpage_local_key`
-- `/woocommerce/variant-products`: salva e cerca sempre `local_key` in `wp_postmeta` con meta key `onpage_local_key`
-- `/terms`: salva e cerca `local_key` in `wp_termmeta` con meta key `onpage_local_key`
-- `/woocommerce/categories`, `/woocommerce/tags`, `/woocommerce/brands`: trattano categorie, tag e brand come termini e usano `wp_termmeta` con meta key `onpage_local_key`
-- `/woocommerce/attributes/{attribute}/terms`: tratta i valori degli attributi globali come termini della tassonomia `pa_*` e usa `wp_termmeta` con meta key `onpage_local_key`
-- `/woocommerce/attributes`: salva e cerca `local_key` in `wp_options` con option name `onpage_wc_attribute_local_key_{attribute_id}`
+Every endpoint always both writes and looks up `local_key` in the storage listed above.
 
-Regola importante:
+**Key rules:**
 
-- la meta key tecnica è sempre `onpage_local_key`, sia negli endpoint basati su post (post, prodotti, varianti) sia in quelli basati su termini (termini, categorie, tag, brand, attribute terms)
-- negli attributi globali WooCommerce la chiave tecnica e' l'option name `onpage_wc_attribute_local_key_{attribute_id}`
-- `local_key` e `_local_key` sono meta legacy scritte da una versione precedente del plugin tramite un campo ACF ora rimosso: nessun endpoint le legge più, e `POST /migration` le rinomina/ripulisce
-- nelle traduzioni WPML lo stesso `local_key` puo' comparire su piu' record dello stesso gruppo traduzioni, perche' rappresenta lo stesso oggetto esterno in lingue diverse
+- The technical meta key is always `onpage_local_key`. This holds for post-based endpoints (posts, products, variations) and term-based endpoints (terms, categories, tags, brands, attribute terms).
+- For WooCommerce global attributes, the technical key is the option name `onpage_wc_attribute_local_key_{attribute_id}`.
+- `local_key` and `_local_key` are legacy meta keys. An earlier version of the plugin wrote them through an ACF field that has since been removed. No endpoint reads them anymore. `POST /migration` renames or cleans them up.
+- With WPML, the same `local_key` can appear on several records of one translation group. They represent the same external object in different languages.
 
-## `Post.php`: logica di business
+## `Post.php`: business logic
 
-### Scopo
+### Purpose
 
-`Post.php` gestisce batch di post in create/update/delete e prova a mantenere coerenti:
+`Post.php` processes batches of posts (create, update, delete). It tries to keep the following consistent:
 
-- post base
-- post tradotti
+- the base post
+- the translated posts
 - ACF fields
-- tassonomie
-- mapping WPML
+- taxonomies
+- the WPML mapping
 
-### Helper principali
+### Main helpers
 
-Prima di arrivare a `insert()` o `update()`, il service usa una serie di helper:
+Before reaching `insert()` or `update()`, the service relies on these helpers:
 
-- `splitAcfFieldsByLanguage()`: separa ACF condivisi e tradotti
-- `splitValueByLanguage()`: separa `title`/`content` in shared vs translated
-- `getFieldsForLanguage()`: costruisce il set finale ACF per una lingua
-- `getValueForLanguage()`: risolve il valore corretto per una lingua
-- `resolvePostTitle()`: decide il titolo finale per una lingua
-- `getPostLanguageDetails()`: legge lingua e `trid` WPML di un post
-- `getPostTrid()`: recupera il `trid`
-- `getTranslationPostIds()`: costruisce la mappa `language_code => post_id`
-- `setPostLanguage()`: collega un post a un gruppo WPML
-- `runWithWpmlLanguage()`: esegue codice forzando temporaneamente lingua WPML e lingua ACF
-- `setTerms()`: assegna i termini, traducendoli per lingua se necessario
+| Helper | What it does |
+|---|---|
+| `splitAcfFieldsByLanguage()` | Splits ACF fields into shared and translated. |
+| `splitValueByLanguage()` | Splits `title`/`content` into shared and translated. |
+| `getFieldsForLanguage()` | Builds the final ACF set for one language. |
+| `getValueForLanguage()` | Resolves the right value for one language. |
+| `resolvePostTitle()` | Decides the final title for one language. |
+| `getPostLanguageDetails()` | Reads the WPML language and `trid` of a post. |
+| `getPostTrid()` | Fetches the `trid`. |
+| `getTranslationPostIds()` | Builds the `language_code => post_id` map. |
+| `setPostLanguage()` | Links a post to a WPML group. |
+| `runWithWpmlLanguage()` | Runs code while temporarily forcing both the WPML language and the ACF language. |
+| `setTerms()` | Assigns terms, translating them per language when needed. |
 
-### Come decide tra insert e update
+### Insert or update?
 
-L’entrypoint REST e' `save()`.
+The REST entry point is `save()`.
 
-Per ogni elemento del payload:
+For each payload item:
 
-- se `id` e' valorizzato chiama `update()`
-- altrimenti chiama `insert()`
+- if `id` is set, it calls `update()`
+- otherwise, it calls `insert()`
 
-Questa e' la regola principale di business per i post: l’ID esplicito decide se siamo in update o create.
+This is the main business rule for posts: an explicit ID decides between update and create.
 
-## Flusso `Post::update()`
+## `Post::update()` flow
 
-### 1. Validazioni iniziali
+### 1. Initial validation
 
-Il metodo:
+The method:
 
-- richiede `id`
-- carica il post esistente
-- risolve il post type reale con `norm_post_type()`
-- verifica che il post type esista
+- requires `id`
+- loads the existing post
+- resolves the actual post type with `norm_post_type()`
+- checks that the post type exists
 
-Se uno di questi passaggi fallisce, il metodo termina con `WP_Error`.
+If any step fails, the method ends with a `WP_Error`.
 
-### 2. Normalizzazione del payload
+### 2. Payload normalization
 
-Il payload viene letto in modo conservativo.
+The payload is read conservatively. The following rule applies to `type`, `title`, `content`, `description`, `acf_fields`, `files`, `term` and `status`:
 
-Per `type`, `title`, `content`, `description`, `acf_fields`, `files`, `term` e `status` vale questa regola:
+- present and not `null`: treated as an explicit change
+- missing or `null`: treated as "no change"
 
-- se il campo e' presente e non `null`, viene trattato come modifica esplicita
-- se il campo manca oppure vale `null`, il service lo interpreta come "nessuna modifica"
-
-Solo i campi testuali realmente presenti vengono trasformati in:
+Only the text fields actually present are turned into:
 
 - `title_map`
 - `content_map`
 - `description_map`
 
-Poi costruisce:
+The service then builds:
 
 - `translated_languages`
 - `fallback_language`
-- `current_language` del post
+- the post's `current_language`
 - `trid`
-- `translation_ids`
+- `translation_ids`: the full map of the current post's existing translations
 
-`translation_ids` e' la mappa completa delle traduzioni gia' esistenti del post corrente.
+### 3. WPML rule
 
-### 3. Regola WPML
+If the payload contains translated data but WPML is not active, it returns the error `wpml_required`.
 
-Se esistono dati tradotti nel payload ma WPML non e' attivo:
+### 4. Title uniqueness
 
-- ritorna errore `wpml_required`
+If the payload contains `title`, the service checks that the final title of each language is not already used by another post of the same type.
 
-### 4. Vincolo di unicita' sul titolo
+The check is not limited to the current language:
 
-Se il payload contiene `title`, il service verifica che il titolo finale di ogni lingua non sia gia' usato da un altro post dello stesso tipo.
+- if the post has translations, it checks every resolved title for every language
+- if it has no translations, it checks only the final title of the current post
 
-La verifica non e' fatta solo sulla lingua corrente:
+### 5. Updating the main post
 
-- se il post ha traduzioni, controlla ogni titolo risolto per ogni lingua
-- se non ha traduzioni, controlla solo il titolo finale del post corrente
-
-### 5. Update del post principale
-
-Il service prepara `$data` con:
+The service prepares `$data` with:
 
 - `ID`
 - `post_type`
 - `post_status`
 
-e aggiunge `post_title`, `post_content`, `post_excerpt` solo se quei campi sono stati davvero passati nel payload.
+It adds `post_title`, `post_content` and `post_excerpt` only if those fields were actually sent in the payload. Then it runs `wp_update_post()`.
 
-Poi esegue `wp_update_post()`.
+The main post is updated in its own current language, not automatically in the default language.
 
-Il post principale viene aggiornato nella sua lingua corrente, non automaticamente nella default language.
+### 6. ACF on the main post
 
-### 6. Update ACF del post principale
+If `acf_fields` is present, the service:
 
-Se `acf_fields` e' presente:
+- builds the correct fields for `current_language`
+- saves them with `update_field()`
 
-- costruisce i campi corretti per `current_language`
-- li salva con `update_field()`
+### 7. Terms on the main post
 
-### 7. Update termini del post principale
+If `term` is present, the service:
 
-Se `term` e' presente:
+- resolves the received slugs
+- assigns the terms with `wp_set_object_terms()`
 
-- risolve gli slug ricevuti
-- assegna i termini con `wp_set_object_terms()`
+No language is forced on the main post unless needed.
 
-Per il post principale non viene forzata una lingua se non necessario.
+### 8. Updating the translations
 
-### 8. Update delle traduzioni
+For each translated post in `translation_ids` other than the current post, the service:
 
-Per ogni post tradotto in `translation_ids` diverso dal post corrente:
+- runs the block inside `runWithWpmlLanguage($language_code, ...)`
+- updates only the text and status fields actually present in the payload
+- saves the ACF fields for that language
+- assigns the terms, translated into the target language
 
-- esegue il blocco dentro `runWithWpmlLanguage($language_code, ...)`
-- aggiorna solo i campi testuali e di stato effettivamente presenti nel payload
-- salva gli ACF della lingua corretta
-- assegna i termini traducendoli nella lingua target
+This is the core of the business logic. When the payload contains multilingual data, updating a post affects the whole translation group, not just the current record.
 
-Questa parte e' il cuore della logica business: l’update di un post non riguarda solo il record corrente, ma l’intero gruppo traduzioni quando il payload contiene dati multilingua.
+### Result
 
-### Risultato
+`update()` returns:
 
-`update()` ritorna:
+- the updated post's ID on success
+- a `WP_Error` on failure
 
-- l’ID del post aggiornato in caso di successo
-- `WP_Error` in caso di errore
+## `Post::insert()` flow
 
-## Flusso `Post::insert()`
+### 1. Resolving the context
 
-### 1. Risoluzione del contesto
+The method:
 
-Il metodo:
+- reads `type`
+- normalizes it with `norm_post_type()`
+- builds `title_map`, `content_map` and `description_map`
+- extracts `translated_languages`
+- resolves `default_language`
+- computes `fallback_language`
 
-- legge `type`
-- lo normalizza con `norm_post_type()`
-- costruisce `title_map`, `content_map`, `description_map`
-- estrae `translated_languages`
-- risolve `default_language`
-- calcola `fallback_language`
-
-La lingua base usata per creare l’originale e':
+The base language used to create the original post is:
 
 - `getWpmlDefaultLanguage()`
-- oppure la prima lingua tradotta disponibile se la default manca
+- or, if the default language is missing, the first available translated language
 
-### 2. Regole di validazione
+### 2. Validation rules
 
-Prima di creare:
+Before creating anything:
 
-- se esistono traduzioni ma WPML non e' attivo, errore
-- se il titolo dell’originale esiste gia' su un post **senza `local_key`**, errore `duplicate_title`; un post che porta una `local_key` diversa e' un altro elemento On Page® e non fa conflitto
-- se `local_key` esiste gia' sullo stesso post type, errore `duplicate_local_key`
+- If there are translations but WPML is not active: error.
+- If the original post's title already exists on a post **without a `local_key`**: error `duplicate_title`. A post carrying a different `local_key` is a different On Page® element and does not conflict.
+- If `local_key` already exists on the same post type: error `duplicate_local_key`.
 
-### 3. Creazione del post originale
+### 3. Creating the original post
 
-Il post originale viene creato con:
+The original post is created with:
 
-- titolo risolto per la lingua base
-- contenuto risolto per la lingua base
+- the title resolved for the base language
+- the content resolved for the base language
 - `post_type`
 - `post_status`
 
-Poi:
+Then:
 
-- se esiste una lingua base, gli viene assegnata la lingua WPML
-- vengono salvati gli ACF della lingua base
-- se presente, `local_key` viene salvato in `wp_postmeta` con meta key `onpage_local_key` sul post e su tutte le sue traduzioni
-- vengono assegnati i termini passati nel payload `term`
+- if there is a base language, the post gets that WPML language
+- the base-language ACF fields are saved
+- if present, `local_key` is saved in `wp_postmeta` with meta key `onpage_local_key`, on the post and on all its translations
+- the terms from the `term` payload are assigned
 
-### 4. Inizializzazione del gruppo WPML
+### 4. Initializing the WPML group
 
-Se il payload contiene lingue tradotte:
+If the payload contains translated languages, the service:
 
-- legge i `language_details` del post originale
-- recupera `trid` e lingua sorgente
-- se il `trid` non e' disponibile, fallisce
+- reads the original post's `language_details`
+- fetches the `trid` and the source language
+- fails if no `trid` is available
 
-Questa e' la base per creare il gruppo di traduzione.
+This is the basis for building the translation group.
 
-### 5. Creazione delle traduzioni
+### 5. Creating the translations
 
-Per ogni lingua tradotta diversa dalla lingua base:
+For each translated language other than the base language, the service:
 
-- risolve titolo e contenuto per quella lingua
-- controlla che il titolo non sia duplicato
-- crea un nuovo post
-- collega il post al `trid` dell’originale con `source_language_code = lingua base`
-- salva ACF della lingua target
-- propaga `local_key` se il campo ACF esiste
-- assegna i termini usando le traduzioni corrette
+- resolves title and content for that language
+- checks that the title is not a duplicate
+- creates a new post
+- links it to the original's `trid` with `source_language_code = base language`
+- saves the ACF fields for the target language
+- saves `local_key` (meta key `onpage_local_key`) on the new translation
+- assigns the terms using the correct translations
 
-### 6. Pulizia in caso di errore
+### 6. Cleanup on failure
 
-Se qualcosa fallisce durante la creazione:
+If something fails during creation, the service deletes the posts it has just created, including the original.
 
-- cancella il post appena creato
-- in diversi punti cancella anche l’originale appena inserito
+So `insert()` behaves like a pseudo-atomic operation, even though it does not use real SQL transactions.
 
-Quindi `insert()` prova a comportarsi come una pseudo-operazione atomica, anche se non usa vere transazioni SQL.
+### Result
 
-### Risultato
+`insert()` returns:
 
-`insert()` ritorna:
+- the original post's ID
+- a `WP_Error` on failure
 
-- l’ID del post originale
-- `WP_Error` in caso di errore
+## Key business rules in `Post.php`
 
-## Business rules importanti in `Post.php`
+### The title is a de facto uniqueness key
 
-### Titolo come chiave di unicita' pratica
+The service treats the title as a near-unique key within a post type. Different payloads that produce the same final title conflict with each other.
 
-Il service considera il titolo una chiave quasi-univoca per il post type.
+### `local_key` is an external aid, not an internal primary key
 
-Questo vuol dire che payload diversi che producono lo stesso titolo finale entrano in conflitto.
+For posts, `local_key` is used for lookup and is persisted in `wp_postmeta` (meta key `onpage_local_key`). The choice between create and update still depends mainly on `id`.
 
-### `local_key` come appoggio esterno, non chiave primaria interna
+### `term` is fully realigned when present
 
-Per i post `local_key` viene usato per lookup e persistenza in `wp_postmeta` (meta key `onpage_local_key`), ma la scelta tra create e update dipende comunque soprattutto da `id`.
+When `term` is present, the service does not merge incrementally. It resolves the received slugs and assigns exactly that set to the post.
 
-### `term` sempre riallineato quando presente
+When `term` is missing entirely on update, existing assignments are kept.
 
-Quando `term` e' presente, il service non fa merge incrementale:
+### ACF per language
 
-- risolve gli slug ricevuti
-- assegna quel set al post
-
-Quando `term` manca del tutto in update, le assegnazioni esistenti vengono conservate.
-
-### ACF per lingua
-
-Un campo ACF puo' essere:
+An ACF field can be:
 
 - shared
-- specifico per una lingua
+- specific to one language
 
-Il controller costruisce per ogni post tradotto il payload ACF finale combinando shared + override della lingua.
+For each translated post, the controller builds the final ACF payload by combining the shared values with that language's overrides.
 
-## `Term.php` / `TermService`: logica di business
+## `Term.php` / `TermService`: business logic
 
-### Scopo
+### Purpose
 
-`TermService` gestisce termini tassonomici con supporto multilingua e ACF.
+`TermService` manages taxonomy terms with multilingual and ACF support.
 
-A differenza di `Post.php`, qui non esistono metodi separati `insert()` e `update()`: il metodo `insert()` fa upsert.
+Unlike `Post.php`, there are no separate `insert()` and `update()` methods. `insert()` performs an upsert:
 
-In pratica:
+- if the term exists, it updates it
+- if it does not exist, it creates it
 
-- se il termine esiste, aggiorna
-- se non esiste, crea
+## `Term::insert()` flow
 
-## Flusso `Term::insert()`
+### 1. Resolving the taxonomy
 
-### 1. Risoluzione tassonomia
+The taxonomy comes from the route. It can be:
 
-La tassonomia arriva dalla route e puo' essere:
+- a slug
+- an ACF taxonomy ID
 
-- slug
-- ID ACF taxonomy
+The service resolves it to a real WordPress taxonomy slug.
 
-Il service la risolve in uno slug WordPress reale.
+### 2. Payload normalization
 
-### 2. Normalizzazione del payload
-
-Per ogni elemento batch costruisce:
+For each batch item, the service builds:
 
 - `name_map`
 - `slug_map`
@@ -432,272 +399,274 @@ Per ogni elemento batch costruisce:
 - `acf_field_map`
 - `local_key`
 
-Poi estrae:
+It then extracts:
 
 - `translated_languages`
 - `fallback_language`
 - `default_language`
 - `base_language`
 
-La `base_language` e':
+`base_language` is:
 
-- la default WPML, se esiste
-- altrimenti la prima lingua tradotta del payload
+- the WPML default language, if there is one
+- otherwise, the first translated language in the payload
 
-### 3. Validazioni iniziali
+### 3. Initial validation
 
-Le regole principali sono:
+The main rules:
 
-- se ci sono traduzioni ma WPML non e' attivo, errore
-- se c’e' contenuto tradotto ma non si riesce a stabilire la lingua base, errore
-- il nome nella lingua base e' obbligatorio
-- se arriva un `id`, il termine deve esistere nella tassonomia
+- If there are translations but WPML is not active: error.
+- If there is translated content but the base language cannot be determined: error.
+- The name in the base language is required.
+- If an `id` is sent, the term must exist in the taxonomy.
 
-### 4. Regola su `local_key`
+### 4. `local_key` rule
 
-Il service usa `local_key` come chiave esterna di riconciliazione.
+The service uses `local_key` as the external reconciliation key:
 
-Flusso:
+1. It looks for an existing term with the same `local_key`.
+2. If an `id` was also requested and the two terms are not in the same translation group, it returns `duplicate_local_key`.
 
-- cerca un termine esistente con la stessa `local_key`
-- se esiste anche un `id` richiesto e i due termini non appartengono allo stesso gruppo traduzioni, ritorna `duplicate_local_key`
+This is an important business rule. The same `local_key` may represent translations of one concept, but never two unrelated terms.
 
-Questa e' una regola business importante: la stessa `local_key` puo' rappresentare traduzioni dello stesso concetto, ma non due termini scollegati.
+### 5. Create or update?
 
-### 5. Decisione create vs update
+The base term is chosen as follows:
 
-Il termine base viene scelto cosi':
+1. use `id`, if present
+2. otherwise, use the term found by `local_key`
+3. if there is a multilingual base language, convert the ID to the matching term in that language
 
-- usa `id` se presente
-- altrimenti usa il termine trovato tramite `local_key`
-- se esiste una lingua base multilingua, converte l’ID nel termine corrispondente di quella lingua
+If a `term_id` exists at the end, the service calls `wp_update_term()`. Otherwise it calls `wp_insert_term()`.
 
-Se alla fine esiste un `term_id`:
+This is the real business logic of `TermService`: an upsert driven by `id` or `local_key`.
 
-- chiama `wp_update_term()`
+### 6. Saving the base term
 
-Altrimenti:
+After creating or updating the base term, the service:
 
-- chiama `wp_insert_term()`
+- saves `local_key` as term meta `onpage_local_key`
+- saves the base-language ACF fields
+- for ACF fields of type `image`: if the value is a valid URL, imports or reuses the media and saves the `attachment_id`
+- sanitizes remote SVGs, and enables the `image/svg+xml` MIME type only while sideloading that single file
 
-Questa e' la vera logica di business di `TermService`: upsert guidato da `id` o `local_key`.
+### 7. Initializing WPML
 
-### 6. Salvataggio del termine base
+If the payload contains translations, the service:
 
-Dopo la create/update del termine base:
+1. reads the base term's language details
+2. if the term has no `trid` yet, assigns it the base language
+3. reads the WPML details again
+4. if there is still no `trid`, returns an error
 
-- salva `local_key` come term meta `onpage_local_key`
-- salva i campi ACF della lingua base
-- per i campi ACF di tipo `image`, se il valore e' un URL valido, importa o riusa il media e salva l'`attachment_id`
-- gli SVG remoti vengono sanificati e il MIME `image/svg+xml` viene abilitato solo durante il sideload del singolo file
+### 8. Upserting the translations
 
-### 7. Inizializzazione WPML
+For each language other than the base language, the service:
 
-Se il payload contiene traduzioni:
+- resolves `name`, `slug` and `description`
+- skips the language if the translated name is missing
+- reads the existing translation from the WPML group
+- converts a `term_taxonomy_id`, if any, to a `term_id`
+- updates the translated term if it exists, otherwise creates it
+- when it creates the term, links it to the base term's `trid`
+- saves `local_key`
+- saves the ACF fields for that language
+- for ACF fields of type `image`, lets each language import and save its own media
 
-- legge i dettagli lingua del termine base
-- se il termine non ha ancora `trid`, gli assegna la lingua base
-- rilegge i dettagli WPML
-- se ancora non trova un `trid`, ritorna errore
+### Result
 
-### 8. Upsert delle traduzioni
+`Term::insert()` returns:
 
-Per ogni lingua diversa dalla base:
+- the base term's ID for each batch item
+- a `WP_Error` on failure
 
-- risolve `name`, `slug`, `description`
-- se il nome tradotto manca, salta quella lingua
-- legge la traduzione esistente dal gruppo WPML
-- converte eventuale `term_taxonomy_id` in `term_id`
-- se il termine tradotto esiste, lo aggiorna
-- altrimenti lo crea
-- se lo crea, lo collega allo stesso `trid` del termine base
-- salva `local_key`
-- salva gli ACF della lingua corretta
-- per i campi ACF di tipo `image`, ogni lingua puo' importare e salvare il proprio media
+## Key business rules in `Term.php`
 
-### Risultato
+### `insert()` is an upsert
 
-`Term::insert()` ritorna:
+The method name is misleading. It does not only insert: it chooses between insert and update at runtime.
 
-- l’ID del termine base per ogni elemento del batch
-- `WP_Error` in caso di errore
+### `local_key` is the main reconciliation key
 
-## Business rules importanti in `Term.php`
+For terms, the flow is driven far more by `local_key` than by `id`.
 
-### `insert()` e' un upsert
+The value is saved in `wp_termmeta` with meta key `onpage_local_key`. The same value is propagated to every WPML translation of the term.
 
-Il nome del metodo puo' confondere: non fa solo insert, ma decide dinamicamente tra insert e update.
+### The translation group is keyed on `term_taxonomy_id`
 
-### `local_key` e' la chiave di riconciliazione principale
+WPML does not link terms by `term_id`. It links them by `term_taxonomy_id`.
 
-Nei termini il flusso e' molto piu' guidato da `local_key` che da `id`.
-
-Il valore viene salvato in `wp_termmeta` con meta key `onpage_local_key` e propagato con lo stesso valore a tutte le traduzioni WPML del termine.
-
-### Il gruppo traduzioni e' sul `term_taxonomy_id`
-
-Per WPML, i termini non vengono collegati usando direttamente `term_id`, ma `term_taxonomy_id`.
-
-Per questo il service ha helper dedicati:
+That is why the service has dedicated helpers:
 
 - `getTermTaxonomyId()`
 - `getTermIdByTaxonomyId()`
 
-### Le lingue senza `name` vengono ignorate
+### Languages without `name` are skipped
 
-Se per una lingua tradotta manca il nome, quella traduzione non viene creata o aggiornata.
+If the name is missing for a translated language, that translation is neither created nor updated.
 
-## Differenze principali tra `Post.php` e `Term.php`
+## `Post.php` vs `Term.php`
 
-### Strategia di update/create
+| Aspect | `Post.php` | `Term.php` |
+|---|---|---|
+| Create/update strategy | `save()` picks `insert()` or `update()` based on whether `id` is present. | `insert()` is already an upsert, using `id` or `local_key`. |
+| External key | `local_key` is supporting data. It does not drive the create/update branch in the first place. Read from `wp_postmeta`, meta key `onpage_local_key`. | `local_key` is a core reconciliation key. Read from `wp_termmeta`, meta key `onpage_local_key`. |
+| Translation group update | Updates the current post, then iterates over all known translations and realigns them. | Upserts the base term, then upserts the translations one by one. |
 
-`Post.php`:
+## Notes for anyone changing these controllers
 
-- `save()` sceglie tra `insert()` e `update()` in base alla presenza di `id`
+### Changing the language logic
 
-`Term.php`:
+Always check:
 
-- `insert()` fa gia' da upsert usando `id` o `local_key`
+- what happens when WPML is inactive
+- how the base language is resolved
+- which fallback is used
+- whether ACF correctly follows the current language
 
-### Chiave esterna
+### Changing the title or slug logic
 
-Post:
+Watch out for:
 
-- `local_key` e' di supporto, ma non guida in prima battuta il branch create/update
-- viene letto da `wp_postmeta` con meta key `onpage_local_key`
+- uniqueness checks
+- behavior with partial payloads
+- propagation to existing translations
 
-Term:
+### Changing `wpml_get_element_translations`
 
-- `local_key` e' una chiave di riconciliazione fondamentale
-- viene letto da `wp_termmeta` con meta key `onpage_local_key`
+For posts, the controller passes the full WPML `element_type` and requests `all_statuses = true`. Otherwise posts in `draft` can be missing from the filter's response.
 
-### Aggiornamento gruppo traduzioni
+### Changing `local_key`
 
-Post:
+Remember:
 
-- aggiorna il post corrente
-- poi itera tutte le traduzioni note e le riallinea
+- For generic posts and WooCommerce products/variations, it is always stored in `wp_postmeta` as `onpage_local_key`.
+- For terms, categories, tags, brands and attribute terms, it is stored in `wp_termmeta` as `onpage_local_key`.
+- The legacy meta `local_key` / `_local_key` are no longer written. `POST /migration` renames the former to `onpage_local_key` on posts and deletes the redundant copies.
+- Changing this logic affects deduplication, lookup and external sync.
 
-Term:
+### Changing WooCommerce SKUs with WPML
 
-- upserta il termine base
-- poi upserta le traduzioni una per una
+WooCommerce requires globally unique SKUs. Therefore:
 
-## Note operative per chi modifica questi controller
+- `Product.php` applies `props.sku` to the source product, but not to its translations.
+- `VariantProduct.php` applies `props.sku` to the source variation, but not to the translated variations.
+- Prices and other WooCommerce fields can still be propagated to the translations.
 
-### Quando toccare la logica lingue
+If this rule is removed, WooCommerce can throw `WC_Data_Exception` from `set_sku()` because of a duplicate SKU.
 
-Bisogna verificare sempre:
-
-- cosa succede con WPML disattivo
-- come viene risolta la lingua base
-- quale fallback viene usato
-- se ACF segue correttamente la lingua corrente
-
-### Quando toccare la logica titoli o slug
-
-Attenzione a:
-
-- controlli di unicita'
-- comportamento su payload parziali
-- propagazione alle traduzioni esistenti
-
-### Quando toccare `wpml_get_element_translations`
-
-Per i post, il controller usa l’`element_type` WPML completo e chiede `all_statuses = true`, altrimenti i post in `draft` possono essere esclusi dalla risposta del filtro.
-
-### Quando toccare `local_key`
-
-Ricordare che:
-
-- nei post generici e nei prodotti/varianti WooCommerce è salvato sempre in `wp_postmeta` come `onpage_local_key`
-- nei termini/categorie/tag/brand/attribute terms e' salvato in `wp_termmeta` come `onpage_local_key`
-- le meta legacy `local_key` / `_local_key` non vengono più scritte: `POST /migration` rinomina la prima in `onpage_local_key` sui post e cancella le copie ridondanti
-- cambiare questa logica impatta deduplica, lookup e sincronizzazione esterna
-
-### Quando toccare SKU WooCommerce con WPML
-
-WooCommerce richiede SKU globalmente univoci.
-
-Per questo:
-
-- `Product.php` applica `props.sku` al prodotto sorgente, ma non alle traduzioni
-- `VariantProduct.php` applica `props.sku` alla variazione sorgente, ma non alle variazioni tradotte
-- prezzi e altri campi WooCommerce possono invece essere propagati anche alle traduzioni
-
-Se questa regola viene rimossa, WooCommerce puo' lanciare `WC_Data_Exception` durante `set_sku()` per SKU duplicato.
-
-## Mappa mentale rapida
+## Quick mental model
 
 ### Post
 
-1. normalizza payload
-2. scopre lingue e traduzioni esistenti
-3. valida titolo e precondizioni
-4. aggiorna o crea originale
-5. salva ACF
-6. assegna tassonomie
-7. crea/aggiorna traduzioni WPML
+1. Normalize the payload.
+2. Discover languages and existing translations.
+3. Validate the title and preconditions.
+4. Update or create the original.
+5. Save ACF fields.
+6. Assign taxonomies.
+7. Create/update the WPML translations.
 
 ### Term
 
-1. risolve tassonomia
-2. normalizza payload
-3. determina lingua base
-4. trova termine tramite `id` o `local_key`
-5. insert/update del termine base
-6. salva meta e ACF
-7. inizializza gruppo WPML
-8. insert/update delle traduzioni
+1. Resolve the taxonomy.
+2. Normalize the payload.
+3. Determine the base language.
+4. Find the term by `id` or `local_key`.
+5. Insert/update the base term.
+6. Save meta and ACF fields.
+7. Initialize the WPML group.
+8. Insert/update the translations.
 
-### Taxonomy Delete
+### Taxonomy delete
 
-Quando una tassonomia viene eliminata, il service rimuove anche i field group ACF con location `taxonomy == <slug>`. Con `ignore=1`, questa pulizia viene tentata anche se la tassonomia non esiste piu', cosi' una sync puo' ripulire field group rimasti da una precedente cancellazione parziale.
+When a taxonomy is deleted, the service also removes the ACF field groups whose location is `taxonomy == <slug>`.
 
-## Test
+With `ignore=1`, this cleanup runs even if the taxonomy no longer exists. This lets a sync clean up field groups left over from an earlier partial deletion.
 
-I test stanno in `src/Tests/` e non fanno parte del plugin: non vengono inclusi da `onpage.php` e restano fuori dal pacchetto di distribuzione. Sono script PHP da riga di comando che parlano con un sito WordPress vero attraverso le API REST del plugin.
+## Tests
 
-Configurazione nel file `.env` della root (vedi `.env.example`):
+Tests live in `src/Tests/`. They are not part of the plugin: `onpage.php` does not include them, and they are left out of the distribution package. They are command-line PHP scripts that talk to a real WordPress site through the plugin's REST API.
 
-- `WP_TEST_URL` URL base del sito di prova, senza slash finale
-- `WP_TEST_TOKEN` token Bearer, lo stesso valore dell'opzione WordPress `onpage_auth_token`
+### Configuration
+
+Configure them in the `.env` file at the repository root (see `.env.example`):
+
+- `WP_TEST_URL`: base URL of the test site, without a trailing slash
+- `WP_TEST_TOKEN`: Bearer token, the same value as the WordPress option `onpage_auth_token`
+
+### Running
 
 ```
-./bin/test-launcher              tutti i test
-./bin/test-launcher AcfShared    solo quelli il cui nome contiene "AcfShared"
+./bin/test-launcher              all tests
+./bin/test-launcher AcfShared    only tests whose name contains "AcfShared"
 ```
 
-Il launcher esegue i test uno per uno mostrando l'esito di ciascuno e **si ferma al primo che fallisce**, restituendone il codice di uscita: i test condividono lo stesso sito, quindi proseguire su uno stato gia' sporco produrrebbe solo errori derivati. Un singolo test resta comunque eseguibile da solo con `php src/Tests/<Nome>.php`.
+The launcher runs tests one at a time and shows each result. It **stops at the first failure** and returns that test's exit code. Rationale: all tests share the same site, so continuing on a dirty state would only produce follow-on errors.
 
-### Attenzione ai commenti nel `.env`
+You can still run a single test on its own with `php src/Tests/<Name>.php`.
 
-Il `.env` ha due lettori che non concordano sulla sintassi dei commenti: docker compose vuole `#`, PHP vuole `;` e tollera `#` solo finche' il commento resta prosa semplice. Se un commento `#` contiene uno tra `( ) " ! & | $ { } [ ] ~`, `parse_ini_file()` scarta **l'intero file** e `OnPage\Env` legge ogni variabile come vuota, senza che nulla lo segnali: il sintomo e' un token che risulta non valorizzato pur essendo scritto nel file. `./bin/test-launcher` verifica questa condizione prima di partire e la riporta esplicitamente.
+### Beware of comments in `.env`
 
-### Log di audit
+`.env` has two readers that disagree on comment syntax:
 
-Ogni corsa del launcher riscrive `logs/audit.log` con la conversazione HTTP completa: per ogni chiamata una riga `[req]` con metodo, URL e corpo, e una `[res]` con stato HTTP, durata e corpo della risposta. Le chiamate stanno sotto l'intestazione del test che le ha fatte, e ogni test si chiude con una riga `[esito]`. I corpi JSON sono formattati su piu' righe, perche' un repeater annidato letto su una riga sola e' cio' che rende lenta una sessione di debug; una risposta che JSON non e' — un fatal di PHP, una pagina di errore HTML — viene riportata tale e quale, che e' esattamente quello che serve vedere.
+- docker compose expects `#`
+- PHP expects `;`, and tolerates `#` only while the comment is plain prose
 
-Il token non viene mai scritto: l'header Authorization compare come `Bearer <nascosto>`, cosi' il file si puo' allegare a una segnalazione senza pensarci.
+If a `#` comment contains any of `( ) " ! & | $ { } [ ] ~`, `parse_ini_file()` discards **the whole file**. `OnPage\Env` then reads every variable as empty, with no warning. The symptom is a token that appears unset even though it is written in the file.
 
-Il file riparte da zero a ogni corsa del launcher, quindi contiene sempre e solo l'ultima esecuzione. `logs/` e' in `.gitignore` e non entra nel pacchetto di distribuzione. Un test eseguito da solo con `php src/Tests/<Nome>.php` scrive nello stesso file, in coda.
+`./bin/test-launcher` checks for this before starting and reports it explicitly.
 
-La scrittura del log non puo' far fallire un test: la destinazione viene risolta una volta sola e, se non e' scrivibile, il log si disattiva in silenzio.
+### Audit log
 
-Ogni test segue un flusso **crea-cancella**: costruisce da se' la propria fixture (post type, field group, contenuti), verifica, e rimuove tutto quello che ha creato anche quando un'asserzione fallisce. La pulizia gira anche **prima** della fixture, cosi' una corsa interrotta non blocca quella successiva, e usa sempre `?ignore=1` per non trasformare un residuo mancante in un secondo errore. Puntare i test a un sito di prova, mai alla produzione.
+Each launcher run rewrites `logs/audit.log` with the full HTTP conversation:
 
-- `WooCommerceCatalog.php` e' il test di base. Fa in un giro solo quello che fa ogni import: prima dichiara le strutture — la tassonomia custom, l'attributo globale WooCommerce e sette field group ACF, uno per prodotto, variante, `product_cat`, `product_tag`, `product_brand`, tassonomia custom e tassonomia `pa_*` dell'attributo — poi ci pubblica dentro i dati: brand, categoria madre e figlia, tag, i due valori dell'attributo, un termine della tassonomia custom, un prodotto semplice, un prodotto variabile e due varianti, ciascuno con i propri valori ACF. Rilegge tutto dagli endpoint `GET` e alla fine cancella. I dati sono **inventati nel file**: a differenza del test equivalente nella repo `connector-wordpress`, non viene letto niente da On Page®, cosi' il test gira anche contro un WordPress spoglio. Richiede un sito con WooCommerce e ACF attivi.
-- `AcfSharedStructuredFields.php` copre end to end la regola dei valori condivisi: valori ACF strutturati inviati come condivisi su `POST /posts` devono sopravvivere al giro di andata e ritorno. Richiede un sito.
-- `MultiLangResolveFields.php` copre la stessa regola offline, direttamente su `MultiLang::resolveFields()`: non richiede ne' sito ne' `.env`, e arriva alle forme che l'endpoint non puo' raggiungere, in particolare il valore associativo. Contiene anche un caso etichettato come *comportamento attuale, non quello desiderato*, che fissa il falso positivo descritto sotto: serve a far fallire il test se qualcuno cambia il predicato, cosi' la modifica e' una decisione e non una svista.
+- one `[req]` line per call, with method, URL and body
+- one `[res]` line per call, with HTTP status, duration and response body
 
-### Come ACF persiste i sotto-campi
+Calls are grouped under the header of the test that made them. Each test ends with an `[esito]` line.
 
-Vale la pena saperlo, perche' fraintenderlo fa perdere in silenzio i sotto-campi dei `group`.
+JSON bodies are pretty-printed over several lines. A nested repeater on a single line is what makes a debugging session slow. A response that is not JSON (a PHP fatal error, an HTML error page) is logged verbatim, which is exactly what you need to see.
 
-ACF salva **ogni** campo, sotto-campi compresi, come un proprio post `acf-field`, con `post_parent` che punta al campo di sopra. `acf_update_field()` ne salva uno e si ferma: non scende nei `sub_fields` annidati. Passargli un campo con i sotto-campi dentro creava quindi il padre e nessun figlio, lasciando una copia serializzata dei sotto-campi dentro il `post_content` del padre, dove ACF non la cerca — un `group` si ricarica i sotto-campi con `acf_get_fields()`, che legge i post figli.
+The token is never written. The Authorization header appears as `Bearer <nascosto>`, so the file can be attached to a bug report without a second thought.
 
-Il sintomo era un gruppo che rispondeva `200` e poi si rileggeva con tutti i sotto-campi schiacciati sulla chiave vuota, perche' `format_value()` del group indicizza il risultato con `$sub_field['_name']`, che in quella copia serializzata non esiste. Un repeater definito allo stesso modo sembrava funzionare, ed e' quello che ha tenuto nascosto il problema.
+The file starts from scratch on each launcher run, so it only ever holds the latest run. `logs/` is in `.gitignore` and is not part of the distribution package. A test run on its own with `php src/Tests/<Name>.php` appends to the same file.
 
-`FieldGroup::persistFields()` salva ora un livello alla volta, il padre prima dei figli, ricorrendo nei `sub_fields`: e' lo stesso appiattimento che fa l'import di ACF. Chi aggiunge un tipo di campo con figli deve passare di li'.
+Writing the log can never make a test fail. The destination is resolved once. If it is not writable, logging is silently disabled.
 
-Non coperto: il **flexible content**, i cui `layouts` contengono a loro volta `sub_fields` e continuano a essere serializzati inline come prima. Nessuna verifica e' stata fatta su quel tipo.
+### Test structure: create, then delete
+
+Every test follows a **create-delete** flow:
+
+1. It builds its own fixture (post type, field groups, content).
+2. It runs its checks.
+3. It removes everything it created, even when an assertion fails.
+
+Cleanup also runs **before** the fixture, so an interrupted run does not block the next one. Cleanup always uses `?ignore=1`, so a missing leftover does not become a second error.
+
+Point the tests at a test site, never at production.
+
+### Test files
+
+- **`WooCommerceCatalog.php`** is the baseline test. In one pass, it does what every import does:
+  - First it declares the structures: the custom taxonomy, the WooCommerce global attribute, and seven ACF field groups (one each for product, variation, `product_cat`, `product_tag`, `product_brand`, the custom taxonomy, and the attribute's `pa_*` taxonomy).
+  - Then it publishes data into them: a brand, a parent and a child category, a tag, the attribute's two values, a custom-taxonomy term, a simple product, a variable product and two variations, each with its own ACF values.
+  - It reads everything back through the `GET` endpoints and finally deletes it all.
+
+  The data is **made up in the file**. Unlike the equivalent test in the `connector-wordpress` repository, nothing is read from On Page®, so the test also runs against a bare WordPress install. It requires a site with WooCommerce and ACF active.
+- **`AcfSharedStructuredFields.php`** covers the shared-value rule end to end. Structured ACF values sent as shared on `POST /posts` must survive the round trip. Requires a site.
+- **`MultiLangResolveFields.php`** covers the same rule offline, directly on `MultiLang::resolveFields()`. It needs neither a site nor `.env`. It reaches shapes the endpoint cannot, in particular the associative value. It also contains a case labeled *current behavior, not the desired one*, which pins the false positive described under [Shared vs translated](#2-shared-vs-translated). Its purpose is to make the test fail if someone changes the predicate, so that the change is a deliberate decision and not an oversight.
+
+### How ACF persists sub-fields
+
+This is worth knowing: misunderstanding it silently loses the sub-fields of `group` fields.
+
+ACF stores **every** field, sub-fields included, as its own `acf-field` post. Its `post_parent` points to the field above it. `acf_update_field()` saves one field and stops; it does not descend into nested `sub_fields`.
+
+Passing it a field with sub-fields inside therefore created the parent and no children. It left a serialized copy of the sub-fields inside the parent's `post_content`, where ACF never looks: a `group` reloads its sub-fields with `acf_get_fields()`, which reads the child posts.
+
+The symptom was a group that returned `200`, then read back with all its sub-fields collapsed onto the empty key. The reason: the group's `format_value()` indexes the result by `$sub_field['_name']`, which does not exist in that serialized copy. A repeater defined the same way appeared to work, and that is what kept the problem hidden.
+
+`FieldGroup::persistFields()` now saves one level at a time, parent before children, recursing into `sub_fields`. This is the same flattening ACF's own import does. Anyone adding a field type with children must go through it.
+
+Not covered: **flexible content**. Its `layouts` contain their own `sub_fields`, which are still serialized inline as before. That type has not been verified at all.

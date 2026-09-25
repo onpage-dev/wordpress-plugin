@@ -1,61 +1,57 @@
 # On Page® WordPress Plugin
 
-Questo plugin permette a WordPress di ricevere e sincronizzare dati strutturati provenienti da **On Page®** tramite il servizio **Exporter**.
+Lets WordPress receive and sync structured data from **On Page®**, delivered by the On Page®
+**Exporter** service.
 
-In sintesi, il plugin:
+The plugin:
 
-- espone API REST per ricevere dati da Exporter
-- crea e aggiorna Post Type, campi ACF, tassonomie, termini e contenuti
-- supporta la pubblicazione in WordPress di raccolte gestite centralmente su On Page®
-- puo' integrarsi con WPML per progetti multilingua
+- exposes a REST API that receives data from Exporter
+- creates and updates post types, ACF fields, taxonomies, terms and content
+- publishes on WordPress collections that are managed centrally on On Page®
+- supports multilingual sites through WPML
 
-## Versione
+## Version
 
-Versione corrente: **1.0.0**. Il progetto segue il [Semantic Versioning](https://semver.org/lang/it/):
-le modifiche di ogni versione sono in [CHANGELOG.md](CHANGELOG.md), la procedura di rilascio in
-[RELEASE.md](RELEASE.md). Le versioni pubblicate sono nelle
-[Release della repo GitHub](https://github.com/onpage-dev/wordpress-plugin/releases).
+Current version: **1.0.0**. The project follows [Semantic Versioning](https://semver.org/).
 
-## Requisiti
+- Changes in each version: [CHANGELOG.md](CHANGELOG.md)
+- How to cut a release: [RELEASE.md](RELEASE.md)
+- Published versions: [GitHub Releases](https://github.com/onpage-dev/wordpress-plugin/releases)
 
-- WordPress 7.1 o superiore
-- PHP 8.2 o superiore
-- [Advanced Custom Fields](https://wordpress.org/plugins/advanced-custom-fields/) attivo: senza ACF
-  le API REST restano disattivate
-- WooCommerce e WPML sono opzionali, necessari solo per i rispettivi endpoint e per il multilingua
+## Requirements
 
-## Documentazione
+- WordPress 7.1 or later
+- PHP 8.2 or later
+- [Advanced Custom Fields](https://wordpress.org/plugins/advanced-custom-fields/), active. Without
+  ACF the REST API stays disabled.
+- WooCommerce and WPML are optional. You only need them for the WooCommerce endpoints and for
+  multilingual content.
 
-Per scrivere una integrazione parti da **[docs/DEVELOPER.md](docs/DEVELOPER.md)**: contratto REST,
-ordine delle chiamate, esempi completi in PHP e riferimento degli errori.
+## Documentation
 
-| Documento | A chi serve |
+Writing an integration? Start with **[docs/DEVELOPER.md](docs/DEVELOPER.md)**. It covers the REST
+contract, the order of calls, complete PHP examples and the error reference.
+
+| Document | Who it is for |
 | --- | --- |
-| [docs/DEVELOPER.md](docs/DEVELOPER.md) | chi scrive una integrazione: esempi, ordine delle chiamate, errori |
-| [docs/API.md](docs/API.md) | riferimento esaustivo endpoint per endpoint |
-| [docs/USER.md](docs/USER.md) | installazione e configurazione lato admin del sito |
-| [docs/DEV.md](docs/DEV.md) | interni del plugin, service per service |
-| [docs/design.md](docs/design.md) | decisioni architetturali e trade-off |
-| [docs/Tech.md](docs/Tech.md) | note tecniche |
-| [docs/WooCommerce.md](docs/WooCommerce.md) | specificita' WooCommerce |
-| [docs/PAGINATION.md](docs/PAGINATION.md) | paginazione |
+| [docs/DEVELOPER.md](docs/DEVELOPER.md) | integration authors: examples, call order, errors |
+| [docs/API.md](docs/API.md) | full reference, endpoint by endpoint |
+| [docs/USER.md](docs/USER.md) | site admins: installation and configuration |
+| [docs/DEV.md](docs/DEV.md) | plugin internals, service by service |
+| [docs/design.md](docs/design.md) | architectural decisions and trade-offs |
+| [docs/Tech.md](docs/Tech.md) | technical analysis of the WooCommerce endpoints |
+| [docs/WooCommerce.md](docs/WooCommerce.md) | WooCommerce specifics |
+| [docs/PAGINATION.md](docs/PAGINATION.md) | pagination |
 
-## Licenza
+## License
 
-[GPL-2.0-or-later](LICENSE), come WordPress.
+[GPL-2.0-or-later](LICENSE), same as WordPress.
 
-## Ambiente locale
+## Local environment
 
-Il progetto include un ambiente Docker Compose con servizi MySQL, WordPress e Adminer.
+The project ships a Docker Compose environment with MySQL, WordPress and Adminer.
 
-### WordPress
-
-Accesso alla webapp:
-
-http://localhost:8040
-
-### Adminer
-
-Accesso al database:
-
-http://localhost:8041/?server=mysql&username=wp_user&db=wordpress
+| Service | URL |
+| --- | --- |
+| WordPress | http://localhost:8040 |
+| Adminer (database) | http://localhost:8041/?server=mysql&username=wp_user&db=wordpress |

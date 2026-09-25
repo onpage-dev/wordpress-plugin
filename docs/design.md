@@ -1,331 +1,391 @@
-# Architettura del plugin On Page®
+# On Page® Plugin Architecture
 
-Questo documento riassume l'**architettura software** scelta per il plugin e **motiva** le decisioni
-principali. Non è una guida d'uso (per quello vedi [USER.md](wp-content/plugins/wordpress-plugin/docs/USER.md) e
-[API.md](wp-content/plugins/wordpress-plugin/docs/API.md)) né un'analisi di performance (vedi
-[Tech.md](wp-content/plugins/wordpress-plugin/docs/Tech.md)): descrive **come è organizzato il codice e perché**.
+This document describes the plugin's **software architecture** and explains the reasoning behind the
+main decisions. It covers **how the code is organized and why**.
 
----
+It is not:
 
-## 1. Contesto e obiettivo
-
-Il plugin è il lato WordPress di una sincronizzazione **On Page® → WordPress**: riceve dati strutturati
-dal servizio *Exporter* di On Page® e li materializza come contenuti WordPress (post/CPT, tassonomie,
-termini, field group ACF) e come entità WooCommerce (prodotti, varianti, categorie, tag, brand,
-attributi globali e loro termini), con supporto opzionale al multilingua **WPML**.
-
-Il chiamante è una macchina, non un umano: il plugin è quindi un **backend di integrazione**, non una
-UI. Ne discende il primo principio di design: esporre un **contratto REST idempotente** che possa
-essere rieseguito senza duplicare dati, guidato da un identificativo esterno (`local_key`).
+- a usage guide — see [USER.md](USER.md) and [API.md](API.md);
+- a performance analysis — see [Tech.md](Tech.md).
 
 ---
 
-## 2. Forze e vincoli che hanno guidato le scelte
+## 1. Context and goal
 
-L'architettura è la risposta a un insieme di vincoli non negoziabili:
+The plugin is the WordPress side of an **On Page® → WordPress** sync. It receives structured data from
+the On Page® *Exporter* service and turns it into:
 
-- **Runtime WordPress/PHP condiviso.** Il codice gira dentro il ciclo di vita di WordPress, senza
-  processo dedicato, senza framework, senza build step. Niente container DI, niente ORM.
-- **Nessuna dipendenza esterna.** Non c'è `composer.json`: le classi vengono incluse manualmente
-  in [onpage.php](wp-content/plugins/wordpress-plugin/onpage.php). Ridurre la superficie di
-  dipendenze evita conflitti di versione con altri plugin nello stesso runtime.
-- **Tre integrazioni "opache" e disallineate tra loro.** ACF, WooCommerce e WPML hanno modelli dati
-  diversi (postmeta vs CRUD object vs `icl_translations`) e vanno orchestrati, non semplicemente
-  chiamati. Gran parte della complessità del plugin vive qui.
-- **WPML opzionale.** Lo stesso codice deve funzionare con e senza WPML: il multilingua è una
-  dimensione trasversale, non una modalità separata.
-- **Import massivi.** Le scritture sono batch da centinaia/migliaia di elementi: il contratto e la
-  gestione degli errori devono reggere lo stato parziale.
+- WordPress content: posts/CPTs, taxonomies, terms, ACF field groups;
+- WooCommerce entities: products, variations, categories, tags, brands, global attributes and their terms.
+
+Multilingual support via **WPML** is optional.
+
+The caller is a machine, not a person. The plugin is therefore an **integration backend**, not a UI.
+This leads to the first design principle: expose an **idempotent REST contract**. Requests can be
+re-run without duplicating data, and an external identifier (`local_key`) drives the matching.
 
 ---
 
-## 3. Vista d'insieme: architettura a livelli
+## 2. Forces and constraints
 
-Il plugin adotta una classica **stratificazione a responsabilità crescenti**, con il flusso di una
-richiesta che attraversa i livelli dall'alto verso il basso:
+The architecture responds to a set of non-negotiable constraints:
+
+- **Shared WordPress/PHP runtime.** The code runs inside the WordPress lifecycle. There is no
+  dedicated process, no framework, no build step, no DI container and no ORM.
+- **No external dependencies.** There is no `composer.json`. Classes are included manually in
+  [onpage.php](../onpage.php). A small dependency surface avoids version conflicts with other plugins
+  in the same runtime.
+- **Three "opaque", mismatched integrations.** ACF, WooCommerce and WPML use different data models
+  (postmeta vs. CRUD objects vs. `icl_translations`). They must be orchestrated, not just called.
+  Most of the plugin's complexity lives here.
+- **Optional WPML.** The same code must work with and without WPML. Multilingual support is a
+  cross-cutting dimension, not a separate mode.
+- **Bulk imports.** Writes arrive in batches of hundreds or thousands of items. The contract and the
+  error handling must cope with partial state.
+
+---
+
+## 3. Overview: a layered architecture
+
+The plugin uses a classic **layered design**, with responsibility growing from top to bottom. A
+request flows through the layers downwards:
 
 ```
 HTTP (WordPress REST API)
   │
   ▼
-Router            ── src/Router.php        registra le rotte, fa da adapter verso register_rest_route
+Router            ── src/Router.php        registers routes; adapter over register_rest_route
   │
   ▼
-Middleware        ── src/Middlewares/      permission_callback (Auth Bearer token)
+Middleware        ── src/Middlewares/      permission_callback (Bearer token auth)
   │
   ▼
-Controller        ── src/Controllers/      sottile: parse del batch, loop, mapping HTTP
+Controller        ── src/Controllers/      thin: parses the batch, loops, maps to HTTP
   │
   ▼
-Service           ── src/Services/         logica di business (upsert, WPML, ACF, WooCommerce)
+Service           ── src/Services/         business logic (upsert, WPML, ACF, WooCommerce)
   │
   ▼
-Repository / WP   ── src/Services/*Repository.php + API WordPress/WooCommerce/ACF/WPML
+Repository / WP   ── src/Services/*Repository.php + WordPress/WooCommerce/ACF/WPML APIs
 ```
 
-La regola di dipendenza è unidirezionale: i Controller conoscono i Service, i Service conoscono i
-Repository e le API di piattaforma; **mai il contrario**. Questo tiene i Controller banali e
-testabili a occhio, e concentra la complessità in un solo strato (Service).
+Dependencies point one way only. Controllers know Services. Services know Repositories and the
+platform APIs. **Never the reverse.** This keeps Controllers trivial and easy to verify by reading,
+and concentrates complexity in a single layer (Service).
 
-### 3.1 Perché questa stratificazione
+### 3.1 Why this layering
 
-- **Separazione HTTP / dominio.** Il Controller parla HTTP (status code, forma del body, `WP_Error`);
-  il Service parla dominio (prodotti, termini, lingue). Cambiare il contratto REST non tocca la
-  logica di upsert, e viceversa.
-- **Uniformità.** Ogni endpoint di scrittura ha la stessa forma (vedi §6): riduce il carico
-  cognitivo e rende prevedibile dove mettere una modifica.
+- **HTTP is separate from the domain.** The Controller speaks HTTP (status codes, body shape,
+  `WP_Error`). The Service speaks domain (products, terms, languages). Changing the REST contract does
+  not touch the upsert logic, and vice versa.
+- **Uniformity.** Every write endpoint has the same shape (see section 6). This lowers cognitive load
+  and makes it obvious where a change belongs.
 
 ---
 
-## 4. Le scelte architetturali chiave (con giustificazione)
+## 4. Key architectural decisions
 
-### 4.1 Router custom sopra la REST API di WordPress
+### 4.1 Custom router on top of the WordPress REST API
 
-Invece di sparpagliare decine di `register_rest_route()` nel codice, tutte le rotte sono dichiarate
-in un unico file, [routes.php](wp-content/plugins/wordpress-plugin/routes.php), tramite un piccolo
-[Router](wp-content/plugins/wordpress-plugin/src/Router.php) fluente:
+Routes are not scattered across dozens of `register_rest_route()` calls. They are all declared in one
+file, [routes.php](../routes.php), through a small fluent [Router](../src/Router.php):
 
 ```php
 $router->bind('POST', '/woocommerce/products', [ProductController::class, 'save'], AuthMiddleware::class);
 ```
 
-**Perché:**
-- **Una sola tabella di routing** leggibile a colpo d'occhio come indice dell'intera API — è la
-  documentazione vivente del contratto.
-- **Middleware come parametro esplicito.** Il router mappa il middleware sul `permission_callback`
-  di WordPress ([Router.php:108](wp-content/plugins/wordpress-plugin/src/Router.php#L108)): l'auth è
-  dichiarata alla rotta, impossibile dimenticarla.
-- **Dispatch centralizzato e gestione errori unica.** `Router::dispatch()`
-  ([Router.php:41-72](wp-content/plugins/wordpress-plugin/src/Router.php#L41-L72)) è l'**unico** punto
-  che cattura le `HttpException` e le converte in `WP_Error`. I Service lanciano eccezioni di dominio
-  senza sapere nulla di HTTP; la traduzione in risposta avviene in un solo posto.
-- **Placeholder `{param}`** convertiti in named capture group
-  ([Router.php:30-33](wp-content/plugins/wordpress-plugin/src/Router.php#L30-L33)): sintassi di
-  routing familiare senza dipendere dalla verbosità nativa di WordPress.
+**Why:**
 
-È volutamente minimale: nessuna feature non usata (gruppi di rotte, middleware multipli, ecc.). Il
-costo di questa astrazione è ~100 righe, ripagate dalla leggibilità di `routes.php`.
+- **One routing table.** It reads at a glance as an index of the whole API. It is the living
+  documentation of the contract.
+- **Middleware is an explicit parameter.** The router maps the middleware onto the WordPress
+  `permission_callback` ([Router.php:108](../src/Router.php#L108)). Auth is declared on the route, so
+  it cannot be forgotten.
+- **Centralized dispatch and error handling.** `Router::dispatch()`
+  ([Router.php:41-72](../src/Router.php#L41-L72)) is the **only** place that catches `HttpException`
+  and converts it to `WP_Error`. Services throw domain exceptions without knowing about HTTP. The
+  translation into a response happens in one place.
+- **`{param}` placeholders.** They are converted into named capture groups
+  ([Router.php:30-33](../src/Router.php#L30-L33)). This gives a familiar routing syntax without the
+  verbosity of native WordPress.
 
-### 4.2 Controller sottili, Service ricchi
+The router is deliberately minimal: no unused features (route groups, multiple middleware, etc.). The
+abstraction costs about 100 lines, and the readability of `routes.php` pays for it.
 
-I Controller fanno **solo tre cose**: caricare la ACF field-type map una volta per richiesta,
-iterare il batch JSON, delegare al Service e impacchettare la risposta. La
-[Category](wp-content/plugins/wordpress-plugin/src/Controllers/WooCommerce/Category.php) è
-emblematica: ~60 righe, nessuna logica di dominio.
+### 4.2 Thin Controllers, rich Services
 
-**Perché:** la logica difficile (risoluzione WPML, upsert idempotente, sideload media, ACF) è
-condivisa tra molti endpoint. Concentrarla nei Service permette il **riuso**: ad esempio
-`WooCommerce\Term::save` serve categorie, tag, brand e attribute-terms; `Acf::updateFieldValue`
-serve post, prodotti, varianti e termini. Se la logica vivesse nei Controller andrebbe duplicata 4-6
-volte.
+Controllers do **only** this:
 
-### 4.3 Errori come eccezioni di dominio + `WP_Error` al bordo
+1. load the ACF field-type map once per request;
+2. iterate over the JSON batch;
+3. delegate each item to the Service;
+4. package the response.
 
-Il modello di errore è a **due stadi**:
+The [Category](../src/Controllers/WooCommerce/Category.php) controller is a typical example: about 60
+lines, no domain logic.
 
-1. Nel dominio si lancia `httpException($msg, $status, $code)`
-   ([helpers.php:168](wp-content/plugins/wordpress-plugin/src/helpers.php#L168)) — una
-   [HttpException](wp-content/plugins/wordpress-plugin/src/Exceptions/HttpException.php) che porta con
-   sé status HTTP e codice errore.
-2. Al bordo, `Router::dispatch` la trasforma nel `WP_Error` che WordPress serializza nella risposta.
+**Why:** the hard logic (WPML resolution, idempotent upsert, media sideloading, ACF) is shared by many
+endpoints. Keeping it in Services enables **reuse**. For example:
 
-**Perché:** i Service non devono propagare valori d'errore lungo tutta la call chain (che sarebbe
-rumoroso e facile da dimenticare); lanciano e basta. Il messaggio uniforme
-`Service :: Element {i} :: ...` rende ogni errore di batch immediatamente localizzabile all'elemento
-che l'ha causato. Le eccezioni non-`HttpException` vengono rilanciate
-([Router.php:67-69](wp-content/plugins/wordpress-plugin/src/Router.php#L67-L69)): i bug veri
-emergono come 500 con stack trace, non vengono mascherati.
+- `WooCommerce\Term::save` serves categories, tags, brands and attribute terms;
+- `Acf::updateFieldValue` serves posts, products, variations and terms.
 
-### 4.4 Autenticazione: Bearer token + UI admin, nessun endpoint sul token
+If this logic lived in Controllers, it would be duplicated 4–6 times.
 
-L'auth è un [middleware](wp-content/plugins/wordpress-plugin/src/Middlewares/Auth.php) che delega al
-[servizio Auth](wp-content/plugins/wordpress-plugin/src/Services/Auth.php): confronto in tempo
-costante (`hash_equals`) tra il Bearer token della richiesta e quello salvato in
-`wp_options` (`onpage_auth_token`). Il token si genera **solo** dalla pagina admin
-([UI.php](wp-content/plugins/wordpress-plugin/src/Views/UI.php)), protetta da capability
-`manage_options` e nonce CSRF.
+### 4.3 Errors: domain exceptions inside, `WP_Error` at the edge
 
-**Perché:**
-- **Semplicità operativa.** Un client machine-to-machine non fa OAuth handshake; un Bearer statico è
-  il minimo sufficiente, dietro HTTPS.
-- **Nessuna superficie d'attacco REST sul segreto.** Non esiste endpoint per leggere/ruotare il
-  token: la gestione vive solo nella UI admin, riducendo il rischio.
-- **Fail-safe esplicito.** Token non configurato → `500` (non un silenzioso pass-through); token
-  mancante → `401`; token errato → `403`. Stati distinti e diagnosticabili.
+Error handling has **two stages**:
 
-### 4.5 Il batch come contratto e l'idempotenza via `local_key`
+1. In the domain, code throws `httpException($msg, $status, $code)`
+   ([helpers.php:168](../src/helpers.php#L168)). This creates an
+   [HttpException](../src/Exceptions/HttpException.php) carrying an HTTP status and an error code.
+2. At the edge, `Router::dispatch` turns it into the `WP_Error` that WordPress serializes into the
+   response.
 
-Ogni endpoint di scrittura accetta un **array JSON** e processa un elemento alla volta. La chiave
-dell'intero design è che le scritture sono **upsert idempotenti** guidati da `local_key`,
-l'identificativo esterno On Page® (intero positivo **o stringa non vuota**; interi e stringhe numeriche
-sono equivalenti perché i meta WordPress sono comunque stringhe).
+**Why:**
 
-**Perché l'idempotenza:** la sync deve poter essere **rieseguita** (retry, re-import parziale, ripresa
-dopo errore) senza creare duplicati. `local_key` disaccoppia l'identità On Page® dall'ID WordPress
-(che il chiamante non conosce e che non è stabile tra ambienti diversi, es. dev/staging/produzione).
+- Services do not have to pass error values up the whole call chain. That would be noisy and easy to
+  forget. They just throw.
+- The uniform message format `Service :: Element {i} :: ...` points every batch error straight to the
+  item that caused it.
+- Exceptions that are not `HttpException` are re-thrown
+  ([Router.php:67-69](../src/Router.php#L67-L69)). Real bugs surface as 500s with a stack trace
+  instead of being masked.
 
-**Convenzione di storage** — motivata dal fatto che WordPress non ha un posto unico per i metadati:
+### 4.4 Authentication: Bearer token + admin UI, no token endpoint
 
-| Tipo di entità | Storage `local_key` | Meta key |
+Auth is a [middleware](../src/Middlewares/Auth.php) that delegates to the
+[Auth service](../src/Services/Auth.php). It compares the request's Bearer token with the one stored
+in `wp_options` (`onpage_auth_token`), in constant time (`hash_equals`).
+
+The token can be generated **only** from the admin page ([UI.php](../src/Views/UI.php)). That page
+requires the `manage_options` capability and is protected by a CSRF nonce.
+
+**Why:**
+
+- **Operational simplicity.** A machine-to-machine client does not do an OAuth handshake. A static
+  Bearer token over HTTPS is the minimum that is sufficient.
+- **No REST attack surface on the secret.** There is no endpoint to read or rotate the token. It is
+  managed only in the admin UI, which reduces risk.
+- **Explicit fail-safe.** Each failure has a distinct, diagnosable status:
+
+  | Situation | Response |
+  |---|---|
+  | Token not configured | `500` (never a silent pass-through) |
+  | Token missing from request | `401` |
+  | Token wrong | `403` |
+
+### 4.5 The batch as contract, idempotency via `local_key`
+
+Every write endpoint accepts a **JSON array** and processes one item at a time. The core of the whole
+design is that writes are **idempotent upserts** keyed by `local_key`.
+
+`local_key` is the external On Page® identifier. It is a positive integer **or a non-empty string**.
+Integers and numeric strings are equivalent, because WordPress meta values are strings anyway.
+
+**Why idempotency:** the sync must be **re-runnable** (retries, partial re-imports, resuming after an
+error) without creating duplicates. `local_key` decouples the On Page® identity from the WordPress ID.
+The caller does not know the WordPress ID, and it is not stable across environments (e.g.
+dev/staging/production).
+
+**Storage convention.** WordPress has no single place for metadata, so the storage depends on the
+entity type:
+
+| Entity type | `local_key` storage | Meta key |
 |---|---|---|
 | Post / CPT | `wp_postmeta` | `onpage_local_key` |
-| Prodotti e varianti WooCommerce | `wp_postmeta` | `onpage_local_key` |
-| Termini, categorie, tag, brand, attribute-terms | `wp_termmeta` | `onpage_local_key` |
-| Attributi globali WooCommerce | `wp_options` | `onpage_wc_attribute_local_key_{id}` |
+| WooCommerce products and variations | `wp_postmeta` | `onpage_local_key` |
+| Terms, categories, tags, brands, attribute terms | `wp_termmeta` | `onpage_local_key` |
+| WooCommerce global attributes | `wp_options` | `onpage_wc_attribute_local_key_{id}` |
 
-Il `local_key` è memorizzato come **meta tecnica**, non come campo ACF: la persistenza deve
-funzionare anche quando il field group non definisce alcun campo dedicato. Le prime versioni
-scrivevano la chiave dei post tramite un campo ACF implicito (meta `local_key` / `_local_key`):
-quel campo è stato rimosso e `POST /migration` allinea gli installati esistenti (vedi
-[DEV.md](wp-content/plugins/wordpress-plugin/docs/DEV.md) per il dettaglio della mappa).
+`local_key` is stored as **technical meta**, not as an ACF field. Persistence must work even when the
+field group defines no dedicated field.
 
-**Trade-off accettato — stato parziale.** In caso di errore su un elemento, la `HttpException`
-interrompe il batch e gli elementi già scritti **restano**. È una scelta consapevole: senza
-transazioni SQL cross-API (WooCommerce/ACF/WPML scrivono su tabelle diverse con i loro hook), un
-rollback vero non è realistico. L'idempotenza è ciò che rende accettabile lo stato parziale: basta
-rilanciare il batch.
+Earlier on, the post key was written through an implicit ACF field (meta `local_key` /
+`_local_key`). That field has been removed. `POST /migration` brings existing installs in line; see
+[DEV.md](DEV.md) for the full mapping.
 
-### 4.6 Modello `shared` / `translated` per WPML
+**Accepted trade-off: partial state.** If an item fails, the `HttpException` stops the batch. Items
+already written **stay written**. This is deliberate:
 
-WPML è trattato come una **dimensione trasversale**, non come un percorso di codice separato. Ogni
-valore traducibile (`name`, `title`, `content`, `slug`, valori ACF, …) può arrivare come scalare
-(condiviso) o come mappa `{ "<lang>": <value> }`. I Service **splittano** il payload in due bucket —
-`shared` (valido per tutte le lingue) e `translated` (override per lingua) — e poi risolvono il
-valore finale per ciascuna lingua con una catena di fallback.
+- There are no SQL transactions across APIs. WooCommerce, ACF and WPML write to different tables
+  through their own hooks, so a real rollback is not realistic.
+- Idempotency makes partial state acceptable: just re-send the batch.
 
-**Perché:**
-- **Un solo modello mentale con o senza WPML.** Senza WPML la lista lingue è vuota e il ramo
-  "translated" semplicemente non si attiva: nessun `if (wpml) { ... } else { ... }` duplicato.
-- **Fallire esplicitamente.** Se il payload è multilingua ma WPML non è attivo → `500 wpml_required`.
-  Il plugin non tenta un degrado silenzioso che produrrebbe dati ambigui.
-- **Regole di dominio isolate.** Vincoli come "lo SKU WooCommerce è globalmente univoco → si applica
-  solo alla lingua sorgente, non alle traduzioni" (vedi
-  [DEV.md](wp-content/plugins/wordpress-plugin/docs/DEV.md)) vivono nei Service, dietro il modello
-  shared/translated.
+### 4.6 The `shared` / `translated` model for WPML
 
-Le helper WPML ([helpers.php:75-155](wp-content/plugins/wordpress-plugin/src/helpers.php#L75-L155))
-sono **memoizzate per richiesta**: `isWpmlActive`, `getWpmlDefaultLanguage`, `getWpmlLanguages`
-vengono interrogate decine di volte per elemento e il set di lingue è invariante durante un import.
-È la memoizzazione più economica e ad alto impatto (vedi
-[Tech.md](wp-content/plugins/wordpress-plugin/docs/Tech.md) §4.5).
+WPML is treated as a **cross-cutting dimension**, not as a separate code path.
 
-### 4.7 WooCommerce come specializzazione dei primitivi WordPress
+Every translatable value (`name`, `title`, `content`, `slug`, ACF values, …) can arrive either as:
 
-I Service WooCommerce non reimplementano da zero: **categorie, tag, brand e attribute-terms sono
-termini** e riusano `WooCommerce\Term::save` (a sua volta sopra il `TermService` generico); i
-**prodotti sono post** con in più i CRUD object di WooCommerce (`WC_Product`, `WC_Product_Variation`)
-per prezzi, SKU, attributi, downloads.
+- a scalar — shared across languages; or
+- a map `{ "<lang>": <value> }` — per-language values.
 
-**Perché:** massimizza il riuso della logica di upsert/WPML/ACF già scritta per i termini e i post
-generici, e mantiene coerente la semantica di `local_key` tra mondo "core" e mondo "commerce". Le
-specificità WooCommerce (sync varianti, lookup table, sideload downloads) sono aggiunte *sopra*, non
-sostituzioni.
+Services **split** the payload into two buckets:
 
-### 4.8 ACF centralizzato: un solo punto di scrittura dei campi
+- `shared` — valid for all languages;
+- `translated` — per-language overrides.
 
-Tutta la scrittura dei campi ACF passa da `Acf::updateFieldValue`, condiviso da post, prodotti,
-varianti e termini. Gestisce in un punto solo: skip dei `tab`, conversione URL → `attachment_id` per
-`image`/`file`, normalizzazione ricorsiva di `repeater`/`group`, e la mappa lingua per campo.
+They then resolve the final value for each language through a fallback chain.
 
-**Perché:** la logica ACF è sottile ma piena di casi particolari; averla in un unico posto garantisce
-che tutti gli endpoint si comportino **identicamente** su repeater, immagini e mappe lingua, e che una
-correzione valga ovunque. La field-type map è caricata **una volta per richiesta** dal Controller
-(`Acf::loadFieldTypeMap`), non per campo.
+**Why:**
 
-### 4.9 Media remoti isolati in `RemoteMedia`
+- **One mental model, with or without WPML.** Without WPML, the language list is empty and the
+  "translated" branch simply never runs. There are no duplicated `if (wpml) { ... } else { ... }`
+  blocks.
+- **Fail explicitly.** If the payload is multilingual but WPML is not active, the response is
+  `500 wpml_required`. The plugin does not silently degrade, which would produce ambiguous data.
+- **Domain rules stay isolated.** Rules such as "a WooCommerce SKU is globally unique, so it applies
+  only to the source language, not to translations" (see [DEV.md](DEV.md)) live in the Services,
+  behind the shared/translated model.
 
-L'import di media (immagini prodotto/variante, `image`/`file` ACF, download, thumbnail di
-categoria/brand) è concentrato in `RemoteMedia`, che scarica, deduplica per URL sorgente
-(`findAttachmentBySourceUrl`) e crea l'attachment.
+The WPML helpers ([helpers.php:75-155](../src/helpers.php#L75-L155)) are **memoized per request**.
+`isWpmlActive`, `getWpmlDefaultLanguage` and `getWpmlLanguages` are called dozens of times per item,
+and the set of languages does not change during an import. This is the cheapest, highest-impact
+memoization in the plugin (see the WPML memoization notes in [Tech.md](Tech.md)).
 
-**Perché:** l'I/O di rete è la parte più fragile e costosa dell'import. Isolarlo dietro un solo
-servizio permette di deduplicare i download e lascia aperta la porta a un'evoluzione verso l'import
-**asincrono** (Action Scheduler) senza toccare i Service di dominio — oggi il download è sincrono ed è
-il principale collo di bottiglia noto (vedi [Tech.md](wp-content/plugins/wordpress-plugin/docs/Tech.md) §4.4).
+### 4.7 WooCommerce as a specialization of WordPress primitives
 
-### 4.10 Repository per i lookup critici
+The WooCommerce Services do not start from scratch:
 
-I lookup per `local_key` sui termini usano query `$wpdb` dirette
-(`TermRepository`/`PostRepository`) invece di `get_terms(meta_query)` / `get_posts(meta_query)`.
+- **Categories, tags, brands and attribute terms are terms.** They reuse `WooCommerce\Term::save`,
+  which is itself built on the generic `TermService`.
+- **Products are posts**, plus WooCommerce CRUD objects (`WC_Product`, `WC_Product_Variation`) for
+  prices, SKUs, attributes and downloads.
 
-**Perché:** durante un import ogni scrittura invalida le cache di `WP_Query`, e i filtri WPML su
-`WP_Query` sono costosi quando ripetuti migliaia di volte. Una query preparata diretta salta quel
-percorso ed è invariante per lingua (il `local_key` è lo stesso in tutte le lingue). È un'ottimizzazione
-mirata dove il profiling ha indicato il costo, non un bypass generalizzato di WordPress.
+**Why:** this maximizes reuse of the upsert/WPML/ACF logic already written for generic terms and
+posts. It also keeps `local_key` semantics consistent between the "core" and "commerce" sides.
+WooCommerce-specific features (variation sync, lookup tables, download sideloading) are layered *on
+top*; they do not replace anything.
 
-### 4.11 Bootstrap con include manuali + `Env` leggero
+### 4.8 Centralized ACF: a single write path for fields
 
-[onpage.php](wp-content/plugins/wordpress-plugin/onpage.php) include i file in **ordine di dipendenza
-esplicito**, senza autoloader. [Env](wp-content/plugins/wordpress-plugin/src/Env.php) legge un `.env`
-opzionale (singleton) per la configurazione locale.
+All ACF field writes go through `Acf::updateFieldValue`, shared by posts, products, variations and
+terms. In one place it handles:
 
-**Perché:** senza Composer non c'è autoload PSR-4; l'ordine di include manuale è verboso ma azzera la
-dipendenza da tooling di build e rende il grafo delle dipendenze **leggibile in un file**. Coerente
-con il vincolo "zero dipendenze esterne" del §2.
+- skipping `tab` fields;
+- converting URLs to `attachment_id` for `image`/`file` fields;
+- recursive normalization of `repeater`/`group` fields;
+- the per-field language map.
 
----
+**Why:** ACF logic is subtle and full of edge cases. Keeping it in one place guarantees that every
+endpoint behaves **identically** on repeaters, images and language maps, and that a fix applies
+everywhere. The Controller loads the field-type map **once per request** (`Acf::loadFieldTypeMap`),
+not once per field.
 
-## 5. Ciclo di vita di una richiesta (esempio: `POST /woocommerce/products`)
+### 4.9 Remote media isolated in `RemoteMedia`
 
-1. WordPress invoca la rotta registrata da `Router::resolve()` su `rest_api_init`.
-2. `permission_callback` → `AuthMiddleware::handle` → `Auth::check` valida il Bearer token.
-3. `callback` → `Router::dispatch` istanzia il `ProductController` e chiama `save`.
-4. Il Controller carica la ACF field-type map una volta, poi itera l'array JSON.
-5. Per ogni elemento chiama `Product::save`, che:
-   - normalizza il payload, splitta shared/translated, risolve le lingue WPML;
-   - risolve l'esistente via `local_key` → decide insert o update (upsert);
-   - persiste il `WC_Product`, i campi ACF, i termini (categorie/tag/brand), i media remoti;
-   - propaga alle traduzioni WPML applicando le regole di dominio (es. SKU solo sulla sorgente).
-6. Un errore su un elemento → `HttpException` → `Router::dispatch` la converte in `WP_Error`; il batch
-   si ferma, gli elementi precedenti restano scritti.
-7. Successo → array di ID → `WP_REST_Response` 200.
+All media import goes through `RemoteMedia`: product/variation images, ACF `image`/`file` fields,
+downloads, category/brand thumbnails. The service downloads the file, deduplicates by source URL
+(`findAttachmentBySourceUrl`) and creates the attachment.
 
----
+**Why:** network I/O is the most fragile and expensive part of an import. Isolating it behind one
+service:
 
-## 6. Invarianti e convenzioni trasversali
+- makes download deduplication possible;
+- leaves room to move to **asynchronous** import (Action Scheduler) without touching the domain
+  Services.
 
-Sono le regole che rendono il sistema prevedibile; violarle è quasi sempre un bug:
+Downloads are currently synchronous and are the main known bottleneck (see the media download notes
+in [Tech.md](Tech.md)).
 
-- **Direzione delle dipendenze:** Controller → Service → Repository/piattaforma. Mai risalire.
-- **Un solo punto per ogni cross-cutting concern:** auth nel middleware, errori nel dispatch, scrittura
-  ACF in `Acf::updateFieldValue`, media in `RemoteMedia`, lingue nelle helper WPML memoizzate.
-- **Forma uniforme degli endpoint di scrittura:** body = array, upsert per `local_key`, errore con
-  prefisso `Service :: Element {i}`, risposta = array di ID.
-- **`local_key` come chiave di riconciliazione**, salvato come meta tecnica; l'ID WordPress non è mai
-  richiesto al chiamante come identità primaria.
-- **WPML trasparente:** stesso codice con/senza WPML; payload multilingua senza WPML → errore, mai
-  degrado silenzioso.
+### 4.10 Repositories for critical lookups
+
+`local_key` lookups use direct `$wpdb` queries (`TermRepository`/`PostRepository`) instead of
+`get_terms(meta_query)` / `get_posts(meta_query)`.
+
+**Why:**
+
+- During an import, every write invalidates the `WP_Query` caches.
+- WPML's filters on `WP_Query` are expensive when repeated thousands of times.
+- A direct prepared query skips that path and is language-independent (`local_key` is the same in
+  every language).
+
+This is a targeted optimization where profiling showed the cost. It is not a general bypass of
+WordPress.
+
+### 4.11 Bootstrap with manual includes + lightweight `Env`
+
+[onpage.php](../onpage.php) includes files in an **explicit dependency order**, with no autoloader.
+[Env](../src/Env.php) is a singleton that reads an optional `.env` file for local configuration.
+
+**Why:** without Composer there is no PSR-4 autoloading. Manual include order is verbose, but it
+removes any dependency on build tooling and makes the dependency graph **readable in one file**. This
+follows from the "no external dependencies" constraint in section 2.
 
 ---
 
-## 7. Trade-off accettati e non-goal
+## 5. Request lifecycle (example: `POST /woocommerce/products`)
 
-Scelte deliberate, con il loro razionale:
-
-- **Nessuna transazione / stato parziale su errore.** Non fattibile in modo affidabile across
-  WooCommerce/ACF/WPML; mitigato dall'idempotenza (§4.5). *Non-goal:* atomicità del batch.
-- **I/O media sincrono.** Semplice e con contratto chiaro (la risposta contiene già gli
-  `attachment_id`), ma è il collo di bottiglia dominante negli import ricchi. L'isolamento in
-  `RemoteMedia` (§4.9) tiene aperta l'evoluzione asincrona. *Non-goal, per ora:* import in background.
-- **Router minimale.** Nessuna feature di routing avanzata: si aggiunge solo ciò che serve.
-- **Nessun ORM / nessuna astrazione DB generica.** Si usano le API di WordPress; le query dirette
-  compaiono solo nei Repository dei lookup critici (§4.10).
-- **Validazione imperativa, non schema dichiarativo.** La validazione è sparsa nei Service come catene
-  di controlli; è ripetitiva e ricammina il payload più volte (vedi
-  [Tech.md](wp-content/plugins/wordpress-plugin/docs/Tech.md) §6). Un DTO normalizzato single-pass è il
-  candidato refactor più naturale se il costo di validazione diventasse dominante.
+1. WordPress invokes the route registered by `Router::resolve()` on `rest_api_init`.
+2. `permission_callback` → `AuthMiddleware::handle` → `Auth::check` validates the Bearer token.
+3. `callback` → `Router::dispatch` instantiates `ProductController` and calls `save`.
+4. The Controller loads the ACF field-type map once, then iterates over the JSON array.
+5. For each item it calls `Product::save`, which:
+   - normalizes the payload, splits shared/translated values and resolves WPML languages;
+   - looks up the existing entity by `local_key` and decides between insert and update (upsert);
+   - persists the `WC_Product`, ACF fields, terms (categories/tags/brands) and remote media;
+   - propagates to WPML translations, applying domain rules (e.g. SKU only on the source language).
+6. On an item error: `HttpException` → `Router::dispatch` converts it to `WP_Error`. The batch stops;
+   earlier items stay written.
+7. On success: array of IDs → `WP_REST_Response` 200.
 
 ---
 
-## 8. Riepilogo
+## 6. Invariants and cross-cutting conventions
 
-L'architettura è una **stratificazione a responsabilità crescenti** (Router → Middleware → Controller →
-Service → Repository), progettata attorno a un unico obiettivo: offrire un **contratto REST batch,
-idempotente e multilingua** verso una piattaforma — WordPress + ACF + WooCommerce + WPML — che di suo
-non è pensata per sincronizzazioni machine-to-machine.
+These rules make the system predictable. Breaking one is almost always a bug.
 
-Le decisioni ricorrenti seguono tutte lo stesso principio: **concentrare ogni preoccupazione in un
-punto solo** (auth, errori, ACF, media, lingue) e **disaccoppiare l'identità esterna (`local_key`)
-dall'identità WordPress**, così che la sync sia ripetibile e la complessità delle integrazioni resti
-confinata nello strato Service. I trade-off aperti (stato parziale, I/O sincrono) sono scelte
-consapevoli, isolate dietro confini che ne permettono l'evoluzione senza riscrivere il dominio.
+- **Dependency direction:** Controller → Service → Repository/platform. Never upwards.
+- **One place per cross-cutting concern:**
+
+  | Concern | Where |
+  |---|---|
+  | Auth | Middleware |
+  | Errors | `Router::dispatch` |
+  | ACF writes | `Acf::updateFieldValue` |
+  | Media | `RemoteMedia` |
+  | Languages | Memoized WPML helpers |
+
+- **Uniform write endpoints:** body is an array, upsert by `local_key`, errors prefixed with
+  `Service :: Element {i}`, response is an array of IDs.
+- **`local_key` is the reconciliation key.** It is stored as technical meta. The caller is never asked
+  for a WordPress ID as primary identity.
+- **Transparent WPML:** the same code runs with and without WPML. A multilingual payload without WPML
+  is an error, never a silent degradation.
+
+---
+
+## 7. Accepted trade-offs and non-goals
+
+Deliberate choices and their rationale:
+
+- **No transactions; partial state on error.** Transactions cannot be done reliably across
+  WooCommerce/ACF/WPML. Idempotency mitigates this (section 4.5). *Non-goal:* batch atomicity.
+- **Synchronous media I/O.** It is simple and gives a clear contract (the response already contains
+  the `attachment_id`s). It is also the dominant bottleneck in media-heavy imports. Isolating it in
+  `RemoteMedia` (section 4.9) keeps an async path open. *Non-goal for now:* background import.
+- **Minimal router.** No advanced routing features; only what is needed is added.
+- **No ORM, no generic DB abstraction.** The plugin uses WordPress APIs. Direct queries appear only in
+  the Repositories for critical lookups (section 4.10).
+- **Imperative validation, not a declarative schema.** Validation is spread across the Services as
+  chains of checks. It is repetitive and walks the payload several times (see the validation notes in
+  [Tech.md](Tech.md)). A normalized, single-pass DTO is the most natural refactor if validation cost
+  ever becomes dominant.
+
+---
+
+## 8. Summary
+
+The architecture is a **layered design** (Router → Middleware → Controller → Service → Repository)
+built around one goal: a **batch, idempotent, multilingual REST contract** on top of a platform —
+WordPress + ACF + WooCommerce + WPML — that was not designed for machine-to-machine sync.
+
+The recurring decisions follow two principles:
+
+- **Keep each concern in one place** (auth, errors, ACF, media, languages).
+- **Decouple the external identity (`local_key`) from the WordPress identity**, so the sync is
+  repeatable and integration complexity stays inside the Service layer.
+
+The open trade-offs (partial state, synchronous I/O) are deliberate. Each sits behind a boundary that
+allows it to evolve without rewriting the domain.
