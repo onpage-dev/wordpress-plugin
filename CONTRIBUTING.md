@@ -71,11 +71,11 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `FieldGroupMalformedFields.php` | offline | nothing: no site, no `.env` |
 | `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
-| `WooCommerceCatalog.php` | end-to-end | a site with ACF and WooCommerce |
+| `WooCommerceCatalog.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` and `it` active |
 
 - **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
-- **End-to-end tests** call the REST API of a real WordPress site with the plugin active. None of
-  them needs WPML.
+- **End-to-end tests** call the REST API of a real WordPress site with the plugin active. Only
+  `WooCommerceCatalog.php` needs WPML.
 
 ### Running them
 
@@ -153,11 +153,15 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   - it publishes data into them: a brand, a parent and a child category, a tag, the attribute's
     values, a custom-taxonomy term, a simple product, a variable product and its variations, each
     with its own ACF values;
-  - it reads everything back through the `GET` endpoints and finally deletes it all.
+  - the data is multilingual: names, descriptions, ACF values and attributes are sent as WPML
+    language maps for `en` and `it`, while prices, stock and taxonomy references are shared;
+  - it reads every translation back through the `GET` endpoints, checks each one against the value
+    of its language, and finally deletes it all.
 
   The data is made up in the file. Unlike the equivalent test in the separate
   `connector-wordpress` repository, nothing is read from On Page®, so the test runs against a bare
-  WordPress install.
+  WordPress install with ACF, WooCommerce and WPML. The languages are set in the `LANGUAGES`
+  constant of the test.
 - **`AcfSharedStructuredFields.php`** checks that structured ACF values sent as shared on
   `POST /posts` (a repeater, a group, a multi-checkbox) survive the round trip.
 - **`DuplicateTitleDistinctLocalKeys.php`** checks that two different On Page® elements with the
