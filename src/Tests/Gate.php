@@ -1,0 +1,505 @@
+<?php
+
+
+
+namespace OnPage\Tests;
+
+
+
+use OnPage\Env;
+use OnPage\Tests\Support\Audit;
+
+
+
+require_once dirname(__DIR__) . '/Env.php';
+require_once __DIR__ . '/Support/Audit.php';
+
+
+
+/**
+ * Gate of the suite: wipes every WooCommerce entity from the test site before any test runs.
+ *
+ * `bin/test-launcher` runs it first, whatever filter it was given, and stops the whole run
+ * when it fails: a test started on a catalogue that could not be emptied would only report
+ * collisions with data it never created.
+ *
+ * It removes **everything**, not only what the tests create:
+ *
+ *   1. products and variations, of any status, trash included;
+ *   2. global attributes, and with them the terms of their `pa_*` taxonomies;
+ *   3. every term of `product_tag`, `product_brand` and `product_cat`.
+ *
+ * The only survivor is WooCommerce's default product category (`Uncategorized`), which
+ * WordPress refuses to delete: it is reported and left in place.
+ *
+ * Everything goes through the On Page® REST API, because the WooCommerce `DELETE`
+ * endpoints only accept `local_key`s and a manually created element has none:
+ *
+ *   - products and variations are listed page by page through `GET /posts?type=`, trash
+ *     included, and deleted by ID through `DELETE /posts`, translations included;
+ *   - attributes without a `local_key` get a temporary one (`POST /woocommerce/attributes`
+ *     with `id`), so that `DELETE /woocommerce/attributes` can reach them;
+ *   - terms are deleted by ID through `DELETE /terms`, translations included.
+ *
+ * Every delete goes in small batches. The test site sits behind a proxy that cuts any
+ * request after 60 seconds (`504`), and one call for a whole catalogue never finishes in
+ * time. A batch cut off anyway is not fatal: PHP usually finishes it behind the proxy,
+ * and the next pass lists again whatever is left.
+ *
+ * After the wipe every listing is read again: anything still there fails the gate.
+ *
+ * Configuration comes from the plugin `.env` (see `.env.example`):
+ *
+ *   WP_TEST_URL     base URL of the test WordPress site, e.g. http://localhost:8040
+ *   WP_TEST_TOKEN   Bearer token, the same value stored in the `onpage_auth_token` option
+ *
+ * Destructive by design: point it at a test site, never at production.
+ *
+ * Run with: php src/Tests/Gate.php
+ */
+class Gate
+{
+    /** Post types to empty; variations first, so no parent is deleted under them. */
+    private const POST_TYPES = ['product_variation', 'product'];
+
+    /** `?status=` values that together cover every post: `any` leaves the trash out. */
+    private const POST_STATUSES = ['any', 'trashed'];
+
+    /** Posts per `DELETE /posts` call: a product with variations and translations is slow to delete. */
+    private const POST_BATCH = 10;
+
+    /** Terms per `DELETE /terms` call. */
+    private const TERM_BATCH = 50;
+
+    /** Listing-and-delete passes on posts before the leftovers are left to verify(). */
+    private const POST_PASSES = 3;
+
+    /** Term taxonomies emptied through `DELETE /terms`; `product_cat` last, see wipeCategories(). */
+    private const FLAT_TAXONOMIES = ['product_tag', 'product_brand'];
+
+    /** Prefix of the temporary `local_key` given to attributes that have none. */
+    private const ATTRIBUTE_KEY_PREFIX = 'onpage-gate-attribute-';
+
+    private string $base_url;
+    private string $token;
+
+    /** @var list<int> `product_cat` terms WordPress refused to delete (the default category). */
+    private array $kept_categories = [];
+
+    /** @var list<string> Problems found during the run. */
+    private array $failures = [];
+
+
+
+    private function __construct(string $base_url, string $token)
+    {
+        $this->base_url = rtrim($base_url, '/');
+        $this->token = $token;
+    }
+
+
+
+    // ------------------------------------------------------------------ transport
+
+    /**
+     * Performs one authenticated REST call against the test site, mirrored in the audit log.
+     *
+     * @return array{status: int, body: mixed} Decoded response, `body` null when not JSON.
+     */
+    private function request(string $method, string $path, mixed $body = null, string $query = ''): array
+    {
+        $url = $this->base_url . '/wp-json/onpage/v1' . $path . ($query === '' ? '' : '?' . $query);
+
+        $handle = curl_init($url);
+        $headers = ['Authorization: Bearer ' . $this->token, 'Accept: application/json'];
+        $payload = $body === null
+            ? null
+            : (string) json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        curl_setopt($handle, CURLOPT_CUSTOMREQUEST, $method);
+        curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
+        // Deleting a whole catalogue in one call can take a while on a large test site.
+        curl_setopt($handle, CURLOPT_TIMEOUT, 600);
+
+        if ($payload !== null) {
+            $headers[] = 'Content-Type: application/json';
+            curl_setopt($handle, CURLOPT_POSTFIELDS, $payload);
+        }
+
+        curl_setopt($handle, CURLOPT_HTTPHEADER, $headers);
+
+        Audit::request($method, $url, $payload);
+
+        $started = microtime(true);
+        $response = curl_exec($handle);
+        $elapsed = microtime(true) - $started;
+        $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+        $error = curl_error($handle);
+        curl_close($handle);
+
+        if ($response === false) {
+            Audit::failure($error, $elapsed);
+
+            throw new \RuntimeException("$method $url unreachable: $error");
+        }
+
+        Audit::response($status, (string) $response, $elapsed);
+
+        return ['status' => $status, 'body' => json_decode((string) $response, true)];
+    }
+
+    /**
+     * Performs a call that must answer `200`.
+     *
+     * @throws \RuntimeException When the endpoint answers anything but `200`.
+     */
+    private function requireOk(string $method, string $path, mixed $body = null, string $query = ''): mixed
+    {
+        $response = $this->request($method, $path, $body, $query);
+        if ($response['status'] !== 200) {
+            throw new \RuntimeException(
+                "$method $path answered {$response['status']}: "
+                . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            );
+        }
+
+        return $response['body'];
+    }
+
+    /** Performs a `GET` that must answer `200` with a JSON list. */
+    private function requireList(string $path, string $query = ''): array
+    {
+        $body = $this->requireOk('GET', $path, null, $query);
+        if (!is_array($body) || !array_is_list($body)) {
+            throw new \RuntimeException("GET $path did not answer with a list");
+        }
+
+        return $body;
+    }
+
+    /**
+     * Lists every term of a taxonomy, or null when the taxonomy is not registered.
+     *
+     * `product_brand` only exists on WooCommerce versions that ship brands, so its absence
+     * means there is nothing to wipe, not that the site is broken.
+     */
+    private function listTerms(string $taxonomy): ?array
+    {
+        $response = $this->request('GET', '/terms', null, 'taxonomy=' . rawurlencode($taxonomy));
+        if ($response['status'] === 404) {
+            return null;
+        }
+
+        if ($response['status'] !== 200 || !is_array($response['body'])) {
+            throw new \RuntimeException(
+                "GET /terms?taxonomy=$taxonomy answered {$response['status']}: "
+                . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            );
+        }
+
+        return $response['body'];
+    }
+
+    /**
+     * IDs of every post of a type, in any status, trash included.
+     *
+     * `GET /posts` is paginated at 100 items at most; a short page is the last one.
+     *
+     * @return list<int>
+     */
+    private function listPostIds(string $post_type): array
+    {
+        $items = [];
+        foreach (self::POST_STATUSES as $status) {
+            for ($page = 1; ; $page++) {
+                $query = 'type=' . rawurlencode($post_type) . "&status=$status&per_page=100&page=$page";
+                $batch = $this->requireList('/posts', $query);
+                array_push($items, ...$batch);
+
+                if (count($batch) < 100) break;
+            }
+        }
+
+        return self::idsWithTranslations($items);
+    }
+
+    /**
+     * IDs of every listed element and of all its WPML translations.
+     *
+     * The listings return one object per translation group, so without the `translations`
+     * map the other languages would survive the wipe.
+     *
+     * @return list<int>
+     */
+    private static function idsWithTranslations(array $items): array
+    {
+        $ids = [];
+        foreach ($items as $item) {
+            $ids[] = (int) ($item['id'] ?? 0);
+            foreach ((array) ($item['translations'] ?? []) as $translation_id) {
+                $ids[] = (int) $translation_id;
+            }
+        }
+
+        return array_values(array_unique(array_filter($ids, static fn(int $id): bool => $id > 0)));
+    }
+
+
+
+    // ---------------------------------------------------------------------- wipe
+
+    /** Checks the site is reachable, the token valid and WooCommerce active. */
+    private function preflight(): void
+    {
+        $response = $this->request('GET', '/post-types');
+        if ($response['status'] !== 200) {
+            throw new \RuntimeException(
+                "the site answered {$response['status']} on GET /post-types: "
+                . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                . ' (wrong WP_TEST_URL or WP_TEST_TOKEN?)'
+            );
+        }
+
+        $response = $this->request('GET', '/woocommerce/attributes');
+        if ($response['status'] === 500) {
+            throw new \RuntimeException(
+                'the site answered 500 on GET /woocommerce/attributes: '
+                . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                . ' (WooCommerce not active on the test site?)'
+            );
+        }
+    }
+
+    /**
+     * Deletes every product and variation, a few IDs per call.
+     *
+     * A `504` from the proxy only ends the pass early: the next one lists again what is
+     * left. Deleting a product also deletes its variations, hence `?ignore=1`.
+     */
+    private function wipeProducts(): void
+    {
+        $deleted = 0;
+        for ($pass = 1; $pass <= self::POST_PASSES; $pass++) {
+            $ids = [];
+            foreach (self::POST_TYPES as $post_type) {
+                array_push($ids, ...$this->listPostIds($post_type));
+            }
+
+            if ($ids === []) break;
+
+            foreach (array_chunk($ids, self::POST_BATCH) as $batch) {
+                $response = $this->request('DELETE', '/posts', $batch, 'ignore=1');
+                if ($response['status'] === 504) {
+                    echo "  products   pass $pass cut off by the proxy (504), listing again\n";
+
+                    continue 2;
+                }
+
+                if ($response['status'] !== 200) {
+                    throw new \RuntimeException(
+                        "DELETE /posts answered {$response['status']}: "
+                        . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    );
+                }
+
+                $deleted += count($batch);
+            }
+        }
+
+        echo "  products   $deleted products and variations removed\n";
+    }
+
+    /**
+     * Deletes every global attribute, and with it the terms of its `pa_*` taxonomy.
+     *
+     * `DELETE /woocommerce/attributes` only takes `local_key`s: an attribute created by
+     * hand gets a temporary one first, through the explicit-`id` upsert.
+     */
+    private function wipeAttributes(): void
+    {
+        $attributes = $this->requireList('/woocommerce/attributes');
+        if ($attributes === []) {
+            echo "  attributes no attributes to remove\n";
+
+            return;
+        }
+
+        $local_keys = [];
+        $to_key = [];
+        foreach ($attributes as $attribute) {
+            $local_key = $attribute['local_key'] ?? null;
+            if ($local_key !== null) {
+                $local_keys[] = $local_key;
+
+                continue;
+            }
+
+            $local_key = self::ATTRIBUTE_KEY_PREFIX . (int) $attribute['id'];
+            $to_key[] = ['id' => (int) $attribute['id'], 'local_key' => $local_key];
+            $local_keys[] = $local_key;
+        }
+
+        if ($to_key !== []) {
+            $this->requireOk('POST', '/woocommerce/attributes', $to_key);
+        }
+
+        // One attribute per call: deleting one also deletes every term of its taxonomy.
+        foreach (array_values(array_unique($local_keys)) as $local_key) {
+            $this->requireOk('DELETE', '/woocommerce/attributes', [$local_key], 'ignore=1');
+        }
+
+        echo '  attributes ' . count($attributes) . " attribute(s) removed with their terms\n";
+    }
+
+    /** Deletes every term of the taxonomies that need no special handling. */
+    private function wipeFlatTaxonomies(): void
+    {
+        foreach (self::FLAT_TAXONOMIES as $taxonomy) {
+            $terms = $this->listTerms($taxonomy);
+            if ($terms === null) {
+                echo "  $taxonomy  taxonomy not registered, skipped\n";
+
+                continue;
+            }
+
+            $ids = self::idsWithTranslations($terms);
+            foreach (array_chunk($ids, self::TERM_BATCH) as $batch) {
+                $this->requireOk('DELETE', '/terms', $batch, 'taxonomy=' . rawurlencode($taxonomy) . '&ignore=1');
+            }
+
+            echo "  $taxonomy  " . count($ids) . " term(s) removed\n";
+        }
+    }
+
+    /**
+     * Deletes every product category except the default one.
+     *
+     * WordPress refuses to delete the default category and `DELETE /terms` stops at the
+     * first failure, so categories go one call each: a `500 delete_failed` is recorded as
+     * kept and the wipe moves on. verify() then checks that only those survived.
+     */
+    private function wipeCategories(): void
+    {
+        $terms = $this->listTerms('product_cat') ?? [];
+        $ids = self::idsWithTranslations($terms);
+
+        foreach ($ids as $id) {
+            $response = $this->request('DELETE', '/terms', [$id], 'taxonomy=product_cat&ignore=1');
+            if ($response['status'] === 200) {
+                continue;
+            }
+
+            if ($response['status'] === 500 && ($response['body']['code'] ?? null) === 'delete_failed') {
+                $this->kept_categories[] = $id;
+
+                continue;
+            }
+
+            throw new \RuntimeException(
+                "DELETE /terms [$id] answered {$response['status']}: "
+                . json_encode($response['body'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            );
+        }
+
+        $deleted = count($ids) - count($this->kept_categories);
+        $kept = $this->kept_categories === [] ? '' : ', kept ' . implode(', ', $this->kept_categories) . ' (default)';
+        echo "  product_cat  $deleted category(ies) removed$kept\n";
+    }
+
+    /** Reads every listing again and records whatever survived the wipe. */
+    private function verify(): void
+    {
+        $as_items = static fn(array $ids): array => array_map(static fn(int $id): array => ['id' => $id], $ids);
+
+        $leftovers = [
+            'variations' => $as_items($this->listPostIds('product_variation')),
+            'products' => $as_items($this->listPostIds('product')),
+            'attributes' => $this->requireList('/woocommerce/attributes'),
+        ];
+
+        foreach (self::FLAT_TAXONOMIES as $taxonomy) {
+            $leftovers[$taxonomy] = $this->listTerms($taxonomy) ?? [];
+        }
+
+        $leftovers['product_cat'] = array_values(array_filter(
+            $this->listTerms('product_cat') ?? [],
+            fn(array $term): bool => !in_array((int) $term['id'], $this->kept_categories, true)
+        ));
+
+        foreach ($leftovers as $label => $items) {
+            if ($items !== []) {
+                $ids = implode(', ', array_map(static fn(array $item): string => (string) ($item['id'] ?? '?'), $items));
+                $this->failures[] = "$label still present after the wipe: $ids";
+            }
+        }
+    }
+
+    /** Prints the message on stderr and stops the run with a failing exit code. */
+    private static function fatal(string $message): never
+    {
+        fwrite(STDERR, "ERROR: $message\n");
+        exit(1);
+    }
+
+
+
+    // ------------------------------------------------------------------------ run
+
+    /** Builds the gate from `.env`, refusing to start without a target site. */
+    public static function fromEnv(): self
+    {
+        if (!function_exists('curl_init')) {
+            self::fatal("the PHP curl extension is not available");
+        }
+
+        $base_url = Env::get('WP_TEST_URL');
+        $token = Env::get('WP_TEST_TOKEN');
+
+        if (!is_string($base_url) || $base_url === '' || !is_string($token) || $token === '') {
+            self::fatal('WP_TEST_URL and WP_TEST_TOKEN must be set in the .env file (see .env.example)');
+        }
+
+        return new self($base_url, $token);
+    }
+
+    /** Runs the whole wipe and returns the process exit code. */
+    public function run(): int
+    {
+        echo "gate     wiping every WooCommerce entity\n";
+        echo "site     $this->base_url\n";
+
+        try {
+            $this->preflight();
+
+            // Products first: attributes and terms still attached to a product would
+            // otherwise be deleted out from under it, one relationship at a time.
+            $this->wipeProducts();
+            $this->wipeAttributes();
+            $this->wipeFlatTaxonomies();
+            $this->wipeCategories();
+
+            $this->verify();
+        } catch (\RuntimeException $exception) {
+            $this->failures[] = $exception->getMessage();
+        }
+
+        if ($this->failures !== []) {
+            fwrite(STDERR, "\nFAILED: " . count($this->failures) . " problem(s)\n");
+            foreach ($this->failures as $failure) {
+                fwrite(STDERR, "  - $failure\n");
+            }
+
+            return 1;
+        }
+
+        echo "\nPASSED: WooCommerce environment wiped\n";
+
+        return 0;
+    }
+}
+
+
+
+if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
+    exit(Gate::fromEnv()->run());
+}

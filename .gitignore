@@ -1,0 +1,12 @@
+.env
+mysql
+/wp-content/
+
+wp-content/languages/wpml/*
+
+.codex
+.idea/
+/TODO
+dist/
+
+logs/

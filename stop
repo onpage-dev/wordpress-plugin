@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stops the local WordPress stack. Works from any directory.
+set -eu
+cd "$(dirname "$0")"
+docker compose down

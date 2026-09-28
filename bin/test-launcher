@@ -1,0 +1,186 @@
+#!/bin/sh
+# Runs the endpoint tests in src/Tests one at a time and stops at the first failure:
+# the test that breaks is almost always the cause of whatever would break next, and the
+# tests share the same site, so carrying on over a dirty state would only produce
+# follow-on errors.
+#
+#   ./bin/test-launcher              every test
+#   ./bin/test-launcher AcfShared    only the tests whose name contains "AcfShared"
+#
+# Before any test, src/Tests/Gate.php runs, even with a filter: it empties the test site
+# of WooCommerce products, variations, attributes, categories, tags and brands, so every
+# run starts from an empty catalogue. If the gate fails, no test runs.
+#
+# Every run rewrites ./logs/audit.log with the full HTTP conversation: one [req] line
+# and one [res] line per call, grouped by test. The file starts from scratch on every
+# run, so what you read is always the last run and nothing else.
+#
+# The tests read WP_TEST_URL and WP_TEST_TOKEN from the .env file (see .env.example)
+# and create and delete their own data: point them at a test site, never at production.
+# With ONPAGE_TEST_KEEP=1, in .env or in the environment, the tests skip their final
+# cleanup and leave their data on the site; the gate and the initial cleanup still run.
+set -eu
+
+FILTER="${1:-}"
+cd "$(git rev-parse --show-toplevel)"
+
+command -v php >/dev/null 2>&1 || {
+    echo "php is not available in PATH" >&2
+    exit 1
+}
+
+# The gate is not a test like the others: it always runs, first, and ignores the filter.
+GATE=src/Tests/Gate.php
+[ -f "$GATE" ] || {
+    echo "$GATE is missing: it is the gate that cleans the site before the tests" >&2
+    exit 1
+}
+
+# The list is collected before starting, so the total is known from the very first line.
+TESTS=""
+COUNT=0
+for TEST in src/Tests/*.php; do
+    [ -f "$TEST" ] || continue
+    [ "$TEST" = "$GATE" ] && continue
+
+    NAME=$(basename "$TEST" .php)
+    case "$NAME" in
+        *"$FILTER"*) ;;
+        *) continue ;;
+    esac
+
+    TESTS="$TESTS $TEST"
+    COUNT=$((COUNT + 1))
+done
+
+[ "$COUNT" -gt 0 ] || {
+    if [ -n "$FILTER" ]; then
+        echo "no test in src/Tests matches '$FILTER'" >&2
+    else
+        echo "no test in src/Tests" >&2
+    fi
+    exit 1
+}
+
+# The .env is read both by docker compose and by the tests, through src/Env.php, which
+# uses parse_ini_file. The plugin itself never reads it.
+# The two disagree on comments: if a '#' comment contains ( ) " ! & | $ { } [ ] or ~,
+# PHP discards the WHOLE file and every variable reads as empty, with nothing reporting
+# it. Checking it here turns an obscure "token not set" into a clear diagnosis.
+if [ -f .env ]; then
+    php -r 'exit(@parse_ini_file($argv[1], false, INI_SCANNER_RAW) === false ? 1 : 0);' .env 2>/dev/null || {
+        echo "the .env file exists but PHP cannot read it, so the tests would see it as empty." >&2
+        echo "It is usually a comment that contains one of:  ( ) \" ! & | \$ { } [ ] ~" >&2
+        echo "Remove them from the comments and try again. See .env.example." >&2
+        exit 1
+    }
+else
+    echo "warning: the .env file is missing, the tests will not know which site to target. See .env.example"
+fi
+
+# The audit log is written by the tests, which get its path from here. The launcher
+# truncates it once and writes the headers, so each test's calls stay under the name
+# of the test that made them.
+AUDIT_LOG="$PWD/logs/audit.log"
+mkdir -p "$(dirname "$AUDIT_LOG")"
+: > "$AUDIT_LOG"
+export ONPAGE_TEST_AUDIT_LOG="$AUDIT_LOG"
+# PHP uses UTC when date.timezone is not configured: without this, the lines written
+# by the tests and the headers written here would end up in the same file with two
+# different clocks.
+ONPAGE_TEST_TZ=$(date +%z)
+export ONPAGE_TEST_TZ
+
+{
+    echo "=========================================================================="
+    echo "run of $(date '+%Y-%m-%d %H:%M:%S %z')"
+    echo "tests scheduled: $COUNT${FILTER:+, filter '$FILTER'}"
+    echo "=========================================================================="
+} >> "$AUDIT_LOG"
+
+echo "test-launcher :: $COUNT test(s) from src/Tests"
+echo "audit         :: logs/audit.log"
+
+echo
+echo "[gate] Gate"
+echo "--------------------------------------------------------------------------"
+
+{
+    echo
+    echo "===== [gate] Gate ====="
+    echo
+} >> "$AUDIT_LOG"
+
+STARTED=$(date +%s)
+if php "$GATE"; then
+    STATUS=0
+else
+    STATUS=$?
+fi
+ELAPSED=$(($(date +%s) - STARTED))
+
+if [ "$STATUS" -ne 0 ]; then
+    echo "[result] FAILED, exit $STATUS, ${ELAPSED}s" >> "$AUDIT_LOG"
+    echo "[run] stopped at the gate, no test run" >> "$AUDIT_LOG"
+
+    echo "--------------------------------------------------------------------------"
+    echo "RESULT: FAILED (exit $STATUS, ${ELAPSED}s)"
+    echo
+    echo "HTTP call details in logs/audit.log"
+    echo "the gate could not clean the site: no test run" >&2
+    exit "$STATUS"
+fi
+
+echo "[result] passed, ${ELAPSED}s" >> "$AUDIT_LOG"
+
+echo "--------------------------------------------------------------------------"
+echo "RESULT: passed (${ELAPSED}s)"
+
+INDEX=0
+for TEST in $TESTS; do
+    INDEX=$((INDEX + 1))
+    NAME=$(basename "$TEST" .php)
+
+    echo
+    echo "[$INDEX/$COUNT] $NAME"
+    echo "--------------------------------------------------------------------------"
+
+    {
+        echo
+        echo "===== [$INDEX/$COUNT] $NAME ====="
+        echo
+    } >> "$AUDIT_LOG"
+
+    STARTED=$(date +%s)
+    if php "$TEST"; then
+        STATUS=0
+    else
+        STATUS=$?
+    fi
+    ELAPSED=$(($(date +%s) - STARTED))
+
+    if [ "$STATUS" -ne 0 ]; then
+        echo "[result] FAILED, exit $STATUS, ${ELAPSED}s" >> "$AUDIT_LOG"
+        echo "[run] stopped at test $INDEX of $COUNT" >> "$AUDIT_LOG"
+
+        echo "--------------------------------------------------------------------------"
+        echo "RESULT: FAILED (exit $STATUS, ${ELAPSED}s)"
+        echo
+        echo "HTTP call details in logs/audit.log"
+        echo "stopped at the first failing test: $NAME ($INDEX of $COUNT)" >&2
+        exit "$STATUS"
+    fi
+
+    echo "[result] passed, ${ELAPSED}s" >> "$AUDIT_LOG"
+
+    echo "--------------------------------------------------------------------------"
+    echo "RESULT: passed (${ELAPSED}s)"
+done
+
+{
+    echo
+    echo "[run] all tests passed, $COUNT of $COUNT"
+} >> "$AUDIT_LOG"
+
+echo
+echo "all tests passed ($COUNT/$COUNT)"

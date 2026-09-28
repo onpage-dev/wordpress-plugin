@@ -1,0 +1,6 @@
+#!/bin/sh
+# Restarts the local WordPress stack. Works from any directory.
+set -eu
+DIR="$(dirname "$0")"
+"$DIR/stop"
+"$DIR/start"
