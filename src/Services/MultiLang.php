@@ -307,6 +307,41 @@ class MultiLang
         return $resolved;
     }
 
+    /**
+     * True when the value is a language map with no entry for the language.
+     *
+     * On update, such a value leaves that language's stored value alone. Resolving it
+     * through the fallback language would copy another language's text into it:
+     * `{"title": {"en": "Red Chair"}}` would also rename the Italian translation.
+     */
+    public static function isMapWithoutLanguage(mixed $value, ?string $language_code): bool
+    {
+        return $language_code !== null
+            && self::isLanguageMapShape($value)
+            && !array_key_exists($language_code, $value);
+    }
+
+    /** Drops the field values that are language maps with no entry for the language (see isMapWithoutLanguage()). */
+    public static function withoutMapsMissingLanguage(?array $fields, ?string $language_code): ?array
+    {
+        if ($fields === null || $language_code === null) {
+            return $fields;
+        }
+
+        return array_filter(
+            $fields,
+            static fn(mixed $value): bool => !self::isMapWithoutLanguage($value, $language_code)
+        );
+    }
+
+    /** Whether a shared/translated split writes the language: a shared value covers every language, a translated one only its own. */
+    public static function hasValueForLanguage(array $value_map, ?string $language_code): bool
+    {
+        $translated = $value_map['translated'] ?? [];
+
+        return $translated === [] || $language_code === null || array_key_exists($language_code, $translated);
+    }
+
     /** Splits ACF field payloads into shared and per-language field sets (inactive languages dropped). */
     public static function splitAcfFieldsByLanguage(array $fields): array
     {

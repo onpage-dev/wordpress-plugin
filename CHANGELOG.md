@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `POST /posts` and `POST /woocommerce/products` no longer overwrite a language that a language map leaves out on update: `{"title": {"en": "Red Chair"}}` now renames only the English translation instead of every language in the WPML group.
+
 ## [1.0.0] - 2026-09-28
 
 ### Added

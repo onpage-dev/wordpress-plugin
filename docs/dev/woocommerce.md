@@ -46,7 +46,10 @@ When saving, the service (`Product::persistProductFromParams()`), once per langu
 8. Saves the ACF fields and the taxonomies.
 
 If WPML is active, the service then creates or updates the translations, running the same steps in
-each language. On an existing product, current translations are updated. Translations that the
+each language. On an existing product, current translations are updated. An existing language
+skips every language map without its key (`Product::withoutMapsMissingLanguage()`), so its stored
+value stays. For `attributes`, the product's current attribute of that name is kept, because the
+attribute set is replaced as a whole. Translations that the
 payload carries but that are missing from the WPML group are created at this point.
 
 The base product is created in the site's default language. When `name` is a language map that

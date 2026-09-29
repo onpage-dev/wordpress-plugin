@@ -836,6 +836,11 @@ ISO code for Indonesian.
   active languages (default first) and `wpml_active`. A dropped code otherwise looks exactly like a
   missing translation. See [API.md](../API.md#get-languages).
 
+Only language maps create translations. A payload with scalar values only creates a single object.
+To create a translation with the same text, repeat the value: `{"en": "Chair", "it": "Chair"}`.
+Maps in `terms`, `categories` and `tags` only choose the right term for each translation; they
+never create one.
+
 All translations of an object share one `local_key`. Send every language in a single element. The
 plugin then:
 
@@ -845,6 +850,8 @@ plugin then:
   language that has a title instead. No language the payload never sent is created with borrowed
   content;
 - backfills missing languages on update;
+- on update, writes only the languages each map contains. `{"title": {"en": "Red Chair"}}` leaves
+  the Italian title as it is. Shared (non-map) values are written to every language;
 - repairs translation slots left orphaned by a killed import.
 
 ---

@@ -902,7 +902,11 @@ class Post
             'post_status' => $status ?? $post->post_status,
         ];
 
-        if ($context['has_title']) {
+        // A language map without this post's language leaves the field as it is: the
+        // fallback language is only for translations this request creates.
+        $language = $context['current_language'];
+
+        if ($context['has_title'] && MultiLang::hasValueForLanguage($context['title_map'], $language)) {
             $post_data['post_title'] = self::resolveUpdatePostTitle(
                 $context['title_map'],
                 $context['current_language'],
@@ -910,7 +914,7 @@ class Post
             );
         }
 
-        if ($context['has_content']) {
+        if ($context['has_content'] && MultiLang::hasValueForLanguage($context['content_map'], $language)) {
             $post_data['post_content'] = (string) (
                 MultiLang::getValueForLanguage(
                     $context['content_map'],
@@ -920,7 +924,7 @@ class Post
             );
         }
 
-        if ($context['has_description']) {
+        if ($context['has_description'] && MultiLang::hasValueForLanguage($context['description_map'], $language)) {
             $post_data['post_excerpt'] = (string) (
                 MultiLang::getValueForLanguage(
                     $context['description_map'],
@@ -1041,6 +1045,9 @@ class Post
 
         if (!empty($translation_ids)) {
             foreach ($translation_ids as $lang => $translation_id) {
+                // A language the title map leaves out keeps its title, so there is nothing to check.
+                if (!MultiLang::hasValueForLanguage($title_map, (string) $lang)) continue;
+
                 $translated_title = self::resolveUpdatePostTitle(
                     $title_map,
                     (string) $lang,
@@ -1052,6 +1059,10 @@ class Post
                 }
             }
 
+            return;
+        }
+
+        if (!MultiLang::hasValueForLanguage($title_map, $current_language)) {
             return;
         }
 
@@ -1085,7 +1096,8 @@ class Post
             'post_type' => $wp_post_type,
         ];
 
-        if ($has_title) {
+        // Same rule as buildPrimaryUpdateData(): a map without this language leaves the field alone.
+        if ($has_title && MultiLang::hasValueForLanguage($title_map, $lang)) {
             $translated_data['post_title'] = self::resolveUpdatePostTitle(
                 $title_map,
                 $lang,
@@ -1093,7 +1105,7 @@ class Post
             );
         }
 
-        if ($has_content) {
+        if ($has_content && MultiLang::hasValueForLanguage($content_map, $lang)) {
             $translated_data['post_content'] = (string) (
                 MultiLang::getValueForLanguage(
                     $content_map,
@@ -1103,7 +1115,7 @@ class Post
             );
         }
 
-        if ($has_description) {
+        if ($has_description && MultiLang::hasValueForLanguage($description_map, $lang)) {
             $translated_data['post_excerpt'] = (string) (
                 MultiLang::getValueForLanguage(
                     $description_map,
@@ -1180,8 +1192,8 @@ class Post
 
             self::resolveAndSaveUpdatedPostAssociations(
                 $translated_post_id,
-                $acf_fields,
-                $files,
+                MultiLang::withoutMapsMissingLanguage($acf_fields, $lang),
+                MultiLang::withoutMapsMissingLanguage($files, $lang),
                 $terms,
                 $lang,
                 $fallback_language,
@@ -1830,8 +1842,8 @@ class Post
 
         self::resolveAndSaveUpdatedPostAssociations(
             $id,
-            $acf_fields,
-            $files,
+            MultiLang::withoutMapsMissingLanguage($acf_fields, $context['current_language']),
+            MultiLang::withoutMapsMissingLanguage($files, $context['current_language']),
             $terms,
             $context['current_language'],
             $context['languages']['fallback_language'],

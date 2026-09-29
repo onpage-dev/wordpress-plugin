@@ -956,10 +956,12 @@ Rules:
 
 - If `title`, `content`, `description`, `acf_fields`, `files` or `terms` contain multilingual values and WPML is not installed or active, the request returns `500 wpml_required`.
 - On insert, the plugin creates the base post in the WPML default language, then the translations. When `title` is sent only per language and the default language is not among them, the base post is created in the first language that has a title instead, so no post is created in a language the payload did not send. Terms and WooCommerce products follow the same rule.
-- On update, the plugin updates the current post and its linked translations.
+- On update, the plugin updates the current post and its linked translations. A language map writes only the languages it contains: `{"title": {"en": "Red Chair"}}` renames the English translation and leaves the Italian title as it is. The same applies to `content`, `description` and every value in `acf_fields` and `files`. A shared (non-map) value is still written to every language.
+- Only language maps create translations. A payload with scalar values only creates or updates a single post. To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`.
+- Language maps in `terms` only choose the term for each translation. They do not create translations.
 - If `title` is a string and other fields are multilingual, the same title is used unchanged for every translation. For different titles per language, use a WPML map.
 - When `files` is multilingual, each translation receives its own `attachment_id`s in the target fields.
-- If the translated title is missing for a language, the shared title or the fallback language is used, without automatic suffixes.
+- When a translation is created and its title is missing from the map, the shared title or the fallback language is used, without automatic suffixes. An existing translation keeps its title instead.
 - For multilingual `terms`, terms are resolved in the target language through WPML.
 - On insert, the translations are written in their own WPML language: term slugs and `acf_fields` resolve in the language of each translation, not in the default language.
 
@@ -1943,6 +1945,8 @@ Body:
 - `short_description` sets the WooCommerce short description. It can be a string or a WPML language map.
 - `long_description` and `short_description` are top-level product fields, not part of `props` or `acf_fields`.
 - For compatibility, `content` and `description` are still accepted as aliases of `long_description` and `short_description`. If both are present, `long_description` and `short_description` win.
+- On update, a WPML language map writes only the languages it contains. `{"name": {"en": "Red Chair"}}` renames the English product and leaves the Italian name as it is. The same applies to `slug`, `long_description`, `short_description`, `image`, `gallery`, each value in `props`, `acf_fields` and `attributes`. An attribute sent as a map without a language keeps that language's current attribute. A new translation created by the same request still falls back to the first language of the map, so it never starts empty.
+- Only language maps in the fields above create translations. A payload with scalar values only creates or updates a single product. To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`. Maps in `categories`, `tags` and `terms` only choose the term for each translation.
 - `status` is optional; default `publish`, on create **and** on update. A save without `status` sets every language of the product to `publish`, including a product that was a draft or private. To keep a non-published status, send it on every save.
 - `status` must be a non-empty string, otherwise `400 invalid_param` (`Parameter 'status' must be a string`).
 

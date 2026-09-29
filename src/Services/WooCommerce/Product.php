@@ -1014,6 +1014,12 @@ class Product
             // for conflicts too. Translations of the same group never conflict with
             // each other, so the check is always scoped outside the group.
             foreach (self::getTitleCheckLanguages($translation_ids, $language['translated_languages'], $source_language) as $language_code) {
+                // An existing language the title map leaves out keeps its name: nothing to check.
+                $is_existing_language = isset($translation_ids[$language_code]) || $language_code === $current_language;
+                if ($is_existing_language && !MultiLang::hasValueForLanguage($title_map, $language_code)) {
+                    continue;
+                }
+
                 $title = trim(self::resolveProductTitle(
                     $title_map,
                     $language_code,
@@ -1036,7 +1042,8 @@ class Product
             $local_key,
             $element_index,
             $current_language,
-            $language['fallback_language']
+            $language['fallback_language'],
+            keep_unsent_languages: true
         );
 
         self::updateProductTranslations(
@@ -1136,7 +1143,14 @@ class Product
         }
     }
 
-    /** Applies product/post fields, media, ACF and taxonomy assignments, then saves. */
+    /**
+     * Applies product/post fields, media, ACF and taxonomy assignments, then saves.
+     *
+     * $keep_unsent_languages is set when the product already exists in $language_code:
+     * a language map without that language then leaves the field as it is, instead of
+     * borrowing the fallback language's value. A product created by this request keeps
+     * the fallback, so it never starts with an empty name.
+     */
     private static function persistProductFromParams(
         mixed $product,
         array $params,
@@ -1146,13 +1160,18 @@ class Product
         ?string $fallback_language = null,
         bool $set_language_details = false,
         int|false $trid = false,
-        ?string $source_language = null
+        ?string $source_language = null,
+        bool $keep_unsent_languages = false
     ): int
     {
         if ($language_code === null && $fallback_language === null) {
             $language = self::getLanguageContext($params);
             $language_code = $language['default_language'];
             $fallback_language = $language['fallback_language'];
+        }
+
+        if ($keep_unsent_languages) {
+            $params = self::withoutMapsMissingLanguage($params, $language_code);
         }
 
         return Wpml::runWithLanguage($language_code, function () use (
@@ -1177,7 +1196,7 @@ class Product
 
             $is_translation = $source_language !== null && $source_language !== $language_code;
             self::applyProductFields($product, $params, $element_index, $language_code, $fallback_language, $is_translation);
-            self::applyProductAttributes($product, $params, $element_index, $language_code, $fallback_language);
+            self::applyProductAttributes($product, $params, $element_index, $language_code, $fallback_language, $keep_unsent_languages);
             ProductDownloads::apply($product, $params, $element_index, $language_code, $fallback_language);
 
             try {
@@ -1354,7 +1373,8 @@ class Product
                 $fallback_language,
                 false,
                 false,
-                $source_language
+                $source_language,
+                keep_unsent_languages: true
             );
         }
 
@@ -1422,6 +1442,31 @@ class Product
                 (int) $trid
             );
         }
+    }
+
+    /**
+     * Drops from the payload the language maps with no entry for the language.
+     *
+     * Covers the top-level text and media values, `props` and `acf_fields`. Attributes
+     * are handled by applyProductAttributes(), because the attribute set is replaced as a
+     * whole and a dropped key would delete the attribute. Lists whose entries carry their
+     * own maps (`gallery` entries, `downloads`) and `terms` keep the fallback rule.
+     */
+    private static function withoutMapsMissingLanguage(array $params, ?string $language_code): array
+    {
+        foreach (['title', 'slug', 'content', 'description', 'image', 'gallery'] as $key) {
+            if (array_key_exists($key, $params) && MultiLang::isMapWithoutLanguage($params[$key], $language_code)) {
+                unset($params[$key]);
+            }
+        }
+
+        foreach (['props', 'acf_fields'] as $key) {
+            if (is_array($params[$key] ?? null) && !array_is_list($params[$key])) {
+                $params[$key] = MultiLang::withoutMapsMissingLanguage($params[$key], $language_code);
+            }
+        }
+
+        return $params;
     }
 
     /** Applies product name, optional legacy text fields, and status. */
@@ -1692,20 +1737,37 @@ class Product
         return $term instanceof \WP_Term ? $term : null;
     }
 
-    /** Replaces custom attributes when the payload includes `attributes`. */
+    /**
+     * Replaces custom attributes when the payload includes `attributes`.
+     *
+     * With $keep_unsent_languages, an attribute sent as a language map without this
+     * language keeps the product's current attribute of that name, custom or global.
+     */
     private static function applyProductAttributes(
         mixed $product,
         array $params,
         int $element_index,
         ?string $language_code,
-        ?string $fallback_language
+        ?string $fallback_language,
+        bool $keep_unsent_languages = false
     ): void
     {
         if (!array_key_exists('attributes', $params)) {
             return;
         }
 
-        $payload = MultiLang::resolveFields($params['attributes'], $language_code, $fallback_language);
+        $attributes_payload = $params['attributes'];
+        $kept_keys = [];
+        if ($keep_unsent_languages && is_array($attributes_payload)) {
+            foreach ($attributes_payload as $attribute_name => $value) {
+                if (MultiLang::isMapWithoutLanguage($value, $language_code)) {
+                    $kept_keys[self::getAttributeLookupKey(trim((string) $attribute_name))] = true;
+                    unset($attributes_payload[$attribute_name]);
+                }
+            }
+        }
+
+        $payload = MultiLang::resolveFields($attributes_payload, $language_code, $fallback_language);
         $attributes = [];
         $used_for_variations = $product instanceof \WC_Product_Variable || $product->get_type() === 'variable';
 
@@ -1722,11 +1784,15 @@ class Product
         }
 
         foreach ($product->get_attributes() as $existing_key => $existing_attribute) {
-            if (!$existing_attribute instanceof \WC_Product_Attribute || !$existing_attribute->is_taxonomy()) {
+            if (!$existing_attribute instanceof \WC_Product_Attribute) {
                 continue;
             }
 
             $existing_key = self::getAttributeLookupKey((string) $existing_key);
+            if (!$existing_attribute->is_taxonomy() && !isset($kept_keys[$existing_key])) {
+                continue;
+            }
+
             if (isset($payload_keys[$existing_key])) {
                 continue;
             }

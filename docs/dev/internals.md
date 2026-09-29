@@ -167,6 +167,12 @@ order:
    payload
 3. otherwise, the shared value
 
+The fallback only fills languages created by the current request. On update, a language that
+already exists in the WPML group ignores a language map without its key and keeps its stored
+value: `MultiLang::isMapWithoutLanguage()`, `withoutMapsMissingLanguage()` and
+`hasValueForLanguage()` implement that check. Without it, `{"title": {"en": "Red Chair"}}` also
+renamed the Italian translation.
+
 ### 4. WPML is optional, but required for multilingual payloads
 
 If the payload contains per-language values and WPML is not active, the services do not try to
@@ -502,22 +508,24 @@ If the payload contains `title`, the service checks that the final title of each
 already used by another post of the same type. A post in the same WPML group, or one that carries a
 different `local_key`, is not a conflict: see [the title rule](#the-title-is-a-near-unique-key).
 
-- if the post has translations, it checks the resolved title of every language
+- if the post has translations, it checks the resolved title of every language the title covers
 - if it has no translations, it checks only the current post, and only when the title changes
+- a language left out of a title map keeps its title, so it is not checked
 
 ### 5. Updating the main post
 
 The service first restores the trashed members of the group (see [Trashed posts](#trashed-posts)).
 It prepares the `wp_update_post()` data with `ID`, `post_type` and `post_status` (the
 payload status or the current one). It adds `post_title`, `post_content` and `post_excerpt` only
-for the fields actually sent.
+for the fields actually sent, and only when the value is shared or its map contains the post's
+language.
 
 The main post is updated in its own current language, not automatically in the default language.
 
 ### 6. ACF, files and terms on the main post
 
-If `acf_fields` or `files` is present, the service resolves them for `current_language` and saves
-them through `Acf::updateFieldValue()`. If `term` is present, it assigns the terms with
+If `acf_fields` or `files` is present, the service drops the language maps without
+`current_language`, resolves the rest for that language and saves them through `Acf::updateFieldValue()`. If `term` is present, it assigns the terms with
 `wp_set_object_terms()`.
 
 ### 7. Updating the translations
@@ -525,8 +533,9 @@ them through `Acf::updateFieldValue()`. If `term` is present, it assigns the ter
 For each post in `translation_ids` other than the current one, the service, inside
 `Wpml::runWithLanguage($language_code, ...)`:
 
-- updates only the text and status fields actually present in the payload
-- saves the ACF fields and files for that language
+- updates only the text and status fields actually present in the payload, skipping a map that
+  does not contain the language
+- saves the ACF fields and files for that language, skipping maps that do not contain it
 - assigns the terms, translated into the target language
 
 ### 8. Creating missing translations

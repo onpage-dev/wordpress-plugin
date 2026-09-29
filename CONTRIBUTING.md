@@ -68,6 +68,7 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | Test | Kind | Needs |
 | --- | --- | --- |
 | `MultiLangResolveFields.php` | offline | nothing: no site, no `.env` |
+| `MultiLangUnsentLanguages.php` | offline | nothing: no site, no `.env` |
 | `FieldGroupMalformedFields.php` | offline | nothing: no site, no `.env` |
 | `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
@@ -172,6 +173,9 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   [internals.md](docs/dev/internals.md#2-shared-vs-translated): real language maps, including
   languages the site has not activated, are resolved; groups with short keys that are not
   languages (`sku`/`alt`, `lat`/`lng`, `cta_url`) reach the field untouched.
+- **`MultiLangUnsentLanguages.php`** checks offline the update rule for language maps that leave
+  a language out: the helpers in `MultiLang` must skip such a map for that language, so an existing
+  translation keeps its value.
 - **`FieldGroupMalformedFields.php`** checks offline that a malformed `fields` payload on
   `FieldGroup::persistFields()` stops the request before anything is written or deleted.
 
