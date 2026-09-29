@@ -165,7 +165,10 @@ Error handling has **two stages**:
 
 Auth is a [middleware](../../src/Middlewares/Auth.php) that delegates to the
 [Auth service](../../src/Services/Auth.php). It compares the request's Bearer token with the one stored
-in `wp_options` (`onpage_auth_token`), in constant time (`hash_equals`).
+in `wp_options` (`onpage_auth_token`), in constant time (`hash_equals`). Once the token passes,
+the middleware also rejects the request with `500 acf_version_unsupported` when ACF is older than
+6.1 (`Acf::requireSupportedVersion()`). The check sits after the token, so an unauthenticated
+caller never learns the site's ACF version.
 
 The token can be generated **only** from the admin page ([UI.php](../../src/Views/UI.php)). That page
 requires the `manage_options` capability and is protected by a CSRF nonce.
@@ -218,7 +221,7 @@ Earlier on, the post key was written through an implicit ACF field (meta `local_
 **Accepted trade-off: partial state.** If an item fails, the `HttpException` stops the batch. Items
 already written **stay written**. Only `POST /posts` and `POST /woocommerce/products` roll back
 within one item: a failed insert deletes the source post or product and every translation it
-created ([Product.php:895-939](../../src/Services/WooCommerce/Product.php#L895-L939) for products).
+created ([Product.php:921-964](../../src/Services/WooCommerce/Product.php#L921-L964) for products).
 This is deliberate:
 
 - There are no SQL transactions across APIs. WooCommerce, ACF and WPML write to different tables
@@ -400,17 +403,20 @@ client always gets a JSON object.
 
 [.gitattributes](../../.gitattributes) marks everything that is not needed at runtime as
 `export-ignore`: the tests and `src/Env.php`, `bin/`, the Docker environment, `config/`, the
-`start`/`stop`/`restart` scripts, `.env.example` and the repository tooling (`.gitignore`,
-`.gitattributes`). `git archive`, and the source archives GitHub attaches to a release, leave them
-out. The archive keeps the plugin code, the README, the LICENSE and the documents the README links
-to, including `AGENTS.md`, which `CONTRIBUTING.md` links to. See [RELEASE.md](../../RELEASE.md).
+`start`/`stop`/`restart` scripts, `.env.example`, the repository tooling (`.github/`,
+`.gitignore`, `.gitattributes`) and the contributor documents (`RELEASE.md`, `CONTRIBUTING.md`,
+`AGENTS.md`). The release workflow builds the archive with `git archive`, which leaves them out.
+The archive keeps the plugin code, the README, the LICENSE, `SECURITY.md`, `CHANGELOG.md` and
+`docs/`. The contributor documents are meant for the repository, so their links in the README and
+in `docs/` do not resolve inside the archive. See [RELEASE.md](../../RELEASE.md).
 
 ---
 
 ## 5. Request lifecycle (example: `POST /woocommerce/products`)
 
 1. WordPress invokes the route registered by `Router::resolve()` on `rest_api_init`.
-2. `permission_callback` → `AuthMiddleware::handle` → `Auth::check` validates the Bearer token.
+2. `permission_callback` → `AuthMiddleware::handle` → `Auth::check` validates the Bearer token,
+   then `Acf::requireSupportedVersion()` checks the ACF version.
 3. `callback` → `Router::dispatch` instantiates `ProductController` and calls `save`.
 4. The Controller checks that the body is a JSON array (`Input::requireJsonList`), loads the ACF
    field-type map once, then iterates over the array. Each element must be a JSON object
@@ -451,7 +457,7 @@ These rules make the system predictable. Breaking one is almost always a bug.
   ([Brand.php:111](../../src/Services/WooCommerce/Brand.php#L111)).
   `WooCommerce\VariantProduct` rethrows an `HttpException` as is and wraps any other failure of a
   variation save as `500 request_failed`
-  ([VariantProduct.php:724-727](../../src/Services/WooCommerce/VariantProduct.php#L724-L727)).
+  ([VariantProduct.php:735-739](../../src/Services/WooCommerce/VariantProduct.php#L735-L739)).
 - **Uniform write endpoints:** body is an array, upsert by `local_key`, errors prefixed with
   `Service :: Element {i}`, response is an array of IDs.
 - **Global names are prefixed:** every global function starts with `onpage_`.

@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The `409 duplicate_title` and `409 duplicate_local_key` messages of `POST /posts` now always carry `Element N`, like the other per-element errors.
+- With Advanced Custom Fields older than 6.1, every endpoint now answers `500 acf_version_unsupported`, naming the active version, and the admin shows a notice. Such calls used to fail with a generic `500 request_failed`.
+
 ### Fixed
 - `POST /posts` and `POST /woocommerce/products` no longer overwrite a language that a language map leaves out on update: `{"title": {"en": "Red Chair"}}` now renames only the English translation instead of every language in the WPML group.
+- `POST /woocommerce/products` no longer publishes an existing product when the payload has no `status`: an update keeps the current status of every language. A new product still defaults to `publish`.
+- `POST /woocommerce/products` with `attributes: null` or `{}` now removes every attribute of the product, global `pa_*` attributes included, instead of the custom ones only. A non-empty `attributes` object still keeps the global attributes it does not name.
+- `null` on the enum and boolean `props` of `POST /woocommerce/products` and `POST /woocommerce/variant-products` (`stock_status`, `backorders`, `catalog_visibility`, `tax_status`, `manage_stock`, `featured`, `reviews_allowed`, …) now leaves the value as it is, instead of resetting it to a default or to `false`.
 
 ## [1.0.0] - 2026-09-28
 
@@ -18,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - WooCommerce integration: products, variations, global attributes and their terms, categories, tags and brands.
 - WPML integration for multilingual sites. Per-language values are sent as `{"<lang>": …}` maps.
 - Media import from URL, deduplicated by On Page® storage segment.
-- `POST /migration` to upgrade the data of a site that ran an earlier installation of the plugin.
+- `POST /migration` to upgrade the data already on a site after a change of internal format.
 - Requirements: WordPress 7.1, PHP 8.2 and an active Advanced Custom Fields. Without ACF the plugin registers no routes and shows a notice in the admin.
 
 [1.0.0]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.0

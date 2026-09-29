@@ -48,6 +48,15 @@ class VariantProduct
         'image_id',
     ];
 
+    /** Enum and boolean props: null leaves them as they are (same rule as Product). */
+    private const NULL_KEEPS_VALUE_FIELD_KEYS = [
+        'manage_stock',
+        'stock_status',
+        'backorders',
+        'virtual',
+        'downloadable',
+    ];
+
     /**
      * Status a variation had before the plugin made it private because its parent stopped
      * offering one of its attribute values (see disableVariationsWithUnofferedAttributes()).
@@ -843,6 +852,7 @@ class VariantProduct
                 if ($value !== null && !is_scalar($value)) {
                     throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props.$field_key' must resolve to a scalar or null", 400, 'invalid_param');
                 }
+                if ($value === null && in_array($field_key, self::NULL_KEEPS_VALUE_FIELD_KEYS, true)) continue;
 
                 try {
                     self::applyField($variation, $field_key, $value);

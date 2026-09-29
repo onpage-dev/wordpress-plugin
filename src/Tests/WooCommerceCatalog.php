@@ -37,9 +37,8 @@ require_once __DIR__ . '/Support/Keep.php';
  *      of the custom taxonomy, a simple product, a variable product and its variants —
  *      each carrying values for the ACF fields declared in step 1.
  *
- * Every value is invented here. Unlike the equivalent test in the `connector-wordpress`
- * repository, nothing is read from On Page®: the test must be able to run against a bare
- * WordPress with only WooCommerce, ACF and WPML installed.
+ * Every value is invented here. Nothing is read from On Page®: the test must be able to run
+ * against a bare WordPress with only WooCommerce, ACF and WPML installed.
  *
  * The data is multilingual, as an On Page® import is: names, descriptions, ACF values,
  * product attributes and variation attributes go out as WPML language maps for the

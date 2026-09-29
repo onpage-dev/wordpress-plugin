@@ -1,0 +1,62 @@
+# Builds the plugin archive for a published release and attaches it as `onpage-X.Y.Z.zip`.
+#
+# GitHub's own source archives cannot be uploaded to WordPress: their top folder is
+# `wordpress-plugin-X.Y.Z/`, so every update would install a second copy of the plugin instead
+# of replacing `wp-content/plugins/onpage/`. This archive puts every file under `onpage/`.
+# `git archive` honours `export-ignore` in .gitattributes, so tests and tooling are left out.
+
+name: Release archive
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Check the tag matches the plugin version
+        run: |
+          version="${TAG#v}"
+          header=$(sed -n 's/^ \* Version:[[:space:]]*//p' plugin.php)
+          if [ "$header" != "$version" ]; then
+            echo "::error::Tag $TAG does not match Version: $header in plugin.php"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build the archive
+        run: |
+          mkdir -p dist
+          git archive --format=zip --prefix=onpage/ -o "dist/onpage-$VERSION.zip" "$TAG"
+
+      - name: Check the archive
+        run: |
+          zip="dist/onpage-$VERSION.zip"
+          unzip -Z1 "$zip" > entries.txt
+          if grep -v '^onpage/' entries.txt; then
+            echo "::error::Every entry must start with onpage/"
+            exit 1
+          fi
+          if ! grep -qx 'onpage/plugin.php' entries.txt; then
+            echo "::error::onpage/plugin.php is missing"
+            exit 1
+          fi
+          if grep '^onpage/src/Tests/' entries.txt; then
+            echo "::error::src/Tests/ must not ship"
+            exit 1
+          fi
+
+      - name: Attach the archive to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "dist/onpage-$VERSION.zip" --clobber

@@ -49,6 +49,23 @@ class Product
         'product_type',
     ];
 
+    /**
+     * Props that WooCommerce cannot leave empty: enums and booleans. A null value leaves
+     * them as they are, instead of silently resetting them to a default or to false.
+     */
+    private const NULL_KEEPS_VALUE_FIELD_KEYS = [
+        'manage_stock',
+        'stock_status',
+        'backorders',
+        'sold_individually',
+        'virtual',
+        'downloadable',
+        'featured',
+        'catalog_visibility',
+        'tax_status',
+        'reviews_allowed',
+    ];
+
 
 
     /** Ensures WooCommerce CRUD classes and helpers are available. */
@@ -325,11 +342,16 @@ class Product
         throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'name' must be a non-empty string or a WPML language map", 400, 'invalid_param');
     }
 
-    /** Returns the DTO status value, defaulting to publish. */
-    private static function normalizeStatus(array $params, int $element_index): string
+    /**
+     * Returns the DTO status value, or null when the payload sends none.
+     *
+     * A missing status leaves an existing product's status as it is; only a new product
+     * falls back to publish (see insert()).
+     */
+    private static function normalizeStatus(array $params, int $element_index): ?string
     {
         if (!array_key_exists('status', $params)) {
-            return 'publish';
+            return null;
         }
 
         if (!is_scalar($params['status']) || trim((string) $params['status']) === '') {
@@ -349,8 +371,12 @@ class Product
         $normalized = [
             'local_key' => Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index),
             'title' => self::requireName($params, $element_index),
-            'status' => self::normalizeStatus($params, $element_index),
         ];
+
+        $status = self::normalizeStatus($params, $element_index);
+        if ($status !== null) {
+            $normalized['status'] = $status;
+        }
 
         $acf_fields = self::optionalObjectParam($params, 'acf_fields', $element_index) ?? [];
         MultiLang::requireWpmlForFieldMap($acf_fields, self::ERROR_PREFIX, $element_index, 'acf_fields');
@@ -1431,6 +1457,15 @@ class Product
             );
         }
 
+        if (!array_key_exists('status', $params)) {
+            // A new translation of an existing product starts with the product's own status,
+            // not with the publish default of a brand-new product.
+            $source_product = \wc_get_product($source_product_id);
+            if ($source_product) {
+                $params['status'] = (string) $source_product->get_status();
+            }
+        }
+
         foreach ($missing_languages as $language_code) {
             self::createTranslatedProduct(
                 $params,
@@ -1535,6 +1570,7 @@ class Product
             // SKU must be unique in WooCommerce's lookup table; translations share the
             // source product's SKU implicitly, so avoid re-setting it on translations.
             if ($is_translation && $field_key === 'sku') continue;
+            if ($value === null && in_array($field_key, self::NULL_KEEPS_VALUE_FIELD_KEYS, true)) continue;
 
             if ($value !== null && !is_scalar($value)) {
                 throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'props.$field_key' must resolve to a scalar or null", 400, 'invalid_param');
@@ -1740,6 +1776,8 @@ class Product
     /**
      * Replaces custom attributes when the payload includes `attributes`.
      *
+     * An empty set (`null` or `{}`) removes every attribute, global ones included.
+     *
      * With $keep_unsent_languages, an attribute sent as a language map without this
      * language keeps the product's current attribute of that name, custom or global.
      */
@@ -1757,6 +1795,15 @@ class Product
         }
 
         $attributes_payload = $params['attributes'];
+
+        // `attributes: null` or `{}` (normalized to []) clears the whole set, global `pa_*`
+        // attributes included. Checked on the sent payload, before the per-language filter
+        // below, so a map that only lacks this language never reads as "clear".
+        if ($attributes_payload === []) {
+            $product->set_attributes([]);
+            return;
+        }
+
         $kept_keys = [];
         if ($keep_unsent_languages && is_array($attributes_payload)) {
             foreach ($attributes_payload as $attribute_name => $value) {

@@ -37,7 +37,7 @@ element to a service in `src/Services/`.
 | `PostType.php` | ACF post types | List, upsert and delete post types registered through ACF. |
 | `Taxonomy.php` | ACF taxonomies | List, upsert and delete taxonomies registered through ACF, with translated labels. |
 | `Media.php` | Media Library | List attachments, upload files, link remote files to ACF fields, delete attachments. |
-| `Migration.php` | `POST /migration` | One-off data upgrades for sites that ran an earlier installation. |
+| `Migration.php` | `POST /migration` | One-off data upgrades after a change of internal format. |
 | `Index.php` | `DELETE /indexes` | Remove every `local_key` association from posts and terms. |
 | `Language.php` | `GET /languages` | List the active WPML languages, default first, and whether WPML is active. Read-only. |
 | `WooCommerce/*.php` | WooCommerce entities | See [woocommerce.md](woocommerce.md). |
@@ -218,8 +218,8 @@ Every endpoint always both writes and looks up `local_key` in the storage listed
   terms).
 - For WooCommerce global attributes, the technical key is the option name
   `onpage_wc_attribute_local_key_{attribute_id}`.
-- `local_key` and `_local_key` are legacy meta keys. An earlier version of the plugin wrote them
-  through an ACF field that has since been removed. No endpoint reads them anymore.
+- `local_key` and `_local_key` are legacy meta keys, once written through an ACF field. The
+  plugin never writes them, and no endpoint reads them.
   `POST /migration` renames or cleans them up (see [Migration](#migration-and-indexes)).
 - With WPML, the same `local_key` can appear on several records of one translation group. They
   represent the same external object in different languages.
@@ -920,8 +920,8 @@ Any other URL has no token, and deduplication falls back to the exact source URL
 segment of any URL would collapse unrelated files onto one attachment
 (`storage.example.com/bucket/a.jpg` and `/bucket/b.jpg` would both give `bucket`).
 
-The token is stored in the attachment meta `_onpage_file_token`. Tokens recorded by earlier versions
-from non-On Page® URLs stay in the meta and are returned by `GET /media`, but no lookup uses them.
+The token is stored in the attachment meta `_onpage_file_token`. A token stored for a non-On Page®
+URL is returned by `GET /media`, but no lookup uses it.
 
 ### Upload allowlist
 

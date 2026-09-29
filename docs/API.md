@@ -101,6 +101,8 @@ Authorization: Bearer <token>
 | `401 onpage_auth_missing_token` | The `Authorization` header is missing or does not contain a valid Bearer token. |
 | `403 onpage_auth_invalid_token` | The token sent does not match the configured one. |
 
+Once the token is accepted, every endpoint returns `500 acf_version_unsupported` when the active Advanced Custom Fields is older than 6.1. The message names the active version. Without ACF at all, the plugin registers no routes, so WordPress answers `404 rest_no_route`.
+
 The token is generated from the **On Page®** page in the WordPress admin. Only administrators can access that page (capability `manage_options`). Generating and regenerating the token is also protected by a CSRF nonce. No REST endpoint can read or write the token: it is managed exclusively from the admin UI.
 
 ## General conventions
@@ -389,6 +391,42 @@ The language map always goes at field level (or on the whole repeater/group), ne
 
 On read (GET), repeaters are returned natively by `\get_fields()` as lists of objects. Tabs do not appear.
 
+### Value shapes by field type
+
+Except for `image`, `file`, `repeater`, `group`, `flexible_content` and `tab` (described above), the plugin passes the value to ACF as it is. It does not convert or validate it. Send the shape ACF stores for that field type. The table lists the common types; the ACF documentation is the reference.
+
+| ACF type | Value to send | Example |
+| --- | --- | --- |
+| `text`, `textarea`, `wysiwyg`, `email`, `url`, `password` | a string | `"CE marking"` |
+| `number`, `range` | a number | `49.9` |
+| `true_false` | `1` or `0` | `1` |
+| `select` | one choice value; a list of values when the field allows multiple values | `"red"`, `["red", "blue"]` |
+| `radio`, `button_group` | one choice value | `"red"` |
+| `checkbox` | a list of choice values | `["wifi", "bluetooth"]` |
+| `date_picker` | a string in `Ymd` format | `"20260929"` |
+| `date_time_picker` | a string in `Y-m-d H:i:s` format | `"2026-09-29 14:30:00"` |
+| `time_picker` | a string in `H:i:s` format | `"14:30:00"` |
+| `color_picker` | a hex color string | `"#c0392b"` |
+| `link` | an object with `title`, `url` and `target` | `{"title": "Datasheet", "url": "https://…", "target": "_blank"}` |
+| `gallery` | a list of `attachment_id`s | `[812, 813]` |
+| `post_object`, `page_link` | a WordPress post ID; a list of IDs when the field allows multiple values | `321` |
+| `relationship` | a list of WordPress post IDs | `[321, 322]` |
+| `taxonomy` | a WordPress term ID, or a list of term IDs | `[10, 11]` |
+| `user` | a WordPress user ID | `1` |
+
+Choice values are the keys of the field's `choices`, not their labels.
+
+**Relational fields take WordPress IDs, not `local_key`s.** The plugin does not resolve a `local_key` inside `post_object`, `relationship`, `page_link` or `taxonomy`. Look the IDs up first:
+
+- posts: `GET /posts?local_key=<key>&type=<type>`, or the IDs returned by `POST /posts`;
+- terms: `GET /terms?taxonomy=<taxonomy>`, which returns each term with its `local_key`.
+
+So the related objects must be imported before the objects that point at them.
+
+**A `gallery` is not imported from URLs.** Upload or link each file first (`POST /media`, or a URL in a `files` slot), then send the list of `attachment_id`s.
+
+**Clearing a field.** Send `null` or `""` for a single value, and `[]` for a list (`checkbox`, `gallery`, `relationship`, a multiple `select`). `image` and `file` also accept `0` or `"0"`. A field left out of `acf_fields` is not changed.
+
 ## Error format
 
 Errors are returned as `WP_Error` using the standard WordPress REST shape:
@@ -396,7 +434,7 @@ Errors are returned as `WP_Error` using the standard WordPress REST shape:
 ```json
 {
   "code": "duplicate_title",
-  "message": "Post :: Title 'Example' already exists for PostType 'news'",
+  "message": "Post :: Element 0 :: Title 'Example' already exists for PostType 'news'",
   "data": {
     "status": 409
   }
@@ -472,7 +510,7 @@ Group fields:
 | --- | --- | --- |
 | `title` | yes | Group title. Missing, empty or not a string → `400 missing_title`. |
 | `key` | no | ACF group key (convention `group_...`). If missing, it is generated from `title` (`group_` + title slug). |
-| `locations` | no | ACF location rules. The fields of the group are accepted in `acf_fields` of every post type or taxonomy the rules can match: `==` and `!=` on `post_type` or `taxonomy`, the value `all`, and post rules without a post type (`post_template`, `post_category`, …, matching every post type) or page rules (`page_template`, …, matching `page`). |
+| `locations` | no | ACF location rules, as a flat list of `{param, operator, value}` objects. The list is **one** ACF rule group: all its rules must match (AND). See [Location rules](#location-rules). |
 | `description` | no | Group description. |
 | `fields` | no | List of fields (see below). If omitted or `null`, the group's existing fields are left unchanged. `[]` removes them all. A value that is not a list returns `400 invalid_param`. |
 | `active` | no | Whether the group is active. Default `true`. |
@@ -502,6 +540,43 @@ Per-field rules:
 - `flexible_content` fields take a list of `layouts`. Each layout has a `name` (required; `key` is used when `name` is missing), an optional `label`, `display` (`block`, `table` or `row`; default `block`), `min`, `max`, and its own `sub_fields`. A layout keeps its internal ACF key across updates, matched by `name`, so saved values stay attached. A layout no longer sent is removed with its sub-fields. `layouts` that is not a list, or a layout without a `name` or `key`, returns `400 invalid_param`.
 
 If WPML is active, the group is flagged with an ACFML translation mode.
+
+#### Location rules
+
+- `locations` is a flat list. It becomes a single ACF rule group, so every rule in it must match (AND). There is no way to send alternatives (OR) in one group.
+- For the same fields on two targets, create two field groups. For example, a field on both `product` and `product_variation` needs one group with `post_type == product` and one with `post_type == product_variation`. A single group with both rules would match nothing.
+- The fields of the group are accepted in `acf_fields` of every post type or taxonomy the rules can match: `==` and `!=` on `post_type` or `taxonomy`, the value `all`, and post rules without a post type (`post_template`, `post_category`, …, matching every post type) or page rules (`page_template`, …, matching `page`).
+- A group without `locations` is saved (`200`), but its fields match nothing. Writing them later fails with `400 invalid_param` (`ACF field '<name>' not found for <context> '<target>'`).
+
+Example: a field group on a taxonomy, then a term that fills it.
+
+```json
+[
+  {
+    "title": "Collection Fields",
+    "key": "group_collection_fields",
+    "locations": [
+      { "param": "taxonomy", "operator": "==", "value": "collection" }
+    ],
+    "fields": [
+      { "key": "season", "label": "Season", "type": "text" }
+    ]
+  }
+]
+```
+
+Then `POST /terms`:
+
+```json
+[
+  {
+    "taxonomy": "collection",
+    "local_key": 501,
+    "name": "Summer",
+    "acf_fields": { "season": "2026" }
+  }
+]
+```
 
 Response `200`:
 
@@ -883,6 +958,7 @@ Supported `term`/`terms` formats:
 - There is no rollback on update. If a step fails (for example an ACF field or a file), the changes already written stay.
 - With WPML, a language of the payload that the post's translation group does not have yet is created as a new translation. Before that, group slots whose post no longer exists are removed. If the translation group cannot be resolved, the request returns `500 wpml_error`.
 - If `title` changes, it is checked for uniqueness against other posts of the same type.
+- The slug (`post_name`) is never sent or changed by the plugin. WordPress generates it from the title when the post is first published. A later change of `title` keeps the old slug.
 - `acf_fields` updates only the fields sent.
 - `files` updates only the fields sent.
 - ACF `image` fields received as URLs are imported or reused as attachments and saved as `attachment_id`.
@@ -1305,7 +1381,7 @@ Body:
 | `name` | on create | | On update it can be omitted, but an empty string returns `400 invalid_param`. |
 | `slug` | no | | Can be sent as `color` or `pa_color`. An empty string counts as omitted: the existing slug is kept (on create, WooCommerce derives it from `name`). |
 | `type` | no | WooCommerce default `select` | |
-| `order_by` | no | WooCommerce default `menu_order` | |
+| `order_by` | no | WooCommerce default `menu_order` | WooCommerce accepts `menu_order`, `name`, `name_num` and `id`. The plugin passes the value to WooCommerce without checking it. |
 | `has_archives` | no | `false` | A boolean, a number (non-zero is `true`) or a string. The strings `1`, `true`, `yes` and `on` (any case) are `true`; any other value is `false`. |
 
 Resolution, in order of precedence:
@@ -1947,8 +2023,26 @@ Body:
 - For compatibility, `content` and `description` are still accepted as aliases of `long_description` and `short_description`. If both are present, `long_description` and `short_description` win.
 - On update, a WPML language map writes only the languages it contains. `{"name": {"en": "Red Chair"}}` renames the English product and leaves the Italian name as it is. The same applies to `slug`, `long_description`, `short_description`, `image`, `gallery`, each value in `props`, `acf_fields` and `attributes`. An attribute sent as a map without a language keeps that language's current attribute. A new translation created by the same request still falls back to the first language of the map, so it never starts empty.
 - Only language maps in the fields above create translations. A payload with scalar values only creates or updates a single product. To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`. Maps in `categories`, `tags` and `terms` only choose the term for each translation.
-- `status` is optional; default `publish`, on create **and** on update. A save without `status` sets every language of the product to `publish`, including a product that was a draft or private. To keep a non-published status, send it on every save.
+- `status` is optional. On create it defaults to `publish`. On update, a save without `status` keeps the current status of every language, so a draft stays a draft. A translation created by an update without `status` takes the status of the existing product.
 - `status` must be a non-empty string, otherwise `400 invalid_param` (`Parameter 'status' must be a string`).
+
+#### Missing, present and null keys
+
+On update, one rule covers most keys:
+
+| In the payload | Effect |
+| --- | --- |
+| key missing | the value stays as it is |
+| key present | the value is replaced entirely (lists such as `gallery`, `attributes` and `downloads` are not merged) |
+| `null` or an empty list | the value is cleared |
+
+Exceptions:
+
+- `slug`: `null` or `""` is ignored; the slug is not cleared (see [Slug](#slug)).
+- `attributes`: a non-empty object replaces the custom attributes and the global ones it names. Global `pa_*` attributes it does not name stay. `null` or `{}` removes every attribute, global ones included (see [`attributes`](#attributes)).
+- Enum and boolean props (`stock_status`, `backorders`, `catalog_visibility`, `tax_status`, `manage_stock`, `featured`, …): `null` leaves the value as it is, because WooCommerce has no empty value for them (see [`props`](#props-native-woocommerce-fields)).
+
+Unknown top-level keys are ignored with no error: a misspelled key answers `200` and writes nothing.
 
 #### Slug
 
@@ -1965,6 +2059,24 @@ Body:
 
 - Native WooCommerce fields go inside `props`: `sku`, `regular_price`, `sale_price`, `price`, `manage_stock`, `stock_quantity`, `stock_status`, `backorders`, `sold_individually`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `featured`, `catalog_visibility`, `tax_status`, `tax_class`, `purchase_note`, `menu_order`, `reviews_allowed`, `product_type`.
 - `props.product_type` can be `simple` or `variable`. Any other value returns `400 invalid_param`. If omitted on create, it defaults to `simple`.
+- Unknown keys in `props` are ignored with no error.
+
+Value types:
+
+| Keys | Type | Notes |
+| --- | --- | --- |
+| `sku`, `regular_price`, `sale_price`, `price`, `weight`, `length`, `width`, `height`, `tax_class`, `purchase_note` | string or number | `null` or `""` clears the value. |
+| `stock_quantity` | integer | `null`, `""` or a non-numeric value clears it. |
+| `menu_order` | integer | `null` becomes `0`. |
+| `manage_stock`, `sold_individually`, `virtual`, `downloadable`, `featured`, `reviews_allowed` | boolean | `null` leaves the value as it is. See the boolean rule below. |
+| `stock_status` | `instock`, `outofstock` or `onbackorder` | `null` leaves the value as it is. `""` sets `instock`. |
+| `backorders` | `no`, `notify` or `yes` | `null` leaves the value as it is. `""` sets `no`. |
+| `catalog_visibility` | `visible`, `catalog`, `search` or `hidden` | `null` leaves the value as it is. `""` sets `visible`. |
+| `tax_status` | `taxable`, `shipping` or `none` | `null` leaves the value as it is. `""` sets `taxable`. |
+
+The allowed values of `stock_status`, `backorders`, `catalog_visibility` and `tax_status` are WooCommerce's. The plugin does not check them itself: WooCommerce rejects an unknown value, and the request returns `400 invalid_param`.
+
+**Boolean rule.** A boolean prop is `true` only for `true`, a number equal to `1` (`1`, `"1"`), or the strings `"true"`, `"yes"` and `"on"` (case-insensitive). Every other value is `false`, including `"0"`, `"false"` and `""`. `null` is not a value: it leaves the prop as it is. The same rules apply to the enum and boolean props of variations (`manage_stock`, `stock_status`, `backorders`, `virtual`, `downloadable`).
 - **Changing `variable` to `simple` deletes the variations.** WooCommerce permanently deletes every variation of a product whose type changes from `variable` to `simple` (`woocommerce_product_type_changed`), including those created with `POST /woocommerce/variant-products` and those a site admin added. Omit `product_type` on updates when you do not mean to change it.
 
 #### Images
@@ -1987,9 +2099,9 @@ Body:
 - Replaces the product's whole set of **custom** attributes with the ones sent. A value can be a string/number, a list of values or a WPML language map.
 - **Global attributes.** A key that names a registered global attribute taxonomy (e.g. `pa_color`, created with [`POST /woocommerce/attributes`](#post-woocommerceattributes)) sets that global attribute on the product. Each option can be a term ID, slug or name, and the term must already exist (see [attribute terms](#post-woocommerceattributesattributeterms)). Otherwise the request returns `404 not_found`. With WPML the term is mapped to the product's language, or the original term is used when it has no translation.
 - Any other key creates a custom attribute, including a `pa_*` key whose taxonomy does not exist.
-- **Global attributes not sent are kept.** Global `pa_*` attributes already on the product (for example added by a site admin in WooCommerce) and missing from the payload keep their options, visibility and variation flag.
+- **Global attributes not sent are kept.** When `attributes` is a non-empty object, global `pa_*` attributes already on the product (for example added by a site admin in WooCommerce) and missing from the payload keep their options, visibility and variation flag.
 - When the product is `variable` (because `props.product_type` says so, or because it already is and `product_type` is omitted), the attributes sent are flagged as usable by variations (`variation=true`).
-- If `attributes` is omitted, existing attributes are not changed. If it is `null` or `{}`, all custom attributes are removed; global attributes stay.
+- If `attributes` is omitted, existing attributes are not changed. If it is `null` or `{}`, **every** attribute is removed, custom and global, including global attributes a site admin added. On a `variable` product, the plugin-managed variations built on them become `private` (see below).
 - Inside `attributes`, a key whose value is `null` or an empty list is left out of the new set. For a global `pa_*` key this removes that global attribute from the product.
 - An empty string, as a value or as a list option, returns `400 invalid_param`.
 - **Variations left without an option.** On a `variable` product, after a save that sends `attributes`, a plugin-managed variation (one with a `local_key`) that uses a value the parent no longer offers is made `private`. Nothing is deleted. Its previous status is kept in the `_onpage_held_status` meta, and the parent is resynced.
@@ -2279,6 +2391,7 @@ Body:
 - `name` (optional) sets the variation name. It can be a string or a WPML language map. An empty value leaves the name unchanged; a value that resolves to an object or a list returns `400 invalid_param`.
 - `short_description` (optional) sets the variation description, shown as `description` in `GET` responses. `description` is accepted as an alias; `short_description` wins when both are sent. Both can be WPML language maps, and `null` clears the description.
 - `long_description` is **not** saved on variations. It is only read to detect the payload languages.
+- Variations have no `terms`, `gallery`, `slug` or `downloads`. These keys, and any other unknown key, are ignored with no error.
 
 - `props` accepts: `sku`, `regular_price`, `sale_price`, `price`, `manage_stock`, `stock_quantity`, `stock_status`, `backorders`, `weight`, `length`, `width`, `height`, `virtual`, `downloadable`, `tax_class`, `menu_order`, `image_id`.
 - Each `props` value can be a WPML language map, as for products. The value resolved for a language must be a scalar or `null`; an object or a list returns `400 invalid_param` instead of clearing the field.
@@ -2642,6 +2755,7 @@ Body:
 Behaviour:
 
 - `post_id` is required and must refer to an existing post.
+- It updates that post only, not its WPML translations. To set a file on every language, send it in `files` on [`POST /posts`](#post-posts).
 - `files` is required and must be a non-empty JSON object.
 - Each key of `files` is the name of the ACF field to update on the post. It must be an ACF field of the post's type: any other key returns `400 invalid_param` (`Media :: ACF field '<name>' not found for post type '<type>'`), checked before anything is downloaded. Only the existence of the field is checked, not its type: any ACF field is accepted.
 - The entries are processed one by one, in payload order. If an entry fails, the entries before it stay saved.
@@ -3148,6 +3262,7 @@ Optional query:
 - If **omitted**, each term's taxonomy is taken from the term itself, so a single request can delete terms of different taxonomies.
 - A term that does not exist, or that is not in the `taxonomy` given, returns `404 not_found` with the message `Term :: Element N :: Term <id> not found`.
 - With `?ignore`, such a term is skipped.
+- Only the IDs sent are deleted. Their WPML translations are not. To delete a term in every language, read its `translations` map (from `GET /terms`) and send every ID in it.
 
 Response `200`:
 
@@ -3254,7 +3369,7 @@ curl -X POST https://<host>/wp-json/onpage/v1/migration \
 
 What it does, in order:
 
-1. **Renames the `local_key`** (`local_key` → `onpage_local_key`). The On Page® key of posts used to be written implicitly by an ACF field under `local_key`; the canonical meta is now `onpage_local_key`.
+1. **Renames the `local_key`** (`local_key` → `onpage_local_key`). A post whose key is stored under the legacy meta `local_key` gets it under `onpage_local_key`, the canonical meta.
    - A post that already has `onpage_local_key` keeps it: its legacy `local_key` row is deleted instead of renamed, so no post ends up with two key rows.
    - The other legacy rows in `wp_postmeta` are renamed.
    - The orphaned ACF reference meta `_local_key` is deleted.

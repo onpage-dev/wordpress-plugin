@@ -638,11 +638,11 @@ class Post
         MultiLang::requireWpmlForDetectedLanguages($translated_languages, self::ERROR_PREFIX, $element_index);
 
         if (PostRepository::findDuplicateByTitle($wp_post_type, $original_post_title, $local_key)) {
-            throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$original_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Title '$original_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
         }
 
         if (PostRepository::findByLocalKey($local_key, $wp_post_type)) {
-            throw onpage_http_exception(self::ERROR_PREFIX . " :: local_key '{$local_key}' already exists for PostType '{$post_type}'", 409, 'duplicate_local_key');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '{$local_key}' already exists for PostType '{$post_type}'", 409, 'duplicate_local_key');
         }
     }
 
@@ -953,7 +953,8 @@ class Post
         array $translated_languages,
         ?string $fallback_language,
         string $local_key,
-        array &$created_post_ids
+        array &$created_post_ids,
+        int $element_index
     ): void
     {
         $language_details = self::requireInsertedPostLanguageDetails($source_post_id, $wp_post_type);
@@ -968,7 +969,7 @@ class Post
             ) ?? '');
 
             if (self::findDuplicatePostByTitle($wp_post_type, $translated_post_title, $source_post_id, $local_key)) {
-                throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$translated_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Title '$translated_post_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
             }
 
             $result = \wp_insert_post([
@@ -1055,7 +1056,7 @@ class Post
                 );
 
                 if (self::findDuplicatePostByTitle($wp_post_type, $translated_title, (int) $translation_id, $local_key)) {
-                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$translated_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Title '$translated_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
                 }
             }
 
@@ -1073,7 +1074,7 @@ class Post
         );
 
         if ($resolved_title !== $post->post_title && self::findDuplicatePostByTitle($wp_post_type, $resolved_title, $post_id, $local_key)) {
-            throw onpage_http_exception(self::ERROR_PREFIX . " :: Title '$resolved_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Title '$resolved_title' already exists for PostType '{$post_type}'", 409, 'duplicate_title');
         }
     }
 
@@ -1287,7 +1288,8 @@ class Post
                 $local_key,
                 $language_code,
                 $source_language,
-                (int) $trid
+                (int) $trid,
+                $element_index
             );
         }
 
@@ -1306,7 +1308,8 @@ class Post
         string $local_key,
         string $language_code,
         string $source_language,
-        int $trid
+        int $trid,
+        int $element_index
     ): int {
         $wp_post_type = $context['wp_post_type'];
         $fallback_language = $context['languages']['fallback_language'];
@@ -1320,7 +1323,7 @@ class Post
         if ($translated_title !== ''
             && self::findDuplicatePostByTitle($wp_post_type, $translated_title, $source_post_id, $local_key)) {
             throw onpage_http_exception(
-                self::ERROR_PREFIX . " :: Title '$translated_title' already exists for PostType '{$context['post_type']}'",
+                self::ERROR_PREFIX . " :: Element $element_index :: Title '$translated_title' already exists for PostType '{$context['post_type']}'",
                 409,
                 'duplicate_title'
             );
@@ -1990,7 +1993,8 @@ class Post
                     translated_languages: $languages['translated_languages'],
                     fallback_language: $languages['fallback_language'],
                     local_key: $local_key,
-                    created_post_ids: $created_post_ids
+                    created_post_ids: $created_post_ids,
+                    element_index: $element_index
                 );
             }
 

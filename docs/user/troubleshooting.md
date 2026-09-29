@@ -23,6 +23,14 @@ off. The client receives `404` on every call.
 
 ACF is always required, even if the project does not use custom fields.
 
+## A red notice says On Page® requires a newer Advanced Custom Fields
+
+The notice reads: "**On Page®** requires **Advanced Custom Fields** 6.1 or later." It also shows
+the version that is active. The client receives `500 acf_version_unsupported` on every call.
+
+**How to fix it:** update **Advanced Custom Fields** under **Plugins** to version 6.1 or later,
+then ask whoever maintains the client to run the sync again.
+
 ## The client receives `404` on every call, and ACF is active
 
 **What it means:** WordPress cannot find the plugin's API.
@@ -61,6 +69,35 @@ The error code is `wpml_required`.
 **How to fix it:** install and activate **WPML**, and set up the same languages that the
 client sends. If the site has only one language, ask whoever maintains the client to send
 single-language data.
+
+## Multilingual content fails with a translation group error
+
+The client receives a `500` error with one of these messages:
+
+- code `wpml_error`, message containing "Unable to resolve translation group";
+- code `request_failed`, message containing "Failed to initialize WPML language details".
+
+**What it means:** WPML is active, but the post type of the content is not translatable. WPML
+cannot link the translations to each other.
+
+**How to fix it:**
+
+1. Go to **WPML > Settings > Post Types Translation**.
+2. Set the post type named in the error to **Translatable**. For WooCommerce products, set
+   **Products**.
+3. Save, and ask whoever maintains the client to run the sync again.
+
+See [guide.md](guide.md#make-the-post-types-translatable-first).
+
+## Syncs stop halfway or time out
+
+**What it means:** the plugin downloads images and files while it handles each request, one file
+at a time. A request with many files can run longer than your server allows.
+
+**How to fix it:**
+
+- Ask your hosting provider to raise `max_execution_time` and `memory_limit`.
+- Ask whoever maintains the client to send fewer items per request.
 
 ## I see two categories or terms with the same name
 

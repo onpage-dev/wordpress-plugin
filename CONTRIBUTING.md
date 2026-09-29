@@ -72,6 +72,7 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `FieldGroupMalformedFields.php` | offline | nothing: no site, no `.env` |
 | `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
+| `ProductUpdateUnsentValues.php` | end-to-end | a site with ACF and WooCommerce |
 | `WooCommerceCatalog.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` and `it` active |
 
 - **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
@@ -159,8 +160,7 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   - it reads every translation back through the `GET` endpoints, checks each one against the value
     of its language, and finally deletes it all.
 
-  The data is made up in the file. Unlike the equivalent test in the separate
-  `connector-wordpress` repository, nothing is read from On Page®, so the test runs against a bare
+  The data is made up in the file. Nothing is read from On Page®, so the test runs against a bare
   WordPress install with ACF, WooCommerce and WPML. The languages are set in the `LANGUAGES`
   constant of the test.
 - **`AcfSharedStructuredFields.php`** checks that structured ACF values sent as shared on
@@ -168,6 +168,11 @@ logging is silently disabled. `logs/` is in `.gitignore`.
 - **`DuplicateTitleDistinctLocalKeys.php`** checks that two different On Page® elements with the
   same name can both be imported and re-imported, on `POST /posts` and on
   `POST /woocommerce/products`.
+- **`ProductUpdateUnsentValues.php`** checks what a product update does with values it leaves out
+  or sends as `null`: an omitted `status` is kept, `null` keeps the enum and boolean `props` (and
+  still clears `sku`), and `attributes: null` removes the global attributes too. The last one is
+  read through its documented effect, because product attributes are not in the `GET` response:
+  the variation built on the removed global attribute becomes `private`.
 - **`MultiLangResolveFields.php`** covers the shared-value rule offline, directly on
   `MultiLang::resolveFields()`. It checks both sides of the language-code rule described in
   [internals.md](docs/dev/internals.md#2-shared-vs-translated): real language maps, including

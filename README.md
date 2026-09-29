@@ -11,6 +11,9 @@ The plugin:
 - publishes on WordPress collections that are managed centrally on On Page®
 - supports multilingual sites through WPML
 
+Sync goes one way only, from On Page® to WordPress. Changes made in WordPress are not sent back to
+On Page®, and the next sync can overwrite them.
+
 ## Version
 
 Current version: **1.0.0**. The project follows [Semantic Versioning](https://semver.org/).
@@ -19,13 +22,15 @@ Current version: **1.0.0**. The project follows [Semantic Versioning](https://se
 - How to cut a release: [RELEASE.md](RELEASE.md)
 - Published versions: [GitHub Releases](https://github.com/onpage-dev/wordpress-plugin/releases).
   To install, upload the `onpage-X.Y.Z.zip` attached to a release under **Plugins** in WordPress.
+- The plugin is not on wordpress.org, and WordPress never offers updates for it. To update, upload
+  the archive of the new release the same way.
 
 ## Requirements
 
 - WordPress 7.1 or later
 - PHP 8.2 or later
-- [Advanced Custom Fields](https://wordpress.org/plugins/advanced-custom-fields/), active. Without
-  ACF the REST API stays disabled.
+- [Advanced Custom Fields](https://wordpress.org/plugins/advanced-custom-fields/) 6.1 or later,
+  active. Without ACF the REST API stays disabled.
 - WooCommerce and WPML are optional. You only need them for the WooCommerce endpoints and for
   multilingual content.
 

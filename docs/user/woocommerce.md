@@ -31,9 +31,9 @@ Each synced product can carry:
 - custom fields (ACF)
 - downloadable files, such as data sheets or manuals
 
-A synced product is **published** unless the client sends another status. This also happens on
-every later sync: if you set a synced product to draft by hand, the next sync publishes it again
-unless the client sends the draft status too.
+A new synced product is **published** unless the client sends another status. Later syncs keep
+the product's current status unless the client sends one: if you set a synced product to draft
+by hand, it stays a draft.
 
 Images and files are copied into your **Media Library**. If a file was already imported, it is
 reused, not copied again. The plugin imports images, video, audio, PDF files, office documents,
@@ -52,6 +52,8 @@ When the product is synced again:
 - A global attribute that the client sends replaces the one on the product, even if you added it
   by hand.
 - A global attribute that the client sends empty is removed from the product.
+- If the client removes all the attributes of a product, the global ones go too, even those you
+  added by hand.
 - A global attribute that the client does not mention is kept as it is, together with the
   variations built on it. So global attributes you add by hand are safe, unless the client sends
   the same one.
@@ -92,9 +94,17 @@ If WPML is active, each product can have its own name, description and files per
 plugin creates or updates the translations for you. Translations are not generated automatically:
 the plugin uses the text sent by the client.
 
+Before the first sync, set **Products** to **Translatable** under **WPML > Settings > Post Types
+Translation**. WPML does not do it by itself. See
+[guide.md](guide.md#make-the-post-types-translatable-first).
+
 ## Good to know
 
 - Syncs are driven by the client. You don't need to press anything in the admin.
+- Sync goes one way only. Changes you make to a synced product in WooCommerce are not sent back to
+  On Page®, and the next sync can overwrite them.
+- A product's web address (slug) is set when the product is created. Renaming the product later
+  does not change it, unless the client explicitly asks for a new slug.
 - Products are matched by a stable On Page® identifier. Running a sync again updates the same
   product instead of creating a copy.
 - If you see two categories with the same name, the identifiers are out of sync. Ask whoever

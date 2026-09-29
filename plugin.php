@@ -114,6 +114,16 @@ require_once __DIR__ . '/src/Middlewares/Auth.php';
     if (\function_exists('acf_get_field_groups')) {
         require_once ONPAGE_PLUGIN_DIR . '/src/routes.php';
 
+        // An ACF older than 6.1 still gets the routes, so every call answers the specific
+        // `500 acf_version_unsupported` (see Middlewares\Auth) rather than a bare 404.
+        if (!\OnPage\Services\Acf::isSupportedVersion()) {
+            \add_action('admin_notices', function (): void {
+                if (!\current_user_can('activate_plugins')) return;
+
+                echo '<div class="notice notice-error"><p><strong>On Page®</strong> requires <strong>Advanced Custom Fields</strong> ' . \esc_html(\OnPage\Services\Acf::MIN_VERSION) . ' or later. Version ' . \esc_html((string) \OnPage\Services\Acf::installedVersion()) . ' is active. The On Page® REST API answers every call with an error until ACF is updated.</p></div>';
+            });
+        }
+
         return;
     }
 

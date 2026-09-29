@@ -95,6 +95,31 @@ Files are the key hand-off. `link()` returns a public URL, and the plugin accept
 **The client never downloads binaries.** It passes the URL. The WordPress side handles the
 download, the Media Library import and the deduplication.
 
+The SDK calls use your On Page® API token, so they count against that token's usage limits.
+
+### Two tokens
+
+A client holds two tokens. They are not interchangeable:
+
+| Token | Used for | Where it comes from |
+| --- | --- | --- |
+| On Page® API token | reading from On Page® with the SDK | On Page® |
+| plugin token | writing to the WordPress site | the **On Page®** admin page of that site (see [§3](#3-connecting)) |
+
+### Practices that pay off
+
+None of these is required by the plugin, but clients that follow them are easier to run:
+
+- **Keep secrets out of the repository.** Read both tokens and the site URL from the environment
+  or a secrets store.
+- **Allow a partial run.** Accept a list of `local_key`s, so you can re-sync a few items without
+  running the whole import.
+- **Keep two logs.** A progress log for humans, and a journal of every HTTP request and response.
+  The journal is what you need when a site reports an error.
+- **Fail fast.** Stop at the first unexpected error instead of pushing the rest of the batch. A
+  structure error usually breaks every later call too. Re-running is safe (see
+  [§4](#batches-are-not-transactional)).
+
 ---
 
 ## 2. Prerequisites
@@ -103,10 +128,12 @@ download, the Media Library import and the deduplication.
 | --- | --- | --- |
 | PHP 8.2+ | always | the plugin code does not run (`Requires PHP` in `plugin.php`) |
 | WordPress 7.1+ | always | declared minimum (`Requires at least`) |
-| **ACF** | **always** | **no route is registered at all** — see below |
+| **ACF 6.1+** | **always** | ACF missing: **no route is registered at all** — see below. ACF older than 6.1: every authenticated call answers `500 acf_version_unsupported`, and the dashboard shows a notice. The plugin needs 6.1 because it calls `acf_update_post_type()` and `acf_update_taxonomy()`, added in that version |
 | ACF PRO | only for its own field types (`repeater`, `flexible_content`, …) | the plugin does **not** check the ACF edition. `POST /field-groups` passes `fields[].type` straight to `acf_update_field()` and still answers `200`. A PRO-only field is stored but does not work |
 | WooCommerce | only for `/woocommerce/*` | `500 woocommerce_required` on each request |
 | WPML | only for language-map payloads | `500 wpml_required` on each request |
+| WPML: post types set to **Translatable** | for multilingual posts and products | `500 wpml_error` (*Unable to resolve translation group*) or `500 request_failed` (*Failed to initialize WPML language details*). The plugin marks its taxonomies translatable, but not post types. The site admin sets them in **WPML > Settings > Post Types Translation**, `product` included, before the first multilingual import |
+| PHP `max_execution_time` and `memory_limit` sized for media | when payloads carry files | media is downloaded synchronously, one file after another, inside the request (see [§11](#timing)). A request cut off by the server leaves the element half written |
 | Pretty permalinks (anything but **Plain**) | only for the `/wp-json/` URL form | with **Plain**, `/wp-json/onpage/v1/…` returns 404. The same routes stay reachable at `/?rest_route=/onpage/v1/…` |
 
 ### ACF is a hard dependency
@@ -120,13 +147,20 @@ exists. With ACF inactive:
 
 This is deliberate. The plugin calls ACF's API without guards:
 
-- `Acf::loadFieldTypeMap()` calls `acf_get_field_groups()` (`src/Services/Acf.php:145`) on the
+- `Acf::loadFieldTypeMap()` calls `acf_get_field_groups()` (`src/Services/Acf.php:188`) on the
   ACF-aware routes.
 - The post-type, field-group and taxonomy services call `acf_get_acf_post_types()` /
   `acf_get_field_groups()` directly (`src/Services/PostType.php:19`,
   `src/Services/FieldGroup.php:40`, `src/Services/Taxonomy.php:290`).
 
 If the routes were registered without ACF, they would die with a PHP fatal instead of answering.
+
+An ACF older than 6.1 (`Acf::MIN_VERSION`) lacks `acf_update_post_type()` and
+`acf_update_taxonomy()`. In that case the routes are still registered, and the dashboard shows a
+notice. After the token check, `Middlewares\Auth::handle()` calls
+`Acf::requireSupportedVersion()`, so every call answers `500 acf_version_unsupported` with the
+active version in the message. The version is read from `acf_get_setting('version')`, or
+`ACF_VERSION`. A version that cannot be read is not blocked.
 
 > A `404` on *every* endpoint means ACF is inactive or permalinks are on **Plain**. The body tells
 > them apart:
@@ -151,6 +185,9 @@ https://<site>/wp-json/onpage/v1
   capability).
 - It is created with `bin2hex(random_bytes(32))`: 64 lowercase hex characters.
 - It is stored in the non-autoloaded option `onpage_auth_token`.
+- There is one token per site. It has no expiry and no rotation: regenerating it invalidates the old
+  one at once, with no grace period. A run in progress then fails with `403`. Ask the site admin to
+  regenerate it in a maintenance window.
 
 All 44 routes are authenticated. There is no public route. There is no capability check beyond the
 token.
@@ -235,13 +272,12 @@ Each endpoint loops over the payload and throws on the first failure. As a resul
 
 Within a single element there is a partial rollback. The *create* path of `POST /posts` and
 `POST /woocommerce/products` wraps its work in `try`/`catch`. On failure it hard-deletes the rows
-it just created, translations included, then re-throws (`src/Services/Post.php:1986-1991`). So a
+it just created, translations included, then re-throws (`src/Services/Post.php:2002-2008`). So a
 failed element usually leaves nothing behind. Earlier elements of the same batch stay.
 
 Most per-element errors carry `Element <i>`: the 0-based position in your array. That index is the
-only machine-usable locator. Some errors omit it, including the post insert errors
-`duplicate_title` and `duplicate_local_key` (`src/Services/Post.php:641`, `:645`). When the index
-is absent, match on the message instead.
+only machine-usable locator. A few errors omit it, such as `Post :: PostType '<type>' not found`.
+When the index is absent, match on the message instead.
 
 Re-running the same batch is safe. That is why partial state is acceptable.
 
@@ -252,7 +288,7 @@ Deliberate errors are WordPress `WP_Error`s:
 ```json
 {
   "code": "duplicate_title",
-  "message": "Post :: Title 'Red Chair' already exists for PostType 'product'",
+  "message": "Post :: Element 0 :: Title 'Red Chair' already exists for PostType 'product'",
   "data": { "status": 409 }
 }
 ```
@@ -291,6 +327,10 @@ means a bug, not a contract violation. Report it with the message.
 Only two routes paginate: `GET /posts` and `GET /media`. Every other route returns the complete
 set. Read the `X-WP-TotalPages` header to know when to stop. On `GET /posts`, the `?id=` and
 `?title=` lookups return no pagination headers at all.
+
+`GET /woocommerce/products` and `GET /woocommerce/variant-products` return every match in a single
+response. Always filter them (`?local_key=`, `?id=`, `?parent_id=`) instead of listing a whole
+catalogue.
 
 The full rules are in [API.md: Pagination](../API.md#pagination).
 
@@ -369,8 +409,8 @@ A failed element therefore leaves nothing keyed.
 them from scratch. It does **not** touch the global attribute keys in the
 `onpage_wc_attribute_local_key_{attribute_id}` options. Those survive the wipe.
 
-`POST /migration` is not part of a new client. It only upgrades a site that ran a legacy build
-of the plugin. On a site keyed by this version it does nothing.
+`POST /migration` is not part of a normal import. Call it once after a plugin update, when the
+release notes ask for it. On a site with nothing to migrate it does nothing.
 
 ---
 
@@ -419,6 +459,7 @@ What happens when you break the order:
 | two variations of one parent with the same attributes | `409 duplicate_variation` — *Parent product … already has variation … with attributes […]* |
 | language map on a site without WPML | `500 wpml_required`, naming the exact field path |
 | `/woocommerce/*` without WooCommerce | `500 woocommerce_required` |
+| any call on a site with ACF older than 6.1 | `500 acf_version_unsupported`, naming the active version |
 
 Two constraints cause most problems:
 
@@ -854,6 +895,16 @@ plugin then:
   the Italian title as it is. Shared (non-map) values are written to every language;
 - repairs translation slots left orphaned by a killed import.
 
+Before the first multilingual import, the post types must be translatable in WPML (see
+[§2](#2-prerequisites)).
+
+Some calls act on one object, not on its translation group:
+
+- `DELETE /terms` deletes only the term IDs you send. To delete a term in every language, read its
+  `translations` map (from `GET /terms`) and send all its IDs.
+- `POST /media/link` updates a single post. To set a file on every translation, send it in `files`
+  on `POST /posts`, as a shared value or a language map.
+
 ---
 
 ## 11. Media and files
@@ -863,7 +914,15 @@ remote URL.
 
 Inside `acf_fields` this covers only the ACF types `image` and `file`, including as `repeater`,
 `group` and `flexible_content` sub-fields. Values of `gallery` fields are stored verbatim and never
-imported.
+imported: send a list of `attachment_id`s. To fill a gallery from URLs, upload or link each file
+first (`POST /media`, or a URL in a `files` slot), then send the ids you got back:
+
+```json
+"acf_fields": { "photos": [812, 813, 814] }
+```
+
+The shape of every other ACF field type is in
+[API.md: Value shapes by field type](../API.md#value-shapes-by-field-type).
 
 ### Attachment ids vs URLs
 
@@ -1066,7 +1125,8 @@ Parse the `code`, not the message shape.
 | `parent_mismatch` | 409 | `parent_id` and `parent` point at different parents | send only one of the two |
 | `wpml_required` | 500 | language map sent to a site without WPML | install WPML, or send scalars |
 | `woocommerce_required` | 500 | `/woocommerce/*` with WooCommerce inactive | activate WooCommerce |
-| `wpml_error` / `acf_error` | 500 | WPML or ACF refused a write | check the message. Usually a field-group or language misconfiguration |
+| `acf_version_unsupported` | 500 | the active ACF is older than 6.1. Checked after the token, so it needs a valid one | ask the site admin to update ACF |
+| `wpml_error` / `acf_error` | 500 | WPML or ACF refused a write | check the message. Usually a field-group or language misconfiguration. *Unable to resolve translation group* on a post or product means its post type is not translatable in WPML (see [§2](#2-prerequisites)) |
 | `file_too_large` | 413 | a remote file is larger than the download cap (512 MB by default, filter `onpage_remote_media_max_bytes`) | shrink the file, or ask the site admin to raise the cap |
 | `request_failed` | 500 | a WordPress query or write failed; a remote file could not be downloaded, sanitised or imported (a refused file type or a redirect to a non-public host included); or any unexpected exception, caught by the router and returned with its original message | check the message and the site error log. An unexpected exception is a bug: report it |
 | `migration_failed` | 500 | `POST /migration` could not read or rewrite meta | check DB permissions, then re-run. It is idempotent |
@@ -1089,8 +1149,8 @@ Two sources can answer with a code outside this table:
 - **`fields[].key` is the ACF field *name*.** It is what you put in `acf_fields`. The plugin
   manages the internal ACF `field_...` key and preserves it across updates.
 - **`attributes`, `gallery` and `downloads` are replaced wholesale**, not merged. `null` or `[]`
-  clears them. For `attributes` this means the custom attributes: global `pa_*` attributes
-  already on the product and not sent stay.
+  clears them. For `attributes`, a non-empty object keeps the global `pa_*` attributes it does
+  not name, but `null` or `{}` removes every attribute, global ones included.
 - **`props.product_type: "simple"` on a variable product deletes its variations.** WooCommerce
   removes them for good when the type changes from `variable` to `simple`. Send `product_type`
   only when you mean to set or change it.
@@ -1100,7 +1160,16 @@ Two sources can answer with a code outside this table:
   such as a bad `tax_status` or `catalog_visibility`), fails with `400 invalid_param`. Props accept language maps on
   products and on variations alike.
 - **Slugs are stable by design.** A product slug is written on insert and then left alone. To
-  change it, send `update_slug: true` (a real JSON boolean).
+  change it, send `update_slug: true` (a real JSON boolean). Posts have no `slug` key at all:
+  WordPress generates the slug from the title and never changes it after the post is published.
+- **Absent, present, `null`.** On products, a key left out of the payload leaves the value as it
+  is. A key that is present replaces the value entirely. `null` or an empty list clears it. The
+  exceptions are listed in [API.md: Missing, present and null keys](../API.md#missing-present-and-null-keys).
+  The main one: `null` on an enum or boolean prop, such as `stock_status` or `featured`, leaves
+  it as it is. Send the value you want instead.
+- **Unknown keys are ignored.** A misspelled top-level key on `POST /woocommerce/products` or
+  `POST /woocommerce/variant-products` is dropped with no error, and the call answers `200`.
+  Variations also ignore `terms`, `gallery`, `slug` and `downloads`.
 - **WooCommerce term references are `local_key` only.** Slugs work in `Post` payloads and nowhere
   else.
 - **`parent: 0` is rejected on `product_cat` and `product_brand`** (`400 invalid_param`). There

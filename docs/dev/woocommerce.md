@@ -31,10 +31,14 @@ products, except for products in the same WPML translation group.
 When saving, the service (`Product::persistProductFromParams()`), once per language:
 
 1. Creates or loads the correct WooCommerce object (`simple` or `variable`).
-2. Applies title, descriptions and status. `Product::normalizeProductPayload()` always fills
-   `status` (`normalizeStatus()`, default `publish`), so a save without `status` publishes the
-   product and its translations, on update too.
-3. Applies native fields from `props`.
+2. Applies title, descriptions and status. `Product::normalizeProductPayload()` keeps `status`
+   only when the payload sends it (`normalizeStatus()` returns `null` otherwise). A new product
+   then defaults to `publish`. An existing product keeps its status, and a translation that an
+   update creates takes the status of the existing product
+   (`Product::insertMissingProductTranslations()`).
+3. Applies native fields from `props`. A `null` prop listed in `NULL_KEEPS_VALUE_FIELD_KEYS` is
+   skipped: the enum and boolean props, which WooCommerce cannot leave empty. The same list
+   exists in `VariantProduct`.
 4. Applies attributes (see [Attributes](#attributes)) and downloads.
 5. Saves the product with `$product->save()`.
 6. Updates `local_key`, the public download IDs, image and gallery.
@@ -73,11 +77,13 @@ borrowed content. This is the same rule as for posts and terms.
   mapped to the product's language through `wpml_object_id`. On save WooCommerce links the
   product to those terms, so the variation selector on the product page is filled.
 - Any other key is a custom attribute.
-- The **global** attributes (`pa_*`) already on the product and not in the payload are kept as
-  they are: their options, visibility and "used for variations" flag. A site admin may have added
+- When the payload is a non-empty object, the **global** attributes (`pa_*`) already on the
+  product and not in the payload are kept as they are: their options, visibility and "used for variations" flag. A site admin may have added
   them in WooCommerce, and variations may be built on them.
 - A global key sent with `null` or `[]` removes that global attribute from the product. An empty string `""` is rejected with `400 invalid_param`.
-- `attributes: null` or `{}` removes the custom attributes only.
+- `attributes: null` or `{}` removes every attribute, custom and global
+  (`Product::applyProductAttributes()` checks the payload before the per-language filter, so a
+  map that only lacks the current language never reads as an empty set).
 
 On a `variable` product, the attributes sent are marked as used for variations.
 
@@ -176,7 +182,7 @@ WooCommerce only serves downloads from approved directories. When approval is en
   another plugin).
 
 The remote URL a client sent is never approved: only the local URL of the imported file is.
-Per-month rules created by earlier versions are not removed.
+The plugin never removes an approved-directory rule.
 
 ## Media Library import
 
@@ -276,8 +282,7 @@ The copy only touches variations that still inherit from the parent:
   in the variation meta `_onpage_inherited_downloads`.
 - A variation whose current downloads are not empty and differ from that fingerprint has its own
   downloads, set by a site admin in WooCommerce. It is skipped.
-- A variation with no fingerprint yet (copied by an earlier version, which always overwrote) is
-  overwritten once, then tracked.
+- A variation with downloads but no fingerprint yet is overwritten once, then tracked.
 - A variation that already has the parent's downloads is not saved again. Repeated syncs, one per
   language, are idempotent.
 
@@ -297,8 +302,9 @@ given parent. Before saving, it checks:
   [pa_color=red, size=(any)]`.
 
 The `props` fields accept a WPML language map, like product props. Each language gets its own
-value. The resolved value must be a scalar or `null` (`400 invalid_param` otherwise). `sku` is
-skipped on translated variations, because WooCommerce requires it to be unique.
+value. The resolved value must be a scalar or `null` (`400 invalid_param` otherwise). `null` on
+an enum or boolean prop leaves it as it is, as on products. `sku` is skipped on translated
+variations, because WooCommerce requires it to be unique.
 
 ### Translated variations
 

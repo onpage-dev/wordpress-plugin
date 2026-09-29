@@ -8,11 +8,54 @@ namespace OnPage\Services;
 
 class Acf
 {
+    /**
+     * Oldest ACF release the plugin supports: 6.1 added `acf_update_post_type()` and
+     * `acf_update_taxonomy()`, which the post-type and taxonomy services call unguarded.
+     */
+    public const MIN_VERSION = '6.1';
+
     private const FIELD_TYPE_CONTEXTS = ['post', 'term'];
     /** ACF location rules that match posts of any type. */
     private const POST_LOCATION_PARAMS = ['post', 'post_template', 'post_status', 'post_format', 'post_category', 'post_taxonomy'];
     /** ACF location rules that only match pages. */
     private const PAGE_LOCATION_PARAMS = ['page', 'page_template', 'page_type', 'page_parent'];
+
+    /** Version of the active ACF, or null when it cannot be read. */
+    public static function installedVersion(): ?string
+    {
+        $version = \function_exists('acf_get_setting') ? \acf_get_setting('version') : null;
+        if ((!is_string($version) || $version === '') && \defined('ACF_VERSION')) {
+            $version = \constant('ACF_VERSION');
+        }
+
+        return is_string($version) && $version !== '' ? $version : null;
+    }
+
+    /**
+     * Whether the active ACF is recent enough. An unreadable version is not treated as too
+     * old: blocking every request on a guess would be worse than the fatal it prevents.
+     */
+    public static function isSupportedVersion(): bool
+    {
+        $version = self::installedVersion();
+
+        return $version === null || \version_compare($version, self::MIN_VERSION, '>=');
+    }
+
+    /**
+     * Stops the request with a specific error when ACF is older than MIN_VERSION, instead of
+     * letting the first call to a missing ACF function end as `500 request_failed`.
+     */
+    public static function requireSupportedVersion(): void
+    {
+        if (self::isSupportedVersion()) return;
+
+        throw onpage_http_exception(
+            'On Page® requires Advanced Custom Fields ' . self::MIN_VERSION . ' or later; version ' . self::installedVersion() . ' is active',
+            500,
+            'acf_version_unsupported'
+        );
+    }
 
     /** Cached ACF field types indexed globally and by field group location scope. */
     private static ?array $fieldTypeMap = null;
