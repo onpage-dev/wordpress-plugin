@@ -698,6 +698,8 @@ class Term
             'slug_map' => $slug_map,
             'description_map' => $description_map,
             'acf_field_map' => $acf_field_map,
+            'has_slug' => array_key_exists('slug', $params),
+            'has_description' => array_key_exists('description', $params),
             'translated_languages' => $translated_languages,
             'fallback_language' => $fallback_language,
             'base_language' => $base_language,
@@ -819,17 +821,45 @@ class Term
         return $value_map['shared'] ?? null;
     }
 
-    /** Base term data shared by insert/update operations. */
-    private static function buildTermData(array $payload, string $taxonomy, ?string $language_code = null): array
+    /**
+     * Base term data shared by insert/update operations.
+     *
+     * $keep_unsent_languages is set when the term already exists in $language_code: a
+     * language map without that language then leaves the field as it is, instead of
+     * borrowing the fallback language's value, and an omitted description is kept. A
+     * term created by this request keeps the fallback, so it never starts empty.
+     */
+    private static function buildTermData(array $payload, string $taxonomy, ?string $language_code = null, bool $keep_unsent_languages = false): array
     {
         $slug = self::getSlugForLanguage($payload, $language_code);
         $description = MultiLang::getValueForLanguage($payload['description_map'], $language_code, $payload['fallback_language']);
 
-        return [
+        $data = [
             'description' => is_scalar($description) ? (string) $description : '',
             'slug' => is_scalar($slug) ? (string) $slug : '',
             'parent' => self::getParentForLanguage($payload, $taxonomy, $language_code),
         ];
+
+        if ($keep_unsent_languages) {
+            if (!$payload['has_description'] || !MultiLang::hasValueForLanguage($payload['description_map'], $language_code)) {
+                unset($data['description']);
+            }
+            if ($payload['has_slug'] && !MultiLang::hasValueForLanguage($payload['slug_map'], $language_code)) {
+                unset($data['slug']);
+            }
+        }
+
+        return $data;
+    }
+
+    /** ACF fields to write for one language (see buildTermData() for $keep_unsent_languages). */
+    private static function getAcfFieldsForLanguage(array $payload, ?string $language_code, bool $keep_unsent_languages): array
+    {
+        return MultiLang::getFieldsForLanguage(
+            $payload['acf_field_map'],
+            $language_code,
+            $keep_unsent_languages ? null : $payload['fallback_language']
+        );
     }
 
     /** Resolves an internal parent local_key to the language-specific term ID when possible. */
@@ -1238,14 +1268,19 @@ class Term
             return $error;
         }
 
+        // A description left out of $data keeps the stored one, as wp_update_term() does.
+        $taxonomy_data = ['parent' => isset($data['parent']) ? (int) $data['parent'] : 0];
+        $taxonomy_formats = ['%d'];
+        if (array_key_exists('description', $data)) {
+            $taxonomy_data['description'] = is_scalar($data['description']) ? (string) $data['description'] : '';
+            $taxonomy_formats[] = '%s';
+        }
+
         $taxonomy_updated = $wpdb->update(
             $wpdb->term_taxonomy,
-            [
-                'description' => is_scalar($data['description'] ?? null) ? (string) $data['description'] : '',
-                'parent' => isset($data['parent']) ? (int) $data['parent'] : 0,
-            ],
+            $taxonomy_data,
             ['term_taxonomy_id' => $term_taxonomy_id],
-            ['%s', '%d'],
+            $taxonomy_formats,
             ['%d']
         );
         if ($taxonomy_updated === false) {
@@ -1373,7 +1408,8 @@ class Term
             $term_id = self::getTermIdForLanguage($term_id, $taxonomy, $payload['base_language']);
         }
 
-        $data = self::buildTermData($payload, $taxonomy, $payload['base_language']);
+        $keep_unsent_languages = $term_id > 0;
+        $data = self::buildTermData($payload, $taxonomy, $payload['base_language'], $keep_unsent_languages);
 
         $result = self::upsertTermData($term_id, $taxonomy, $data, $base_name, $payload['base_language'], $payload['local_key']);
 
@@ -1385,7 +1421,7 @@ class Term
         self::setTermLocalKey($resolved_term_id, $payload['local_key']);
         self::ensureBaseTermLanguage($resolved_term_id, $taxonomy, $payload['base_language']);
 
-        $base_fields = MultiLang::getFieldsForLanguage($payload['acf_field_map'], $payload['base_language'], $payload['fallback_language']);
+        $base_fields = self::getAcfFieldsForLanguage($payload, $payload['base_language'], $keep_unsent_languages);
         if (!empty($base_fields)) {
             self::updateAcfFields($resolved_term_id, $taxonomy, $base_fields, $element_index, $payload['base_language']);
         }
@@ -1467,6 +1503,11 @@ class Term
                 $translated_term_id = ($slug_term_id && self::termMatchesLocalKey($slug_term_id, $payload['local_key'])) ? $slug_term_id : 0;
             }
 
+            $keep_unsent_languages = $translated_term_id > 0;
+            if ($keep_unsent_languages) {
+                $translated_data = self::buildTermData($payload, $taxonomy, (string) $language_code, true);
+            }
+
             $translated_result = self::upsertTermData(
                 $translated_term_id,
                 $taxonomy,
@@ -1499,7 +1540,7 @@ class Term
 
             self::setTermLocalKey($translated_term_id, $payload['local_key']);
 
-            $translated_fields = MultiLang::getFieldsForLanguage($payload['acf_field_map'], $language_code, $payload['fallback_language']);
+            $translated_fields = self::getAcfFieldsForLanguage($payload, (string) $language_code, $keep_unsent_languages);
             if (!empty($translated_fields)) {
                 self::updateAcfFields($translated_term_id, $taxonomy, $translated_fields, $element_index, $language_code);
             }

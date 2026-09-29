@@ -171,7 +171,9 @@ The fallback only fills languages created by the current request. On update, a l
 already exists in the WPML group ignores a language map without its key and keeps its stored
 value: `MultiLang::isMapWithoutLanguage()`, `withoutMapsMissingLanguage()` and
 `hasValueForLanguage()` implement that check. Without it, `{"title": {"en": "Red Chair"}}` also
-renamed the Italian translation.
+renamed the Italian translation. Posts, products (`keep_unsent_languages`), terms
+(`Term::buildTermData()` and `getAcfFieldsForLanguage()`) and variations
+(`VariantProduct::withoutMapsMissingLanguage()` and `applyAttributes()`) all apply it.
 
 A map with no active language (`{"es": "Silla"}` on an it/en site) writes no language at all.
 `splitValueByLanguage()` puts such a map in `shared`, so `hasValueForLanguage()` checks
@@ -755,6 +757,11 @@ After creating or updating the base term, the service:
 - saves the base-language ACF fields through `Acf::updateFieldValue()`, which imports `image` and
   `file` URLs (see [ACF field names](#6-acf-field-names))
 
+When the base term already exists, `buildTermData()` runs with `$keep_unsent_languages`: a
+`description` or `slug` map without the base language is left out of the `wp_update_term()` args,
+and so is an omitted `description`. WordPress then keeps the stored values. The ACF fields skip the
+fallback language the same way (see [Fallback language](#3-fallback-language)).
+
 ### 6. Initializing WPML
 
 If the payload contains translations, the service:
@@ -774,7 +781,8 @@ For each language other than the base language, the service:
 - otherwise adopts a same-language term with the payload slug, but only when no other `local_key`
   owns it
 - updates the translated term if it exists, otherwise creates it and links it to the base term's
-  `trid`
+  `trid`. An existing translation keeps the fields whose map leaves its language out, as the base
+  term does
 - saves `local_key` and the ACF fields for that language
 
 Finally `local_key` is written on every member of the translation group, including translations

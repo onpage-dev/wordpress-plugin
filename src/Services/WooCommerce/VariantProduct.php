@@ -636,7 +636,13 @@ class VariantProduct
         $payload_languages = array_flip(array_map('strval', $language['translated_languages']));
         foreach ($parent_translation_ids as $language_code => $translated_parent_id) {
             $language_code = (string) $language_code;
-            if ($language_code === $source_language || !isset($payload_languages[$language_code])) {
+            if ($language_code === $source_language) {
+                continue;
+            }
+
+            // A language the payload never sends is not created, but an existing translation
+            // still takes the shared values: its maps without that language are skipped below.
+            if (!isset($payload_languages[$language_code]) && !isset($translations[$language_code])) {
                 continue;
             }
 
@@ -653,6 +659,9 @@ class VariantProduct
                 : null;
             if ($translated_variation_id && (int) \wp_get_post_parent_id($translated_variation_id) !== $translated_parent_id) {
                 $translated_variation_id = null;
+            }
+            if ($translated_variation_id === null && !isset($payload_languages[$language_code])) {
+                continue;
             }
 
             $translated_parent = self::requireVariableParentById($translated_parent_id, $element_index);
@@ -711,6 +720,14 @@ class VariantProduct
         }
         self::assertLocalKeyAvailableForParentSet($local_key, $variation_id, $parent_id, $allowed_parent_ids, $element_index);
 
+        // A variation that already exists in this language keeps the fields whose language map
+        // leaves the language out, instead of borrowing the fallback language's value (the same
+        // rule as posts and products). A variation created by this request keeps the fallback.
+        $keep_unsent_languages = $variation_id !== null && $language_code !== null;
+        if ($keep_unsent_languages) {
+            $params = self::withoutMapsMissingLanguage($params, $language_code);
+        }
+
         return Wpml::runWithLanguage($language_code, function () use (
             $variation,
             $parent,
@@ -721,12 +738,13 @@ class VariantProduct
             $fallback_language,
             $variation_id,
             $parent_id,
-            $is_translation
+            $is_translation,
+            $keep_unsent_languages
         ): int {
             $variation->set_parent_id($parent_id);
             try {
                 self::applyFields($variation, $params, $element_index, $language_code, $fallback_language, $is_translation);
-                self::applyAttributes($variation, $parent, $params, $element_index, $variation_id === null, $language_code, $fallback_language);
+                self::applyAttributes($variation, $parent, $params, $element_index, $variation_id === null, $language_code, $fallback_language, $keep_unsent_languages);
                 if (array_key_exists('attributes', $params)) {
                     self::assertAttributeCombinationAvailable($variation, $parent, $variation_id, $element_index);
                 }
@@ -751,6 +769,24 @@ class VariantProduct
 
             return $saved_id;
         });
+    }
+
+    /** Drops the fields sent as a language map without this language (see MultiLang::isMapWithoutLanguage()). */
+    private static function withoutMapsMissingLanguage(array $params, string $language_code): array
+    {
+        foreach (['name', 'description', 'short_description', 'long_description', 'image'] as $key) {
+            if (array_key_exists($key, $params) && MultiLang::isMapWithoutLanguage($params[$key], $language_code)) {
+                unset($params[$key]);
+            }
+        }
+
+        foreach (['props', 'acf_fields'] as $key) {
+            if (is_array($params[$key] ?? null) && !array_is_list($params[$key])) {
+                $params[$key] = MultiLang::withoutMapsMissingLanguage($params[$key], $language_code);
+            }
+        }
+
+        return $params;
     }
 
     /** Returns the parent product IDs that may share translated variations with the same local_key. */
@@ -935,7 +971,12 @@ class VariantProduct
         $variation->save();
     }
 
-    /** Applies variation attributes after validating them against parent variation attributes. */
+    /**
+     * Applies variation attributes after validating them against parent variation attributes.
+     *
+     * With $keep_unsent_languages, an attribute sent as a language map without this language
+     * keeps the variation's current value, when it has one.
+     */
     private static function applyAttributes(
         \WC_Product_Variation $variation,
         \WC_Product_Variable $parent,
@@ -943,7 +984,8 @@ class VariantProduct
         int $element_index,
         bool $creating,
         ?string $language_code = null,
-        ?string $fallback_language = null
+        ?string $fallback_language = null,
+        bool $keep_unsent_languages = false
     ): void {
         if (!array_key_exists('attributes', $params)) {
             if ($creating) {
@@ -959,9 +1001,19 @@ class VariantProduct
         }
 
         $parent_attributes = self::getParentVariationAttributes($parent);
+        $current_attributes = $keep_unsent_languages ? $variation->get_attributes() : [];
         $attributes = [];
 
         foreach ($payload as $attribute_name => $value) {
+            if ($keep_unsent_languages && MultiLang::isMapWithoutLanguage($value, $language_code)) {
+                $current_key = self::normalizeAttributeKey((string) $attribute_name);
+                $current_value = $current_attributes[$current_key] ?? '';
+                if (isset($parent_attributes[$current_key]) && is_scalar($current_value) && (string) $current_value !== '') {
+                    $attributes[$current_key] = (string) $current_value;
+                    continue;
+                }
+            }
+
             $attribute_value = self::resolveVariationAttributePayloadValue(
                 $value,
                 (string) $attribute_name,

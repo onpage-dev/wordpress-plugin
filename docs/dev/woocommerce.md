@@ -312,6 +312,15 @@ With WPML and a payload in several languages, the variation is saved under the s
 parent first, then under each translated parent. A translation is found by `local_key` under its
 own parent, or created there. `id` always names the source-language variation.
 
+A language that no map in the payload contains is never created. Its existing translation is still
+saved, so it takes the shared values.
+
+On update, an existing variation keeps every field whose language map leaves its language out,
+as products do. `VariantProduct::withoutMapsMissingLanguage()` removes those fields from the
+payload before the save. In `applyAttributes()`, such an attribute keeps the variation's current
+value. This applies to the source-language variation too. A variation created by the request still
+takes the fallback language.
+
 ### Variations with values no longer offered
 
 When a product save with `attributes` removes an option (or a whole variation attribute) that

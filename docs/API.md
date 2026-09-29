@@ -2429,6 +2429,8 @@ Body:
 
 - If `name`, `description`, `short_description`, `long_description`, `image`, `attributes`, `acf_fields` or a `props` value contain language maps, the endpoint updates the variation of the resolved parent. It then creates or updates the variations for the payload languages that already have a translation of the parent.
 - Languages without a translated parent are ignored until that parent translation exists.
+- On update, a language map writes only the languages it contains, as on `POST /woocommerce/products`. `{"short_description": {"en": "Red"}}` changes the English variation and leaves the Italian description as it is. The same applies to `name`, `description`, `image`, each value in `props`, `acf_fields` and `attributes`. An attribute sent as a map without a language keeps that language's current value. This includes the variation in the parent's language: a map without that language leaves it as it is.
+- Shared values are written to every existing translated variation, including those in a language no map contains. A language that no map contains is never created. A new translation created by the same request still falls back to the first language of the payload, so it never starts empty.
 - Each translated variation is looked up under its own translated parent: first the variation of that language in the WPML group of the source variation, then the variation with the same `local_key`. If neither exists, it is created there and linked to the WPML group. This also works when the payload has an `id`: the `id` names the variation in the parent's language only.
 - The response contains the variation ID in the language of the parent resolved from `parent_id` or `parent`. The other translated variations are created or updated in the same batch.
 
@@ -3141,7 +3143,7 @@ Simple payload:
 | `id` | no | If present, the term is updated. A malformed `id` (not a positive ID) is silently ignored: the term is then resolved by `local_key` or `slug`, and a new term may be created. |
 | `name` | yes | Required on every save, update included. |
 | `slug` | no | |
-| `description` | no | |
+| `description` | no | Omitted on update: the stored description is kept. |
 | `local_key` | no | Stable external identifier. If sent, it must be a positive integer or a non-empty string (`400 invalid_param`). |
 | `parent` | no | WordPress term ID of the parent. Default `0` (top level). A term that does not exist in the taxonomy returns `404 not_found`; a value that is not a term ID, `0` or `null` returns `400 invalid_param`. Unlike `id`, a malformed `parent` is never ignored. |
 | `acf_fields` | no | Associative object `field_name => value`. |
@@ -3225,6 +3227,7 @@ Rules:
   - If none of the codes is active, the map is treated as a shared value. The plugin then uses the first language of the map that has a name.
   - At least one language must have a name, otherwise `400 invalid_param`.
 - Translations are created or updated in the same WPML group as the base term.
+- On update, a language map writes only the languages it contains, as on `POST /posts`. `{"name": {"en": "Chairs", "it": "Sedie"}, "description": {"en": "Comfy"}}` changes the English description and leaves the Italian one as it is. The same applies to `slug` and to each value in `acf_fields`. A translation is written only when `name` has a value for its language. A new translation created by the same request still falls back to the first language that has a name, so it never starts empty.
 - `local_key` is propagated to the translated terms too, as term meta.
 
 Response `200`:

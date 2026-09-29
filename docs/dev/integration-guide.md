@@ -929,8 +929,29 @@ plugin then:
   content;
 - backfills missing languages on update;
 - on update, writes only the languages each map contains. `{"title": {"en": "Red Chair"}}` leaves
-  the Italian title as it is. Shared (non-map) values are written to every language;
+  the Italian title as it is. Shared (non-map) values are written to every language. The same
+  rule holds for terms and variations (see below);
 - repairs translation slots left orphaned by a killed import.
+
+#### Terms and variations on update
+
+Terms and variations follow the same update rule as posts and products. This covers `POST /terms`,
+every WooCommerce endpoint that saves terms (brands, categories, tags, attribute terms) and
+`POST /woocommerce/variant-products`.
+
+- A translation that already exists keeps every field whose map leaves its language out.
+- Shared values are still written to every existing translation. A term translation is the
+  exception: it is written only when the payload has a `name` in its language.
+- A field you leave out keeps its value. On terms, this includes `description`.
+- A language that is in no map is never created. A translation that the same request creates
+  still takes the fallback language, so it never starts empty.
+
+| Payload on update (site with `en` and `it`) | Result |
+| --- | --- |
+| Term `{"name": {"en": "Chairs", "it": "Sedie"}, "description": {"en": "Comfy"}}` | Only the English description changes. The Italian one stays. |
+| Term `{"name": {"en": "Chairs", "it": "Sedie"}}` | Both descriptions stay. |
+| Variation `{"description": {"en": "Red"}, "attributes": {"Finish": {"en": "Matte"}}}` | Only the English variation changes. The Italian one keeps its description and attribute. |
+| Variation `{"description": {"it": "Rosso"}, "props": {"regular_price": "12"}}` | The variation in the parent's language keeps its description. Both take the price. |
 
 Before the first multilingual import, the post types must be translatable in WPML (see
 [§2](#2-prerequisites)).

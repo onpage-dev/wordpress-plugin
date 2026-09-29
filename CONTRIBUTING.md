@@ -74,12 +74,14 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
 | `ProductLanguageMaps.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` (default) and `it` active |
 | `ProductUpdateUnsentValues.php` | end-to-end | a site with ACF and WooCommerce |
+| `TermVariationUnsentLanguages.php` | end-to-end | a site with WooCommerce and WPML, with `en` (default) and `it` active |
 | `TermDeleteByLocalKey.php` | end-to-end | a site with ACF and WPML, with `en` and `it` active |
 | `WooCommerceCatalog.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` and `it` active |
 
 - **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
 - **End-to-end tests** call the REST API of a real WordPress site with the plugin active. Only
-  `WooCommerceCatalog.php`, `TermDeleteByLocalKey.php` and `ProductLanguageMaps.php` need WPML.
+  `WooCommerceCatalog.php`, `TermDeleteByLocalKey.php`, `ProductLanguageMaps.php` and
+  `TermVariationUnsentLanguages.php` need WPML.
 
 ### Running them
 
@@ -182,6 +184,12 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   language, and keeps it that way on update. A scalar `name` beside a `short_description` map is
   the name of both translations, and a later scalar-only update writes every translation without
   creating new ones.
+- **`TermVariationUnsentLanguages.php`** checks that an update of a term or a variation writes
+  only the languages each map contains. On `POST /woocommerce/categories`, a `description` map
+  without `it` keeps the Italian description, and an omitted `description` keeps both. On
+  `POST /woocommerce/variant-products`, a `description` or `attributes` map without a language
+  keeps that language's values, the parent's language included, while a shared price reaches both
+  translations.
 - **`TermDeleteByLocalKey.php`** checks that `DELETE /terms` with an ID deletes that term only,
   while a `local_key` deletes every WPML translation. It checks the translation group both on
   `category` and on a custom ACF taxonomy that it creates, where the taxonomy is resolved from the

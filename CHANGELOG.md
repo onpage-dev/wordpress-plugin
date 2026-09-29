@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With Advanced Custom Fields older than 6.1, every endpoint now answers `500 acf_version_unsupported`, naming the active version, and the admin shows a notice. Such calls used to fail with a generic `500 request_failed`.
 
 ### Fixed
+- `POST /terms`, the WooCommerce term endpoints (brands, categories, tags, attribute terms) and `POST /woocommerce/variant-products` no longer overwrite a language that a language map leaves out on update: `{"description": {"en": "Comfy"}}` now changes only the English description instead of copying it into the other translations.
+- `POST /terms` and the WooCommerce term endpoints no longer clear the description of an existing term when the payload omits `description`.
+- `POST /woocommerce/variant-products` now writes shared values, such as `props.regular_price`, to every existing translated variation, including those in a language that no map in the payload contains.
 - `POST /posts` and `POST /woocommerce/products` no longer overwrite a language that a language map leaves out on update: `{"title": {"en": "Red Chair"}}` now renames only the English translation instead of every language in the WPML group.
 - `POST /woocommerce/products` no longer publishes an existing product when the payload has no `status`: an update keeps the current status of every language. A new product still defaults to `publish`.
 - `POST /woocommerce/products` with `attributes: null` or `{}` now removes every attribute of the product, global `pa_*` attributes included, instead of the custom ones only. A non-empty `attributes` object still keeps the global attributes it does not name.
