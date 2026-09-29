@@ -1209,7 +1209,8 @@ class Product
             $fallback_language,
             $set_language_details,
             $trid,
-            $source_language
+            $source_language,
+            $keep_unsent_languages
         ): int {
             $product = self::ensureProductObjectType($product, $params, $element_index);
             $title_source_language = $source_language ?? $language_code;
