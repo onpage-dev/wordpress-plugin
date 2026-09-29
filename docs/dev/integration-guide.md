@@ -95,7 +95,10 @@ Files are the key hand-off. `link()` returns a public URL, and the plugin accept
 **The client never downloads binaries.** It passes the URL. The WordPress side handles the
 download, the Media Library import and the deduplication.
 
-The SDK calls use your On Page® API token, so they count against that token's usage limits.
+The SDK calls use your On Page® API token, so they count against that token's
+[usage limits](https://app.onpage.it/#/help/advanced-tools/api-rate-limits). On large catalogs,
+expect throttling. To create the token, see
+[Creating and Managing an API Token](https://app.onpage.it/#/help/connections/create-manage-api-token).
 
 ### Two tokens
 
@@ -591,8 +594,9 @@ wp('/field-groups', [[
 ### The content
 
 `cursor()` is the SDK's helper for pagination and memory control. It iterates one item at a time
-instead of loading the whole collection. This is SDK behaviour: see the `onpage-php` docs, not this
-repo.
+instead of loading the whole collection. It first reads the ids, then loads the items in blocks of
+100 (the default of the `request_size` parameter of the PHP SDK). This is SDK behaviour: see the
+`onpage-php` docs, not this repo.
 
 ```php
 $schema = Schema::fromToken(getenv('ONPAGE_TOKEN'));
