@@ -324,7 +324,10 @@ and feeds.
 1. It looks at the variations of the product that carry a `local_key` (plugin-managed). Variations
    created by hand are left alone.
 2. A variation that uses a value the parent no longer offers is set to `private`. Its previous
-   status is stored in the meta `_onpage_held_status`. Nothing is deleted.
+   status is stored in the meta `_onpage_held_status`. Nothing is deleted. The values are read
+   from the variation's stored `attribute_*` meta (`VariantProduct::getVariationAttributeValues()`),
+   because `WC_Product_Variation::get_attributes()` hides the attributes the parent no longer uses:
+   a variation built on a removed attribute would otherwise look like "any" and stay for sale.
 3. The parent is synced at once (`WC_Product_Variable::sync()`), so its price range and stock stop
    counting the disabled variations.
 

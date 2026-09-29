@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POST /posts` and `POST /woocommerce/products` no longer overwrite a language that a language map leaves out on update: `{"title": {"en": "Red Chair"}}` now renames only the English translation instead of every language in the WPML group.
 - `POST /woocommerce/products` no longer publishes an existing product when the payload has no `status`: an update keeps the current status of every language. A new product still defaults to `publish`.
 - `POST /woocommerce/products` with `attributes: null` or `{}` now removes every attribute of the product, global `pa_*` attributes included, instead of the custom ones only. A non-empty `attributes` object still keeps the global attributes it does not name.
+- A plugin-managed variation built on an attribute that `POST /woocommerce/products` removes from its product, for example with `"pa_color": null`, is now made `private`. It used to stay published and purchasable, because WooCommerce no longer reported the removed attribute on the variation.
 - `null` on the enum and boolean `props` of `POST /woocommerce/products` and `POST /woocommerce/variant-products` (`stock_status`, `backorders`, `catalog_visibility`, `tax_status`, `manage_stock`, `featured`, `reviews_allowed`, …) now leaves the value as it is, instead of resetting it to a default or to `false`.
 
 ## [1.0.0] - 2026-09-28

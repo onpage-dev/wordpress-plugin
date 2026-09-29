@@ -1078,7 +1078,7 @@ class VariantProduct
     {
         $parent_attributes = self::getParentVariationAttributes($parent);
 
-        foreach ($variation->get_attributes() as $key => $value) {
+        foreach (self::getVariationAttributeValues($variation) as $key => $value) {
             $value = is_scalar($value) ? trim((string) $value) : '';
             if ($value === '') {
                 continue;
@@ -1101,6 +1101,45 @@ class VariantProduct
         }
 
         return false;
+    }
+
+    /**
+     * The variation's attribute values, including those its parent no longer uses.
+     *
+     * `WC_Product_Variation::get_attributes()` only lists the attributes the parent still uses
+     * for variations, so a whole attribute removed from the parent would vanish from it and the
+     * variation would look like "any", still for sale. The stored `attribute_*` meta keeps the
+     * removed ones. Pending attribute changes of this request win: WooCommerce drops the old
+     * meta only on save, so reading it then would flag values the payload just removed.
+     *
+     * @return array<string, mixed>
+     */
+    private static function getVariationAttributeValues(\WC_Product_Variation $variation): array
+    {
+        $attributes = $variation->get_attributes();
+        $variation_id = (int) $variation->get_id();
+        if ($variation_id <= 0 || array_key_exists('attributes', $variation->get_changes())) {
+            return $attributes;
+        }
+
+        $known_keys = [];
+        foreach (array_keys($attributes) as $key) {
+            $known_keys[self::normalizeAttributeKey((string) $key)] = true;
+        }
+
+        foreach (\get_post_meta($variation_id) as $meta_key => $values) {
+            $meta_key = (string) $meta_key;
+            if (!str_starts_with($meta_key, 'attribute_')) {
+                continue;
+            }
+
+            $key = substr($meta_key, strlen('attribute_'));
+            if (!isset($known_keys[self::normalizeAttributeKey($key)])) {
+                $attributes[$key] = is_array($values) ? ($values[0] ?? '') : '';
+            }
+        }
+
+        return $attributes;
     }
 
     /**
