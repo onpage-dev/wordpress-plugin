@@ -113,7 +113,9 @@ class Post
             if (is_array($value) && !array_is_list($value)) {
                 // A present but unusable identifier is an error: falling through to `type`
                 // would delete every post of that type.
-                if (($value['local_key'] ?? null) !== null && Input::localKey($value['local_key']) === null) {
+                // A boolean is rejected too: `true` would otherwise become the key "1".
+                if (($value['local_key'] ?? null) !== null
+                    && (is_bool($value['local_key']) || Input::localKey($value['local_key']) === null)) {
                     throw onpage_http_exception("Post :: Element $i :: Parameter 'local_key' must be a positive integer or a non-empty string", 400, 'input_invalid');
                 }
                 if ($keyfield !== 'local_key' && ($value['id'] ?? null) !== null && !(is_int($value['id']) && $value['id'] > 0)) {
@@ -143,7 +145,7 @@ class Post
             }
 
             if ($keyfield === 'local_key') {
-                $local_key = Input::localKey($value);
+                $local_key = is_bool($value) ? null : Input::localKey($value);
                 if ($local_key !== null) {
                     PostService::deleteByLocalKey($local_key, $ignore_missing, $query_type);
                     continue;

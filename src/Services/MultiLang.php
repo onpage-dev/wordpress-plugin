@@ -334,12 +334,49 @@ class MultiLang
         );
     }
 
-    /** Whether a shared/translated split writes the language: a shared value covers every language, a translated one only its own. */
+    /**
+     * True when the value is a language map none of whose languages is active on the site.
+     *
+     * Such a map, for example `{"es": "Silla"}` on an it/en site, writes no language. It
+     * is not a shared value either: taking it as one would write the map itself into every
+     * language (an empty title, a content of `"Array"`).
+     */
+    public static function isMapWithoutActiveLanguage(mixed $value): bool
+    {
+        return self::isLanguageMapShape($value) && self::getLanguages($value) === [];
+    }
+
+    /**
+     * True when the language map has a non-empty text for at least one active language.
+     *
+     * A value that is not a language map, a list for example, has none. `null` and blank
+     * strings do not count, so `{"en": null}` and `{"es": "Silla"}` on an it/en site both
+     * return false.
+     */
+    public static function hasActiveLanguageText(mixed $value): bool
+    {
+        foreach (self::splitValueByLanguage($value)['translated'] as $text) {
+            if (is_scalar($text) && trim((string) $text) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether a shared/translated split writes the language: a shared value covers every
+     * language, a translated one only its own, and a map of inactive languages none.
+     */
     public static function hasValueForLanguage(array $value_map, ?string $language_code): bool
     {
         $translated = $value_map['translated'] ?? [];
 
-        return $translated === [] || $language_code === null || array_key_exists($language_code, $translated);
+        if ($translated === []) {
+            return !self::isMapWithoutActiveLanguage($value_map['shared'] ?? null);
+        }
+
+        return $language_code === null || array_key_exists($language_code, $translated);
     }
 
     /** Splits ACF field payloads into shared and per-language field sets (inactive languages dropped). */

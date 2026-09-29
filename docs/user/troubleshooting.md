@@ -70,6 +70,20 @@ The error code is `wpml_required`.
 client sends. If the site has only one language, ask whoever maintains the client to send
 single-language data.
 
+## A language never appears on the site
+
+The sync succeeds, but the content in one language is missing. There is no error.
+
+**What it means:** that language is not active in WPML on this site. The plugin skips the
+languages the site does not have, on purpose, and does not report them.
+
+**How to fix it:**
+
+- If the site should show that language, add it in **WPML > Languages**. Then ask whoever
+  maintains the client to run the sync again.
+- If it should not, nothing is wrong. You can ask whoever maintains the client to send only the
+  languages the site has, to keep the sync clean.
+
 ## Multilingual content fails with a translation group error
 
 The client receives a `500` error with one of these messages:

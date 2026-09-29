@@ -546,9 +546,12 @@ class Post
         $local_key = Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index);
         $type = Input::requireStringParam($params, 'type', self::ERROR_PREFIX, $element_index);
 
-        // A new post needs a title: a non-empty string, or a language map of them.
+        // A new post needs a title: a non-empty string, or a language map with a non-empty
+        // title in at least one active language. A map of inactive languages only would
+        // otherwise insert an untitled post, or fail in wp_insert_post() with a 500.
         $title = $params['title'] ?? null;
-        if (!(is_array($title) && $title !== []) && Input::stringOrNull($title) === null) {
+        $has_title = is_array($title) ? MultiLang::hasActiveLanguageText($title) : Input::stringOrNull($title) !== null;
+        if (!$has_title) {
             throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'title' is required", 400, 'invalid_param');
         }
 
@@ -848,9 +851,11 @@ class Post
         $post_type = $post->post_type;
         $wp_post_type = $post_type;
 
-        $has_title = $title !== null;
-        $has_content = $content !== null;
-        $has_description = $description !== null;
+        // A map of inactive languages only is left out like an absent field, the same way
+        // ACF fields, files and products ignore it (see MultiLang::isMapWithoutActiveLanguage()).
+        $has_title = $title !== null && !MultiLang::isMapWithoutActiveLanguage($title);
+        $has_content = $content !== null && !MultiLang::isMapWithoutActiveLanguage($content);
+        $has_description = $description !== null && !MultiLang::isMapWithoutActiveLanguage($description);
 
         $title_map = $has_title ? MultiLang::splitValueByLanguage($title) : [];
         $content_map = $has_content ? MultiLang::splitValueByLanguage($content) : [];

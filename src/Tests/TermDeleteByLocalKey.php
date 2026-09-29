@@ -30,7 +30,7 @@ require_once __DIR__ . '/Support/Keep.php';
  *   {"local_key": C}, custom taxonomy  → every translation of C goes, taxonomy resolved from C
  *   ?keyfield=local_key, plain A       → what is left of A goes
  *   a key in two taxonomies            → `409 ambiguous_local_key` without a taxonomy
- *   malformed elements                 → `400`, before anything is deleted
+ *   malformed elements, booleans too   → `400`, before anything is deleted
  *
  * Needs WPML with `en` and `it` active on the test site, and the `category` taxonomy
  * translatable (the WPML default). The custom taxonomy is created by `POST /taxonomies`,
@@ -306,6 +306,9 @@ class TermDeleteByLocalKey
     {
         $this->checkError([], 'keyfield=slug', 400, 'invalid_keyfield', 'unknown keyfield');
         $this->checkError([['local_key' => '']], '', 400, 'input_invalid', 'empty local_key');
+        // `true` must not turn into the key "1".
+        $this->checkError([true], 'keyfield=local_key', 400, 'input_invalid', 'boolean in keyfield=local_key mode');
+        $this->checkError([['local_key' => true]], 'keyfield=local_key', 400, 'input_invalid', 'boolean local_key object');
         $this->checkError([['id' => '12abc']], '', 400, 'input_invalid', 'malformed id');
         $this->checkError([['taxonomy' => self::TAXONOMY]], '', 400, 'input_invalid', 'object without id or local_key');
         $this->checkError([['id' => 1]], 'keyfield=local_key', 400, 'input_invalid', 'id object in keyfield=local_key mode');

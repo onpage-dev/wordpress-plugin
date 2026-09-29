@@ -69,6 +69,26 @@ namespace OnPage\Tests {
                 'split: English-only map skips it' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['en' => 'Red Chair']), 'it'), false],
                 'split: English-only map covers en' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['en' => 'Red Chair']), 'en'), true],
                 'split: inactive language is not a value for it' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['en' => 'Red Chair', 'es' => 'Silla']), 'it'), false],
+
+                // {"title": {"es": "Silla"}} on an it/en site: not a shared value, so no language is written.
+                'inactive-only map' => [MultiLang::isMapWithoutActiveLanguage(['es' => 'Silla']), true],
+                'map with an active language' => [MultiLang::isMapWithoutActiveLanguage(['en' => 'Red Chair', 'es' => 'Silla']), false],
+                'scalar is not an inactive-only map' => [MultiLang::isMapWithoutActiveLanguage('Silla'), false],
+                'group is not an inactive-only map' => [MultiLang::isMapWithoutActiveLanguage(['lat' => 1, 'lng' => 2]), false],
+                'split: inactive-only map skips it' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['es' => 'Silla']), 'it'), false],
+                'split: inactive-only map skips en' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['es' => 'Silla']), 'en'), false],
+                'split: inactive-only map skips no language' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['es' => 'Silla']), null), false],
+                'split: shared group still covers it' => [MultiLang::hasValueForLanguage(MultiLang::splitValueByLanguage(['lat' => 1, 'lng' => 2]), 'it'), true],
+
+                // The title rule of POST /posts on insert.
+                'title: active language' => [MultiLang::hasActiveLanguageText(['en' => 'Red Chair']), true],
+                'title: active and inactive language' => [MultiLang::hasActiveLanguageText(['es' => 'Silla', 'it' => 'Sedia']), true],
+                'title: inactive language only' => [MultiLang::hasActiveLanguageText(['es' => 'Silla']), false],
+                'title: null only' => [MultiLang::hasActiveLanguageText(['en' => null, 'it' => null]), false],
+                'title: blank only' => [MultiLang::hasActiveLanguageText(['en' => '  ']), false],
+                'title: a list is not a map' => [MultiLang::hasActiveLanguageText(['Red Chair']), false],
+                'title: a group is not a map' => [MultiLang::hasActiveLanguageText(['name' => 'Red Chair']), false],
+                'title: a string is not a map' => [MultiLang::hasActiveLanguageText('Red Chair'), false],
             ];
         }
 

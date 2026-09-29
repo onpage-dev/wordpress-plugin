@@ -117,7 +117,8 @@ class Term
             }
 
             if ($keyfield === 'local_key') {
-                $local_key = Input::localKey($value);
+                // `true` would otherwise become the key "1".
+                $local_key = is_bool($value) ? null : Input::localKey($value);
                 if ($local_key === null) {
                     throw onpage_http_exception("Term :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'input_invalid');
                 }
@@ -156,7 +157,7 @@ class Term
         }
 
         if (($value['local_key'] ?? null) !== null) {
-            $local_key = Input::localKey($value['local_key']);
+            $local_key = is_bool($value['local_key']) ? null : Input::localKey($value['local_key']);
             if ($local_key === null) {
                 throw onpage_http_exception("Term :: Element $i :: Parameter 'local_key' must be a positive integer or a non-empty string", 400, 'input_invalid');
             }

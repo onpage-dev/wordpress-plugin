@@ -154,6 +154,7 @@ These rules apply to the `POST` and `DELETE` endpoints of `field-groups`, `post-
 - **Input** (payload and query string):
   - The value is trimmed.
   - Only the empty string, `"0"` and non-scalar types are rejected, with `400 invalid_param` (`400 input_invalid` on `DELETE /posts` and `DELETE /terms`).
+  - `DELETE /posts` and `DELETE /terms` also reject booleans with `400 input_invalid`, so `true` never deletes the object with `local_key` `"1"`.
   - Integers and numeric strings are **equivalent** (`123` ≡ `"123"`; this is how WordPress stores meta values). The same object is resolved whatever type you send.
   - A text key (e.g. `"SKU-ABC"`) is kept as is, except for surrounding whitespace.
 - **Output** (HTTP response):
@@ -910,7 +911,7 @@ How the target post is resolved:
 | Field | Required | Notes |
 | --- | --- | --- |
 | `type` | on insert | Used as the exact post type; no `post_` prefix is added. Missing or empty on insert → `400 invalid_param`; not registered → `404 not_found`. On update it can be omitted; if sent, it must equal the post's current type (`400 invalid_param` otherwise). |
-| `title` | on insert | A non-empty string or a WPML language map. Missing or empty on insert → `400 invalid_param`. On update an empty string is accepted. |
+| `title` | on insert | A non-empty string or a WPML language map. Missing or empty on insert → `400 invalid_param`, and so is a map with no non-empty title in an active language. On update an empty string is accepted. |
 | `content` | no | |
 | `description` | no | Saved as the post excerpt (`post_excerpt`). GET responses do not return it. |
 | `status` | no | Default `draft` on insert. Must be a registered post status (`publish`, `draft`, `pending`, `private`, `future`, or a custom one); `trash`, `auto-draft`, `inherit` or any other value returns `400 invalid_param`. |
@@ -929,6 +930,7 @@ Supported `term`/`terms` formats:
 #### Insert behaviour
 
 - `type`, `title` and `local_key` are required. `type` must be a registered post type (`404 not_found` with the message `Post :: PostType '<type>' not found`).
+- `title` must be a non-empty string, or a language map with a non-empty title in at least one active language. Otherwise the request returns `400 invalid_param` with the message `Post :: Element N :: Parameter 'title' is required`. For example, `{"title": {"fr": "Chaise"}}` on a site without `fr` is rejected, and so is `{"title": {"en": null}}`.
 - The title must not already exist in the same post type (see `409 duplicate_title` below for the exact rule).
 - A `local_key` that already exists never reaches the insert: the element updates that post instead (see above).
 - If anything fails after the post was created, the post and every translation created so far are deleted before the error is returned.
@@ -1032,7 +1034,7 @@ Rules:
 
 - If `title`, `content`, `description`, `acf_fields`, `files` or `terms` contain multilingual values and WPML is not installed or active, the request returns `500 wpml_required`.
 - On insert, the plugin creates the base post in the WPML default language, then the translations. When `title` is sent only per language and the default language is not among them, the base post is created in the first language that has a title instead, so no post is created in a language the payload did not send. Terms and WooCommerce products follow the same rule.
-- On update, the plugin updates the current post and its linked translations. A language map writes only the languages it contains: `{"title": {"en": "Red Chair"}}` renames the English translation and leaves the Italian title as it is. The same applies to `content`, `description` and every value in `acf_fields` and `files`. A shared (non-map) value is still written to every language.
+- On update, the plugin updates the current post and its linked translations. A language map writes only the languages it contains: `{"title": {"en": "Red Chair"}}` renames the English translation and leaves the Italian title as it is. The same applies to `content`, `description` and every value in `acf_fields` and `files`. A shared (non-map) value is still written to every language. A map with no active language, for example `{"title": {"es": "Silla"}}` on an it/en site, writes no language: every title stays as it is.
 - Only language maps create translations. A payload with scalar values only creates or updates a single post. To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`.
 - Language maps in `terms` only choose the term for each translation. They do not create translations.
 - If `title` is a string and other fields are multilingual, the same title is used unchanged for every translation. For different titles per language, use a WPML map.
@@ -1101,10 +1103,10 @@ Accepted body elements (default mode):
 
 Notes:
 
-- To delete by `local_key` (integer or non-empty string) with plain values, use `?keyfield=local_key`. `type` is optional but recommended. In this mode every element must be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`.
+- To delete by `local_key` (integer or non-empty string) with plain values, use `?keyfield=local_key`. `type` is optional but recommended. In this mode every element must be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`. A boolean is not a valid `local_key`: `[true]` is rejected, it does not delete the post with `local_key` `"1"`.
 - Alternatively, use objects with `local_key` and `type` without changing `keyfield`.
 - An object never falls back to `type` because of a bad identifier. It returns `400 input_invalid` instead:
-  - when `local_key` is present (not `null`) but invalid (`""`, `"0"`, an object…): `Post :: Element N :: Parameter 'local_key' must be a positive integer or a non-empty string`;
+  - when `local_key` is present (not `null`) but invalid (`""`, `"0"`, a boolean, an object…): `Post :: Element N :: Parameter 'local_key' must be a positive integer or a non-empty string`;
   - in the default mode, when `id` is present (not `null`) but not a positive JSON integer (`"12"`, `0`, `1.5`…): `Post :: Element N :: Parameter 'id' must be a positive JSON integer`.
 - Any other element (`null`, a float, a list, an object with none of `local_key`, `id` or `type`) returns `400 input_invalid` with the message `Post :: Element N :: Invalid delete value; …`.
 - Any other `keyfield` value (besides `local_key` and the default `id_or_post_type`) returns `400 invalid_keyfield`.
@@ -3274,14 +3276,14 @@ An object element can also carry `taxonomy` (slug or numeric ACF ID). It overrid
 Notes:
 
 - **IDs are strict.** A positive JSON integer, or a string of digits only. `"12abc"`, `"1.5"`, `" 12"`, `0` and `true` are rejected, never cast, so a malformed value never deletes an unrelated term.
-- **A plain string is always an ID.** To delete by `local_key` with plain values, use `?keyfield=local_key`. Every element must then be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`.
+- **A plain string is always an ID.** To delete by `local_key` with plain values, use `?keyfield=local_key`. Every element must then be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`. A boolean is not a valid `local_key`: `[true]` is rejected, it does not delete the term with `local_key` `"1"`.
 - **Any other `keyfield`** (besides the default `id` and `local_key`) returns `400 invalid_keyfield`.
 - **`taxonomy` is optional.**
   - With an ID, the term must be in that taxonomy. Without it, the taxonomy is taken from the term, so one request can delete terms of different taxonomies.
   - With a `local_key`, the key is looked up in that taxonomy only. Without it, the key is looked up in every taxonomy. If it is held by terms of more than one taxonomy, the request returns `409 ambiguous_local_key` and deletes nothing for that element.
   - A `taxonomy` that cannot be resolved returns `404 not_found`.
 - **An object never falls back to another identifier.** It returns `400 input_invalid` instead:
-  - when `local_key` is present (not `null`) but invalid (`""`, `"0"`, an object…): `Term :: Element N :: Parameter 'local_key' must be a positive integer or a non-empty string`;
+  - when `local_key` is present (not `null`) but invalid (`""`, `"0"`, a boolean, an object…): `Term :: Element N :: Parameter 'local_key' must be a positive integer or a non-empty string`;
   - in the default mode, when `id` is present (not `null`) but not a valid ID: `Term :: Element N :: Parameter 'id' must be a term ID (positive integer)`;
   - when `taxonomy` is present but not a string or number;
   - when the object has neither `local_key` nor `id` (in `keyfield=local_key` mode, no `local_key`).
@@ -3311,6 +3313,15 @@ Errors:
 Returns the WPML languages active on the site and which one is the default.
 
 Use it to **check your language codes before you send them**. No write endpoint takes a list of languages. The plugin works out which translations to create from the codes it finds in the payload's language maps. A code the site does not have is dropped silently, on purpose: a payload may legitimately carry a language that is not active here. Without this endpoint, a misconfigured language code looked exactly like a missing translation. The elements in that language never appeared, and no error was returned.
+
+Recommended client flow:
+
+1. Call this endpoint once, at the start of the import.
+2. Remove from every language map the codes that are not in `languages`, nested maps included.
+3. Leave out a field whose map is left empty, and log the codes you removed.
+
+The step-by-step rules and what happens without the filter are in the
+[integration guide](dev/integration-guide.md#filter-language-maps-before-you-send-them).
 
 `languages` always lists the default language first. The order of `wpml_active_languages` is the site's display order and says nothing about the default. The default matters because it is the language of the source element: every other language is a translation of it.
 

@@ -422,6 +422,10 @@ release notes ask for it. On a site with nothing to migrate it does nothing.
 
 The order is not a convention. Each step uses identifiers created by the previous ones.
 
+On a multilingual site, start every import with `GET /languages`. Keep only the languages it
+returns, and filter every language map with them before you send it (see
+[Filter language maps before you send them](#filter-language-maps-before-you-send-them)).
+
 **Editorial structure:**
 
 ```text
@@ -644,7 +648,8 @@ $schema->query('catalogs')
 Notes on the post payload:
 
 - `local_key`, `type` and `title` are required on insert (`400 invalid_param`). `type` must be a
-  registered post type (`404 not_found`).
+  registered post type (`404 not_found`). A `title` map needs a non-empty value in at least one
+  language that is active on the site: check your codes with `GET /languages` first.
 - On update, `type` may be omitted. If you send it, it must match the post's current type: the
   plugin never retypes a post (`400 invalid_param`).
 - If you send an explicit `id`, its `local_key` must not belong to another post of the same type
@@ -881,6 +886,33 @@ ISO code for Indonesian.
 - Call `GET /languages` before the import to check your codes against the site. It returns the
   active languages (default first) and `wpml_active`. A dropped code otherwise looks exactly like a
   missing translation. See [API.md](../API.md#get-languages).
+
+### Filter language maps before you send them
+
+The plugin never reports a language it dropped. The client must do the check. Do it once per
+import:
+
+1. Call `GET /languages`.
+2. If `wpml_active` is `false`, send scalar values only. A language map returns
+   `500 wpml_required`.
+3. Otherwise, remove from every language map the keys that are not in `languages`. This includes
+   the maps nested in `acf_fields`, `files`, `terms` and `props`.
+4. If a map is left empty, leave the key out of the payload. On insert, a post needs a `title`, so
+   skip the element or send a scalar title.
+5. Log the codes you removed. This is how you find a language that is misspelled or not yet
+   activated on the site.
+
+What happens when you skip the filter:
+
+| Payload (site with `it` and `en`) | Result |
+| --- | --- |
+| `{"title": {"it": "Sedia", "es": "Silla"}}` | `es` is dropped. `it` is written. |
+| `{"title": {"es": "Silla"}}` on update | Nothing is written. Every language keeps its title. The response is `200`. |
+| `{"title": {"es": "Silla"}}` on insert of `POST /posts` | `400 invalid_param`, `Parameter 'title' is required`. |
+| `{"es": "Silla"}` in `acf_fields`, `files` or products, on update | Nothing is written for that field. |
+
+The request still succeeds in most of these cases. Without the filter, a wrong code only shows up
+as a translation that never appears.
 
 Only language maps create translations. A payload with scalar values only creates a single object.
 To create a translation with the same text, repeat the value: `{"en": "Chair", "it": "Chair"}`.
@@ -1186,6 +1218,9 @@ Two sources can answer with a code outside this table:
   `parent` is a raw WordPress term id, so `0` does mean top level. `null`, or omitting the key,
   means top level everywhere. Prefer that. On `POST /terms`, anything other than a term ID, `0` or
   `null` is `400 invalid_param`, and a term ID that does not exist is `404 not_found`.
+- **An inactive language is dropped with no error.** A language map key that is not active on the
+  site is ignored, and the call answers `200`. Filter your maps with `GET /languages` first (see
+  [§10](#filter-language-maps-before-you-send-them)).
 - **Deletions do not propagate.** An item removed from On Page® stays published until the
   client calls the matching `DELETE`.
 - **The trash does not free a `local_key`.** A post trashed in the admin still holds its key.

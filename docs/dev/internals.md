@@ -173,6 +173,12 @@ value: `MultiLang::isMapWithoutLanguage()`, `withoutMapsMissingLanguage()` and
 `hasValueForLanguage()` implement that check. Without it, `{"title": {"en": "Red Chair"}}` also
 renamed the Italian translation.
 
+A map with no active language (`{"es": "Silla"}` on an it/en site) writes no language at all.
+`splitValueByLanguage()` puts such a map in `shared`, so `hasValueForLanguage()` checks
+`isMapWithoutActiveLanguage()` and returns `false` for it. `Post::buildUpdateContext()` also
+treats the title, content and description as absent in that case. Before, the map was taken as a
+shared value: the title became empty and the content `"Array"` in every language.
+
 ### 4. WPML is optional, but required for multilingual payloads
 
 If the payload contains per-language values and WPML is not active, the services do not try to
@@ -561,7 +567,10 @@ not just the current record.
 ### 1. Resolving the context
 
 `type` and `title` are required (`400 invalid_param`, `Parameter 'type' is required` or
-`Parameter 'title' is required`). `title` must be a non-empty string or a non-empty language map.
+`Parameter 'title' is required`). `title` must be a non-empty string, or a language map with a
+non-empty title in at least one active language (`MultiLang::hasActiveLanguageText()`). Without
+that check, a map of inactive languages resolved to an empty title: the insert created an untitled
+post, or failed in `wp_insert_post()` with `500 request_failed`.
 The post type must be registered (`404 not_found`, `Post :: PostType '<type>' not found`).
 
 The method builds the language list from `title`, `content`, `description`, `acf_fields` and
