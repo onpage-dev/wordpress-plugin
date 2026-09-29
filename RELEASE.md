@@ -13,11 +13,18 @@ Versions follow [Semantic Versioning](https://semver.org/), and every release ha
    4. Update `Current version` in [README.md](README.md), and the supported versions table in
       [SECURITY.md](SECURITY.md) when the minor version changes.
    5. Commit these changes on `main`.
-2. **Tag it.**
+2. **Tag it.** Merge every branch that belongs to the release into `main` first, then tag the
+   latest commit of `main`.
 
    ```
+   git switch main
+   git pull
    git tag -a "vX.Y.Z" -m "vX.Y.Z"
    ```
+
+   GitHub runs the [Release archive](.github/workflows/release-archive.yml) workflow from the
+   tagged commit. A tag cut before the workflow file reached `main` builds no archive, and
+   neither does a tag on another branch.
 
 3. **Push the tag.**
 
@@ -72,3 +79,22 @@ Tell the site admins about anything they must do after the upgrade, such as call
 `POST /migration` (see [docs/API.md](docs/API.md#post-migration)). Put it in the release
 description. The steps they follow are in
 [docs/user/guide.md](docs/user/guide.md#updating-the-plugin).
+
+### Sites that ran the earlier plugin
+
+Some sites still run the plugin that was distributed before this repository existed (packages
+such as `onpage-2.1.4.zip`). You can recognize it by its main file, `onpage.php`. Its version
+numbers (`1.x` and `2.x`) say nothing about the format, and some are higher than this
+repository's releases. Every one of these sites needs these steps, whatever the version:
+
+- WordPress may say that the uploaded version is older than the installed one. Replacing it is
+  still correct.
+- The main file is now `plugin.php`, so WordPress deactivates the plugin during the upload. The
+  admin must activate **On Page®** again.
+- The earlier plugin stored each `local_key` in the `local_key` post meta, through an ACF field.
+  The current plugin reads only `onpage_local_key`. Until `POST /migration` runs, every post the
+  earlier plugin synced looks unowned, and the first import fails with `409 duplicate_title`.
+  The client must call `POST /migration` once, before that import.
+
+The admin's steps are in
+[docs/user/guide.md](docs/user/guide.md#upgrading-from-the-earlier-plugin).

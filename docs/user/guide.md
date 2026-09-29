@@ -163,6 +163,22 @@ Good to know:
 3. If the release notes ask for it, ask whoever maintains your **client** to run the plugin's
    **migration** once. It is safe to run more than once.
 
+### Upgrading from the earlier plugin
+
+Your site runs the earlier **On Page®** plugin if its folder `wp-content/plugins/onpage/`
+contains a file named `onpage.php`. Its version number does not matter: every earlier version
+needs these steps.
+
+1. Upload the new .zip under **Plugins** with **Upload Plugin**, and choose to replace the current
+   version. WordPress may say that the uploaded version is older than the installed one. Replace
+   it anyway.
+2. Open **Plugins** and activate **On Page®** again. The plugin's main file has a new name, so
+   WordPress deactivates it during the upload. Your data and your token are kept.
+3. Ask whoever maintains your **client** to run the plugin's **migration** once, **before the
+   next sync**. It moves the identifiers written by the earlier plugin to the current format.
+   Without it, the first sync fails with a "title already exists" error. It is safe to run more
+   than once.
+
 ## Multilingual sites
 
 If your site uses more than one language:

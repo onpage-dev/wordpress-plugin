@@ -443,7 +443,7 @@ Errors are returned as `WP_Error` using the standard WordPress REST shape:
 
 In this document, errors are written as `<status> <code>`, for example `400 invalid_param`.
 
-Most messages name the element with `Element N`. Some do not: for example the `409 duplicate_title` of `POST /posts`, shown above, carries no element index.
+Most messages name the element with `Element N`: the 0-based position of the element in the request array, as in the `409 duplicate_title` above.
 
 An unexpected PHP error or exception during a request (for example one thrown by WooCommerce or WordPress) is returned in the same shape as `500 request_failed`, with the original message.
 
@@ -3383,6 +3383,8 @@ Errors:
 ### POST `/migration`
 
 Runs the plugin's data migrations: one-off adjustments to data already on the site, required by a change of internal format. Call it **once per site** after a plugin update. It is idempotent: running it again does no harm, and it is a no-op when there is nothing to migrate.
+
+A site that ran the earlier plugin (main file `onpage.php`, any version) must call it **before the first import**. The earlier plugin stored keys in the legacy `local_key` meta, which the lookups no longer read. Until the migration runs, those posts have no `local_key` for the plugin, and importing them fails with `409 duplicate_title`.
 
 No payload.
 

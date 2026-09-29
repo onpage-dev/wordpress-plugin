@@ -89,6 +89,20 @@ cannot link the translations to each other.
 
 See [guide.md](guide.md#make-the-post-types-translatable-first).
 
+## After an upgrade, every sync fails with "already exists"
+
+The client receives `409 duplicate_title`, with a message like
+"Title 'Red Chair' already exists for PostType 'product'", for content that is already on the
+site.
+
+**What it means:** the site ran the earlier **On Page®** plugin, and the **migration** has not run
+yet. The earlier plugin saved its identifiers in an older format, so the current plugin does not
+recognize the content it synced.
+
+**How to fix it:** ask whoever maintains the client to run the plugin's **migration** once, then
+run the sync again. Do not delete the existing content. See
+[guide.md](guide.md#upgrading-from-the-earlier-plugin).
+
 ## Syncs stop halfway or time out
 
 **What it means:** the plugin downloads images and files while it handles each request, one file
