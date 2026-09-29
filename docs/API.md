@@ -2022,7 +2022,10 @@ Body:
 - `long_description` and `short_description` are top-level product fields, not part of `props` or `acf_fields`.
 - For compatibility, `content` and `description` are still accepted as aliases of `long_description` and `short_description`. If both are present, `long_description` and `short_description` win.
 - On update, a WPML language map writes only the languages it contains. `{"name": {"en": "Red Chair"}}` renames the English product and leaves the Italian name as it is. The same applies to `slug`, `long_description`, `short_description`, `image`, `gallery`, each value in `props`, `acf_fields` and `attributes`. An attribute sent as a map without a language keeps that language's current attribute. A new translation created by the same request still falls back to the first language of the map, so it never starts empty.
-- Only language maps in the fields above create translations. A payload with scalar values only creates or updates a single product. To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`. Maps in `categories`, `tags` and `terms` only choose the term for each translation.
+- Only language maps in the fields above create translations. A payload with scalar values only never creates a translation:
+  - On create, it makes one product in the site's default language.
+  - On update, it writes each scalar value on every translation that already exists. `{"name": "Chair"}` renames the English and the Italian product alike. To change one language only, send a map with that language, for example `{"name": {"en": "Chair"}}`.
+- To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`. Maps in `categories`, `tags` and `terms` only choose the term for each translation.
 - `status` is optional. On create it defaults to `publish`. On update, a save without `status` keeps the current status of every language, so a draft stays a draft. A translation created by an update without `status` takes the status of the existing product.
 - `status` must be a non-empty string, otherwise `400 invalid_param` (`Parameter 'status' must be a string`).
 
