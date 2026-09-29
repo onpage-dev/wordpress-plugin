@@ -75,7 +75,7 @@ In the **Notes** column, *Paginated* marks the only two endpoints that paginate.
 | Taxonomies | `DELETE` | [`/taxonomies`](#delete-taxonomies) | Delete taxonomies by ID or slug | `?ignore` |
 | Terms | `GET` | [`/terms`](#get-terms) | List or search terms, of one taxonomy or of all | |
 | Terms | `POST` | [`/terms`](#post-terms) | Create or update terms in batch | |
-| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID | `?ignore` |
+| Terms | `DELETE` | [`/terms`](#delete-terms) | Delete terms by ID or `local_key` | `?ignore` |
 | Languages | `GET` | [`/languages`](#get-languages) | List the active WPML languages and the default one | |
 | Maintenance | `DELETE` | [`/indexes`](#delete-indexes) | Remove all `local_key` associations | |
 | Maintenance | `POST` | [`/migration`](#post-migration) | Run the plugin's data migrations | |
@@ -123,7 +123,7 @@ The token is generated from the **On Page®** page in the WordPress admin. Only 
   Some endpoints are stricter:
 
   - `DELETE /field-groups`, `/post-types`, `/taxonomies` and `/posts` read an ID only from a JSON integer. A string, even `"12"`, is a title, key, slug or post type.
-  - `DELETE /terms` accepts a positive JSON integer or a string of digits only. Leading zeros are allowed (`"012"`). Spaces and floats (`12.0`) are rejected.
+  - `DELETE /terms` accepts a positive JSON integer or a string of digits only, as a plain element or as `id` in an object. Leading zeros are allowed (`"012"`). Spaces and floats (`12.0`) are rejected.
 
 ### Request bodies
 
@@ -153,7 +153,7 @@ These rules apply to the `POST` and `DELETE` endpoints of `field-groups`, `post-
 
 - **Input** (payload and query string):
   - The value is trimmed.
-  - Only the empty string, `"0"` and non-scalar types are rejected, with `400 invalid_param` (`400 input_invalid` on `DELETE /posts`).
+  - Only the empty string, `"0"` and non-scalar types are rejected, with `400 invalid_param` (`400 input_invalid` on `DELETE /posts` and `DELETE /terms`).
   - Integers and numeric strings are **equivalent** (`123` ≡ `"123"`; this is how WordPress stores meta values). The same object is resolved whatever type you send.
   - A text key (e.g. `"SKU-ABC"`) is kept as is, except for surrounding whitespace.
 - **Output** (HTTP response):
@@ -3242,27 +3242,49 @@ Main errors:
 
 ### DELETE `/terms`
 
-Deletes terms by ID. The body is a list of term IDs.
+Deletes terms by ID or by `local_key`. An ID deletes that term only. A `local_key` deletes every term that holds it, so the whole WPML translation group.
 
 Body:
 
 ```json
-[10, 11]
+[10, {"id": 11}, {"local_key": 4001, "taxonomy": "brand"}]
 ```
 
 Optional query:
 
 ```text
 ?taxonomy=brand
+?keyfield=local_key
 ?ignore=1
 ```
 
-- Each element must be a term ID: a positive JSON integer, or a string of digits only (`"10"`). Anything else (`"12abc"`, `"1.5"`, `" 12"`, `0`, `true`, `null`, a list, an object) returns `400 input_invalid` with the message `Term :: Element N :: Invalid delete value; expected a term ID (positive integer)`. Nothing is cast, so a malformed value never deletes an unrelated term.
-- `taxonomy` (**optional**) restricts deletion to one taxonomy (slug or numeric ACF ID). If it cannot be resolved → `404 not_found`.
-- If **omitted**, each term's taxonomy is taken from the term itself, so a single request can delete terms of different taxonomies.
-- A term that does not exist, or that is not in the `taxonomy` given, returns `404 not_found` with the message `Term :: Element N :: Term <id> not found`.
-- With `?ignore`, such a term is skipped.
-- Only the IDs sent are deleted. Their WPML translations are not. To delete a term in every language, read its `translations` map (from `GET /terms`) and send every ID in it.
+Accepted body elements (default mode):
+
+| Element | Effect |
+| --- | --- |
+| integer, or string of digits only (`"10"`) | Deletes the term with that ID. Its WPML translations are kept. |
+| `{"id": …}` | Same as a plain ID. `id` follows the same rule. |
+| `{"local_key": …}` | Deletes every term holding that `local_key`: the term in every WPML language. |
+
+An object element can also carry `taxonomy` (slug or numeric ACF ID). It overrides `?taxonomy=` for that element.
+
+Notes:
+
+- **IDs are strict.** A positive JSON integer, or a string of digits only. `"12abc"`, `"1.5"`, `" 12"`, `0` and `true` are rejected, never cast, so a malformed value never deletes an unrelated term.
+- **A plain string is always an ID.** To delete by `local_key` with plain values, use `?keyfield=local_key`. Every element must then be a valid `local_key` (or a `local_key` object), otherwise `400 input_invalid`.
+- **Any other `keyfield`** (besides the default `id` and `local_key`) returns `400 invalid_keyfield`.
+- **`taxonomy` is optional.**
+  - With an ID, the term must be in that taxonomy. Without it, the taxonomy is taken from the term, so one request can delete terms of different taxonomies.
+  - With a `local_key`, the key is looked up in that taxonomy only. Without it, the key is looked up in every taxonomy. If it is held by terms of more than one taxonomy, the request returns `409 ambiguous_local_key` and deletes nothing for that element.
+  - A `taxonomy` that cannot be resolved returns `404 not_found`.
+- **An object never falls back to another identifier.** It returns `400 input_invalid` instead:
+  - when `local_key` is present (not `null`) but invalid (`""`, `"0"`, an object…): `Term :: Element N :: Parameter 'local_key' must be a positive integer or a non-empty string`;
+  - in the default mode, when `id` is present (not `null`) but not a valid ID: `Term :: Element N :: Parameter 'id' must be a term ID (positive integer)`;
+  - when `taxonomy` is present but not a string or number;
+  - when the object has neither `local_key` nor `id` (in `keyfield=local_key` mode, no `local_key`).
+- **Any other element** (`null`, a float, a list…) returns `400 input_invalid` with the message `Term :: Element N :: Invalid delete value; …`.
+- **Missing terms.** An ID that does not exist (or is outside the taxonomy) returns `404 not_found` with `Term :: Element N :: Term <id> not found`. A `local_key` held by no term returns `404 not_found` with `Term :: Element N :: Term with local_key '<key>' not found`. With `?ignore`, both are skipped.
+- **WPML.** With the WPML option that deletes translations together with the original, deleting one ID can also remove its translations. That is WPML's behaviour, not the plugin's. On a `local_key` delete, members already removed that way are skipped, not reported as errors.
 
 Response `200`:
 
@@ -3273,8 +3295,10 @@ null
 Errors:
 
 - `400 invalid_param` if the body is not a JSON array
-- `400 input_invalid` if an element is not a valid term ID
-- `404 not_found` if `taxonomy` is sent but cannot be resolved, or if a term does not exist (without `?ignore`)
+- `400 input_invalid` if an element is not a valid term ID or `local_key` object
+- `400 invalid_keyfield`
+- `404 not_found` if `taxonomy` cannot be resolved, or if a term ID or `local_key` does not exist (without `?ignore`)
+- `409 ambiguous_local_key` if a `local_key` without a taxonomy is held by terms of several taxonomies
 - `500 delete_failed` if WordPress fails to delete an existing term. A WordPress error message is appended to the message (`Term :: Unable to delete :: <WordPress error>`).
 
 ## Languages

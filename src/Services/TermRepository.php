@@ -68,6 +68,31 @@ class TermRepository
         return is_array($results) ? array_values(array_map('intval', $results)) : [];
     }
 
+    /**
+     * Finds terms by local_key in every taxonomy, bypassing WPML term filters.
+     *
+     * @return list<array{term_id: int, taxonomy: string}>
+     */
+    public static function findTermsByLocalKeyInAnyTaxonomy(string $local_key): array
+    {
+        global $wpdb;
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT DISTINCT tm.term_id, tt.taxonomy
+            FROM {$wpdb->termmeta} tm
+            INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = tm.term_id
+            WHERE tm.meta_key = %s
+            AND tm.meta_value = %s
+            ORDER BY tm.term_id ASC",
+            self::LOCAL_KEY_META,
+            $local_key
+        ), ARRAY_A);
+
+        return is_array($rows)
+            ? array_map(fn(array $row): array => ['term_id' => (int) $row['term_id'], 'taxonomy' => (string) $row['taxonomy']], $rows)
+            : [];
+    }
+
     /** Finds term IDs by slug within a taxonomy, bypassing WPML term filters. */
     public static function findTermIdsBySlug(string $slug, string $taxonomy_slug): array
     {

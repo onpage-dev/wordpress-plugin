@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `DELETE /terms` now deletes by `local_key`, like `DELETE /posts`: send `{"local_key": …, "taxonomy": …}` or use `?keyfield=local_key`, and every WPML translation holding the key is deleted. An ID, plain or as `{"id": …}`, still deletes that term only. Without a taxonomy, a key held in several taxonomies answers `409 ambiguous_local_key`.
+
 ### Changed
 - The `409 duplicate_title` and `409 duplicate_local_key` messages of `POST /posts` now always carry `Element N`, like the other per-element errors.
 - With Advanced Custom Fields older than 6.1, every endpoint now answers `500 acf_version_unsupported`, naming the active version, and the admin shows a notice. Such calls used to fail with a generic `500 request_failed`.

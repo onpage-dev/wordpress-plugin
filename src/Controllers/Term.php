@@ -85,39 +85,112 @@ class Term
     }
 
     /**
-     * REST: deletes terms by ID from the JSON body. The taxonomy is optional (`?taxonomy=`):
-     * when omitted each term's taxonomy is resolved from the term itself, so a single request
-     * can delete terms of different taxonomies. Optional `ignore` query skips missing terms.
+     * REST: deletes terms by ID or by local_key from the JSON body. An ID deletes that term
+     * only; a local_key deletes every term holding it, so the whole WPML translation group.
+     *
+     * Elements: a term ID, `{"id": …}`, or `{"local_key": …, "taxonomy": …}`. With
+     * `?keyfield=local_key` plain values are read as local_keys. The taxonomy is optional
+     * (`?taxonomy=`, or `taxonomy` in an object element): when omitted an ID's taxonomy is
+     * resolved from the term itself, and a local_key must resolve to a single taxonomy.
+     * Optional `ignore` query skips missing terms.
      *
      * IDs are validated strictly (a positive int or a digit-only string): a cast would turn
      * `"12abc"` into 12 and any array into 1, deleting a term nobody asked for.
      *
-     * @param \WP_REST_Request $request Route request; JSON body is a list of term IDs.
+     * @param \WP_REST_Request $request Route request; JSON body is a list of term IDs or local_key objects.
      */
     public function delete(\WP_REST_Request $request): \WP_REST_Response
     {
+        $keyfield = Input::requestString($request, 'keyfield') ?? 'id';
+        if (!in_array($keyfield, ['id', 'local_key'], true)) {
+            throw onpage_http_exception("Invalid keyfield '$keyfield'", 400, 'invalid_keyfield');
+        }
+
         $taxonomy_param = Input::requestString($request, 'taxonomy');
         $taxonomy = $taxonomy_param !== null ? TermService::requireTaxonomySlug($taxonomy_param) : null;
         $ignore_missing = onpage_should_ignore_missing($request);
 
         foreach (Input::requireJsonList($request, 'Term') as $i => $value) {
+            if (is_array($value) && !array_is_list($value)) {
+                $this->deleteElement($value, $i, $keyfield, $taxonomy, $ignore_missing);
+                continue;
+            }
+
+            if ($keyfield === 'local_key') {
+                $local_key = Input::localKey($value);
+                if ($local_key === null) {
+                    throw onpage_http_exception("Term :: Element $i :: Invalid delete value; expected a positive integer or non-empty string local_key", 400, 'input_invalid');
+                }
+
+                TermService::deleteByLocalKey($local_key, $taxonomy, $ignore_missing, $i);
+                continue;
+            }
+
             $term_id = Input::strictPositiveInt($value);
             if ($term_id === null) {
-                throw onpage_http_exception("Term :: Element $i :: Invalid delete value; expected a term ID (positive integer)", 400, 'input_invalid');
+                throw onpage_http_exception("Term :: Element $i :: Invalid delete value; expected a term ID (positive integer) or a local_key object", 400, 'input_invalid');
             }
 
-            // Checked here so a missing term (or one outside `?taxonomy=`) answers 404 instead of
-            // reaching `wp_delete_term()`, whose `false` for "no such term" reads as a failure.
-            $term = \get_term($term_id, $taxonomy ?? '');
-            if (!$term instanceof \WP_Term) {
-                if ($ignore_missing) continue;
-
-                throw onpage_http_exception("Term :: Element $i :: Term $term_id not found", 404, 'not_found');
-            }
-
-            TermService::deleteById($term_id, $taxonomy ?? $term->taxonomy);
+            $this->deleteOne($term_id, $taxonomy, $ignore_missing, $i);
         }
 
         return new \WP_REST_Response(null, 200);
+    }
+
+    /**
+     * Deletes one object element: `{"local_key": …}` (the whole translation group) or
+     * `{"id": …}` (that term only), optionally scoped by its own `taxonomy`.
+     *
+     * A present but unusable identifier is an error, never skipped: an object must not fall
+     * through to another identifier because one was malformed.
+     */
+    private function deleteElement(array $value, int $i, string $keyfield, ?string $taxonomy, bool $ignore_missing): void
+    {
+        if (($value['taxonomy'] ?? null) !== null) {
+            $element_taxonomy = Input::stringOrNull($value['taxonomy']);
+            if ($element_taxonomy === null) {
+                throw onpage_http_exception("Term :: Element $i :: Parameter 'taxonomy' must be a taxonomy slug or numeric ACF ID", 400, 'input_invalid');
+            }
+
+            $taxonomy = TermService::requireTaxonomySlug($element_taxonomy);
+        }
+
+        if (($value['local_key'] ?? null) !== null) {
+            $local_key = Input::localKey($value['local_key']);
+            if ($local_key === null) {
+                throw onpage_http_exception("Term :: Element $i :: Parameter 'local_key' must be a positive integer or a non-empty string", 400, 'input_invalid');
+            }
+
+            TermService::deleteByLocalKey($local_key, $taxonomy, $ignore_missing, $i);
+            return;
+        }
+
+        if ($keyfield !== 'local_key' && ($value['id'] ?? null) !== null) {
+            $term_id = Input::strictPositiveInt($value['id']);
+            if ($term_id === null) {
+                throw onpage_http_exception("Term :: Element $i :: Parameter 'id' must be a term ID (positive integer)", 400, 'input_invalid');
+            }
+
+            $this->deleteOne($term_id, $taxonomy, $ignore_missing, $i);
+            return;
+        }
+
+        $expected = $keyfield === 'local_key' ? "a 'local_key'" : "an 'id' or a 'local_key'";
+        throw onpage_http_exception("Term :: Element $i :: Invalid delete value; expected an object with $expected", 400, 'input_invalid');
+    }
+
+    /** Deletes a single term by ID, leaving its WPML translations in place. */
+    private function deleteOne(int $term_id, ?string $taxonomy, bool $ignore_missing, int $i): void
+    {
+        // Checked here so a missing term (or one outside the taxonomy) answers 404 instead of
+        // reaching `wp_delete_term()`, whose `false` for "no such term" reads as a failure.
+        $term = \get_term($term_id, $taxonomy ?? '');
+        if (!$term instanceof \WP_Term) {
+            if ($ignore_missing) return;
+
+            throw onpage_http_exception("Term :: Element $i :: Term $term_id not found", 404, 'not_found');
+        }
+
+        TermService::deleteById($term_id, $taxonomy ?? $term->taxonomy);
     }
 }

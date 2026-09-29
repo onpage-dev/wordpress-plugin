@@ -252,7 +252,8 @@ The plugin checks the shape before doing any work:
 | a `DELETE` element of the wrong type | `400 input_invalid` on `field-groups`, `post-types`, `posts`, `taxonomies` and `terms`; `400 invalid_param` on `woocommerce/*` and `media` |
 
 `DELETE /terms` is strict about ids: a positive integer or a string of digits only. `"12abc"`,
-`"1.5"` or `true` are rejected, never cast. The full rules are in
+`"1.5"` or `true` are rejected, never cast. A plain string is always an ID there: to delete by
+`local_key`, send `{"local_key": …}` or use `?keyfield=local_key`. The full rules are in
 [API.md: Request bodies](../API.md#request-bodies).
 
 Four exceptions:
@@ -898,10 +899,14 @@ plugin then:
 Before the first multilingual import, the post types must be translatable in WPML (see
 [§2](#2-prerequisites)).
 
+Deletes follow the identifier you send:
+
+- `DELETE /posts` and `DELETE /terms` with an ID delete that object only. With a `local_key`
+  (`{"local_key": …}`, or `?keyfield=local_key`) they delete the whole translation group, since
+  every translation carries the same key.
+
 Some calls act on one object, not on its translation group:
 
-- `DELETE /terms` deletes only the term IDs you send. To delete a term in every language, read its
-  `translations` map (from `GET /terms`) and send all its IDs.
 - `POST /media/link` updates a single post. To set a file on every translation, send it in `files`
   on `POST /posts`, as a shared value or a language map.
 
@@ -1116,12 +1121,12 @@ Parse the `code`, not the message shape.
 | `upload_failed` | 400 / 500 | rejected or unwritable upload | check MIME, size and filesystem permissions |
 | `not_found` | 404 | one of two cases. (a) The object the call targets is missing: any DELETE without `?ignore`, the id/`local_key` lookups of the `GET /woocommerce/*` routes, and an explicit `id` on `POST /terms`, `POST /woocommerce/products` or `POST /woocommerce/attributes`. (b) Something the payload references does not exist: post type, taxonomy, parent, attribute, attachment | (a) send `?ignore`, or fix the id/`local_key`. (b) respect the call order in [§6](#6-call-order) |
 | `input_invalid` | 404 | a term reference in the payload of `POST /posts` or `POST /woocommerce/products` resolves to nothing | sync terms before the content that references them |
-| `input_invalid` | 400 | a DELETE body element of the wrong type on `field-groups`, `post-types`, `posts`, `taxonomies` or `terms` (on `DELETE /posts`, also an object element with an invalid `local_key` or a non-integer `id`); a `files` value on `POST /posts`, or an `image`/`file` value in `acf_fields`, that is neither an existing attachment id nor a valid URL. The same `files` error on `POST /media/link` answers `invalid_param` | read the message: it names the element index or the field key |
+| `input_invalid` | 400 | a DELETE body element of the wrong type on `field-groups`, `post-types`, `posts`, `taxonomies` or `terms` (on `DELETE /posts` and `DELETE /terms`, also an object element with an invalid `local_key` or `id`); a `files` value on `POST /posts`, or an `image`/`file` value in `acf_fields`, that is neither an existing attachment id nor a valid URL. The same `files` error on `POST /media/link` answers `invalid_param` | read the message: it names the element index or the field key |
 | `no_post` | 404 | the target post does not exist: `GET /posts/{id}`, `GET /posts?id=`, or an explicit `id` on `POST /posts` | check `id` / `local_key` |
 | `duplicate_title` | 409 | an **unkeyed** post of that post type has the exact same title and is outside this object's WPML translation group. A post that already carries a *different* `local_key` is a distinct On Page® element and never conflicts, so two elements with the same name import fine | give the existing unkeyed post the `local_key`, so the request updates it instead of inserting; or change the title |
 | `duplicate_local_key` | 409 | the `local_key` is already held by a different object. On `POST /posts`, `POST /woocommerce/products`, `POST /terms` and the WooCommerce term routes this needs an explicit `id` in the payload. On `/woocommerce/attributes` and `/woocommerce/variant-products` it fires without an `id` too | if you sent `id`, drop it and let `local_key` resolve. Otherwise the key belongs to another object: re-key it, or clear the stale key |
 | `duplicate_variation` | 409 | another variation of the same parent already has this attribute combination | give each variation a distinct combination, or delete the old variation |
-| `ambiguous_local_key` | 409 | the same `local_key` exists on posts of more than one post type, and the request did not scope it | pass the type: `?type=` on `GET /posts/{id}` and `DELETE /posts`, or the `type` key in the `POST /posts` element |
+| `ambiguous_local_key` | 409 | the same `local_key` exists on posts of more than one post type, or on terms of more than one taxonomy, and the request did not scope it | pass the type: `?type=` on `GET /posts/{id}` and `DELETE /posts`, or the `type` key in the `POST /posts` element. On `DELETE /terms`, pass `?taxonomy=` or the `taxonomy` key in the element |
 | `parent_mismatch` | 409 | `parent_id` and `parent` point at different parents | send only one of the two |
 | `wpml_required` | 500 | language map sent to a site without WPML | install WPML, or send scalars |
 | `woocommerce_required` | 500 | `/woocommerce/*` with WooCommerce inactive | activate WooCommerce |

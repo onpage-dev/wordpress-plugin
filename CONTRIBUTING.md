@@ -73,11 +73,12 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
 | `ProductUpdateUnsentValues.php` | end-to-end | a site with ACF and WooCommerce |
+| `TermDeleteByLocalKey.php` | end-to-end | a site with ACF and WPML, with `en` and `it` active |
 | `WooCommerceCatalog.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` and `it` active |
 
 - **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
 - **End-to-end tests** call the REST API of a real WordPress site with the plugin active. Only
-  `WooCommerceCatalog.php` needs WPML.
+  `WooCommerceCatalog.php` and `TermDeleteByLocalKey.php` need WPML.
 
 ### Running them
 
@@ -173,6 +174,9 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   still clears `sku`), and `attributes: null` removes the global attributes too. The last one is
   read through its documented effect, because product attributes are not in the `GET` response:
   the variation built on the removed global attribute becomes `private`.
+- **`TermDeleteByLocalKey.php`** checks that `DELETE /terms` with an ID deletes that term only,
+  while a `local_key` deletes every WPML translation. It also covers `?keyfield=local_key`,
+  `409 ambiguous_local_key` for a key held in two taxonomies, and the `400` validation errors.
 - **`MultiLangResolveFields.php`** covers the shared-value rule offline, directly on
   `MultiLang::resolveFields()`. It checks both sides of the language-code rule described in
   [internals.md](docs/dev/internals.md#2-shared-vs-translated): real language maps, including

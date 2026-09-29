@@ -1573,4 +1573,36 @@ class Term
             throw onpage_http_exception("Term :: Unable to delete$reason", 500, 'delete_failed');
         }
     }
+
+    /**
+     * Deletes every term holding a local_key: the whole WPML translation group, since each
+     * translation carries the same key. Without a taxonomy the key is looked up in every
+     * taxonomy and must resolve to a single one.
+     */
+    public static function deleteByLocalKey(string $local_key, ?string $taxonomy, bool $ignore_missing, int $element_index): void
+    {
+        if ($taxonomy !== null) {
+            $term_ids = TermRepository::findTermIdsByLocalKey($local_key, $taxonomy);
+        } else {
+            $terms = TermRepository::findTermsByLocalKeyInAnyTaxonomy($local_key);
+            $taxonomies = array_values(array_unique(array_column($terms, 'taxonomy')));
+            if (count($taxonomies) > 1) {
+                throw onpage_http_exception("Term :: Element $element_index :: local_key '$local_key' matches multiple taxonomies; pass a taxonomy to delete safely", 409, 'ambiguous_local_key');
+            }
+
+            $taxonomy = $taxonomies[0] ?? null;
+            $term_ids = array_column($terms, 'term_id');
+        }
+
+        if ($term_ids === [] || $taxonomy === null) {
+            if ($ignore_missing) return;
+
+            throw onpage_http_exception("Term :: Element $element_index :: Term with local_key '$local_key' not found", 404, 'not_found');
+        }
+
+        // Members already removed with their original (WPML "delete translations") are skipped.
+        foreach ($term_ids as $term_id) {
+            self::deleteById((int) $term_id, $taxonomy, true);
+        }
+    }
 }

@@ -32,7 +32,7 @@ element to a service in `src/Services/`.
 | Controller | Handles | Main responsibilities |
 |---|---|---|
 | `Post.php` | Posts and custom post types | Read, list and search posts. Create or update posts from a batch payload, with WPML translations, ACF fields and taxonomy terms. Delete posts by ID, `local_key` or post type. |
-| `Term.php` | Terms of any taxonomy | List and search terms. Create or update multilingual terms. Store `local_key` as term meta. Link translations through WPML. Delete terms by ID. |
+| `Term.php` | Terms of any taxonomy | List and search terms. Create or update multilingual terms. Store `local_key` as term meta. Link translations through WPML. Delete terms by ID or `local_key`. |
 | `FieldGroup.php` | ACF field groups | List field groups. Create or update field groups and their fields. Set WPML-related options. Delete field groups by ID or title. |
 | `PostType.php` | ACF post types | List, upsert and delete post types registered through ACF. |
 | `Taxonomy.php` | ACF taxonomies | List, upsert and delete taxonomies registered through ACF, with translated labels. |
@@ -54,7 +54,7 @@ Controllers validate the body before any service runs, with the helpers in `Inpu
 | `Input::requireObjectElement()` | Each element of a `POST` batch must be a non-empty JSON object. Scalars, `null`, lists and `{}` are rejected. | `400 invalid_param`, `<Prefix> :: Element N :: Invalid payload; expected a non-empty JSON object` |
 | `Input::positiveInt()` | A positive integer, a whole float (`12.0`) or a digit string. Surrounding spaces are trimmed. Booleans, `"1.9"`, `"1e3"`, `"12abc"` and arrays give `null` instead of being cast. Used for most IDs in payloads and query parameters (`id`, `parent`, `post_id`, ...). | Each caller picks its own error |
 | `Input::optionalPositiveIntParam()` | An optional `id` in a `POST` element: absent, `null`, `0` or `"0"` gives `null`, anything else must pass `positiveInt()`. Used by `POST /posts`, `/terms` (and the WooCommerce term endpoints), `/woocommerce/attributes` and `/woocommerce/variant-products`, so an invalid `id` is never dropped and turned into an insert. | `400 invalid_param`, `<Prefix> :: Element N :: Parameter 'id' must be a positive integer or null` |
-| `Input::strictPositiveInt()` | Stricter: a positive integer, or a string of digits only. No trimming and no floats. Used by `DELETE /terms`. | `400 input_invalid` |
+| `Input::strictPositiveInt()` | Stricter: a positive integer, or a string of digits only. No trimming and no floats. Used by `DELETE /terms`, for a plain ID and for `id` in an object. | `400 input_invalid` |
 
 `DELETE` endpoints that accept IDs or keys check the type of each element too. For example,
 `DELETE /field-groups`, `/post-types` and `/taxonomies` reject anything that is not an integer ID
@@ -812,11 +812,26 @@ If the name is missing for a translated language, that translation is neither cr
 
 ### Delete
 
-`DELETE /terms` validates each element with `Input::strictPositiveInt()`. It loads the term with
-`get_term()`, scoped to `?taxonomy=` when sent. A missing term, or one outside that taxonomy, is
-`404 not_found`, or skipped with `?ignore`. `Term::deleteById()` then calls `wp_delete_term()`. A
-`WP_Error` or `false` result fails with `500 delete_failed`, with the WordPress error message
-appended.
+`DELETE /terms` mirrors `DELETE /posts`. An element is a term ID, `{"id": …}` or
+`{"local_key": …}`, with an optional `taxonomy` in the object that overrides `?taxonomy=`. With
+`?keyfield=local_key`, plain values are read as local_keys. Otherwise a plain string is always an
+ID.
+
+- **By ID.** The ID is validated with `Input::strictPositiveInt()`. The controller loads the term
+  with `get_term()`, scoped to the taxonomy when there is one. A missing term, or one outside that
+  taxonomy, is `404 not_found`, or skipped with `?ignore`. Only that term is deleted.
+- **By `local_key`.** `Term::deleteByLocalKey()` finds every term holding the key, through
+  `TermRepository::findTermIdsByLocalKey()` (one taxonomy) or
+  `TermRepository::findTermsByLocalKeyInAnyTaxonomy()` (no taxonomy). Every translation carries the
+  key (`propagateLocalKeyToTranslations()`), so this is the whole WPML group. Without a taxonomy, a
+  key held in more than one taxonomy fails with `409 ambiguous_local_key`. Each term is deleted
+  with `$skip_missing`, because WPML's "delete translations as well" option may already have
+  removed it with the original.
+- An object with a present but invalid `local_key`, `id` or `taxonomy`, or with no identifier, is
+  `400 input_invalid`. It never falls back to another identifier.
+
+`Term::deleteById()` calls `wp_delete_term()`. A `WP_Error` or `false` result fails with
+`500 delete_failed`, with the WordPress error message appended.
 
 ## `Post.php` vs `Term.php`
 
