@@ -27,15 +27,17 @@ require_once __DIR__ . '/Support/Keep.php';
  *
  *   {"id": <it>}                       → the Italian term goes, the English one stays
  *   {"local_key": B, "taxonomy": …}    → every translation of B goes
+ *   {"local_key": C}, custom taxonomy  → every translation of C goes, taxonomy resolved from C
  *   ?keyfield=local_key, plain A       → what is left of A goes
  *   a key in two taxonomies            → `409 ambiguous_local_key` without a taxonomy
  *   malformed elements                 → `400`, before anything is deleted
  *
  * Needs WPML with `en` and `it` active on the test site, and the `category` taxonomy
- * translatable (the WPML default).
+ * translatable (the WPML default). The custom taxonomy is created by `POST /taxonomies`,
+ * which marks it translatable in WPML.
  *
- * Create-and-delete flow: the terms are created here and removed again at the end, also
- * when an assertion fails. With `ONPAGE_TEST_KEEP=1` the final cleanup is skipped (see
+ * Create-and-delete flow: the terms and the custom taxonomy are created here and removed
+ * again at the end, also when an assertion fails. With `ONPAGE_TEST_KEEP=1` the final cleanup is skipped (see
  * `Support/Keep.php`).
  *
  * Configuration comes from the plugin `.env` (see `.env.example`):
@@ -52,10 +54,14 @@ class TermDeleteByLocalKey
     /** Holds the same key as TAXONOMY, to make an unscoped lookup ambiguous. */
     private const OTHER_TAXONOMY = 'post_tag';
 
+    /** ACF taxonomy created by the fixture, to cover taxonomies that WPML does not ship with. */
+    private const CUSTOM_TAXONOMY = 'onpage_test_termdel';
+
     private const KEYS = [
         'single' => 'onpage-test-termdel-1',
         'group' => 'onpage-test-termdel-2',
         'shared' => 'onpage-test-termdel-3',
+        'custom' => 'onpage-test-termdel-4',
     ];
 
     private string $base_url;
@@ -147,9 +153,20 @@ class TermDeleteByLocalKey
 
     // -------------------------------------------------------------------- fixture
 
-    /** Creates the three terms: two translated into Italian, one in two taxonomies. */
+    /**
+     * Creates the custom taxonomy and the terms: two translated into Italian, one in two
+     * taxonomies, one translated into Italian in the custom taxonomy.
+     */
     private function createFixture(): void
     {
+        $this->requireOk('POST', '/taxonomies', [[
+            'key' => self::CUSTOM_TAXONOMY,
+            'singular_label' => 'Delete test',
+            'plural_label' => 'Delete tests',
+            'description' => 'Fixture of test src/Tests/TermDeleteByLocalKey.php',
+            'object_type' => ['post'],
+        ]]);
+
         foreach (['single', 'group'] as $name) {
             $this->requireOk('POST', '/terms', [[
                 'taxonomy' => self::TAXONOMY,
@@ -166,7 +183,13 @@ class TermDeleteByLocalKey
             ]]);
         }
 
-        echo "  fixture  terms created in '" . self::TAXONOMY . "' and '" . self::OTHER_TAXONOMY . "'\n";
+        $this->requireOk('POST', '/terms', [[
+            'taxonomy' => self::CUSTOM_TAXONOMY,
+            'local_key' => self::KEYS['custom'],
+            'name' => ['en' => 'On Page Test Delete custom', 'it' => 'On Page Test Elimina custom'],
+        ]]);
+
+        echo "  fixture  terms created in '" . self::TAXONOMY . "', '" . self::OTHER_TAXONOMY . "' and '" . self::CUSTOM_TAXONOMY . "'\n";
     }
 
     /**
@@ -234,16 +257,34 @@ class TermDeleteByLocalKey
 
     private function assertDeleteByLocalKey(): void
     {
-        $before = $this->translations(self::KEYS['group']);
-        if ($before === null || count($before) < 2) {
-            throw new \RuntimeException('the fixture group has fewer than two translations: ' . json_encode($before));
+        $this->assertGroupDeleted(self::KEYS['group'], self::TAXONOMY, true, 'local_key');
+    }
+
+    /** The same on a custom taxonomy, with the taxonomy resolved from the key. */
+    private function assertDeleteByLocalKeyCustomTaxonomy(): void
+    {
+        $this->assertGroupDeleted(self::KEYS['custom'], self::CUSTOM_TAXONOMY, false, 'custom taxonomy');
+    }
+
+    /**
+     * Deletes a translation group by local_key and checks that every member is gone.
+     *
+     * Each member ID must answer `404` afterwards: a member skipped by the delete (for example
+     * one hidden by a WPML language filter) would still be deleted by that call and answer `200`.
+     */
+    private function assertGroupDeleted(string $local_key, string $taxonomy, bool $scoped, string $label): void
+    {
+        $before = $this->translations($local_key, $taxonomy);
+        if ($before === null || !isset($before['en'], $before['it'])) {
+            throw new \RuntimeException("$label: the fixture group has no en/it translations: " . json_encode($before) . " ($taxonomy not translatable?)");
         }
 
-        $this->requireOk('DELETE', '/terms', [['local_key' => self::KEYS['group'], 'taxonomy' => self::TAXONOMY]]);
+        $element = $scoped ? ['local_key' => $local_key, 'taxonomy' => $taxonomy] : ['local_key' => $local_key];
+        $this->requireOk('DELETE', '/terms', [$element]);
 
-        $this->check($this->translations(self::KEYS['group']) === null, 'local_key: the group is no longer listed');
+        $this->check($this->translations($local_key, $taxonomy) === null, "$label: the group is no longer listed");
         foreach ($before as $language => $term_id) {
-            $this->check($this->request('DELETE', '/terms', [$term_id])['status'] === 404, "local_key: the $language translation answers 404");
+            $this->check($this->request('DELETE', '/terms', [$term_id])['status'] === 404, "$label: the $language translation answers 404");
         }
     }
 
@@ -295,7 +336,10 @@ class TermDeleteByLocalKey
         }
     }
 
-    /** Removes every fixture term, in both taxonomies. Missing terms are skipped. */
+    /**
+     * Removes every fixture term, then the custom taxonomy with the terms left in it. Missing
+     * terms and a missing taxonomy are skipped.
+     */
     private function teardown(): void
     {
         $body = [];
@@ -312,6 +356,15 @@ class TermDeleteByLocalKey
             }
         } catch (\RuntimeException $exception) {
             fwrite(STDERR, "  warning  cleanup failed: {$exception->getMessage()}\n");
+        }
+
+        try {
+            $response = $this->request('DELETE', '/taxonomies', [self::CUSTOM_TAXONOMY], 'ignore=1');
+            if ($response['status'] !== 200) {
+                fwrite(STDERR, "  warning  taxonomy cleanup answered {$response['status']}\n");
+            }
+        } catch (\RuntimeException $exception) {
+            fwrite(STDERR, "  warning  taxonomy cleanup failed: {$exception->getMessage()}\n");
         }
     }
 
@@ -351,7 +404,7 @@ class TermDeleteByLocalKey
             try {
                 $this->createFixture();
 
-                foreach (['assertDeleteById', 'assertDeleteByLocalKey', 'assertAmbiguousLocalKey', 'assertValidation'] as $scenario) {
+                foreach (['assertDeleteById', 'assertDeleteByLocalKey', 'assertDeleteByLocalKeyCustomTaxonomy', 'assertAmbiguousLocalKey', 'assertValidation'] as $scenario) {
                     try {
                         $this->$scenario();
                     } catch (\RuntimeException $exception) {
@@ -363,7 +416,7 @@ class TermDeleteByLocalKey
                     echo "  cleanup  skipped, ONPAGE_TEST_KEEP is on: the data stays on the site\n";
                 } else {
                     $this->teardown();
-                    echo "  cleanup  terms removed\n";
+                    echo "  cleanup  terms and custom taxonomy removed\n";
                 }
             }
         } catch (\RuntimeException $exception) {
