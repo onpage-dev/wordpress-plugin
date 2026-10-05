@@ -273,8 +273,13 @@ downloadable files are normally shown on the individual variations. The API has 
 `downloads`.
 
 For this reason, when a `variable` parent receives `downloads`, the plugin saves them on the parent
-and copies the same list to its existing variations. When a variation is saved with
-`/woocommerce/variant-products`, it inherits the downloads of its parent too.
+and copies the same list to its existing variations. A shorter list, `[]` included, is copied too.
+When a variation is saved with `/woocommerce/variant-products`, it inherits the downloads of its
+parent too.
+
+The list copied, and the fingerprint below, are read back from the database after the save. The
+saved WooCommerce object still returns the downloads the new list dropped, because
+`WC_Data::apply_changes()` merges the changes with `array_replace_recursive()`.
 
 The copy only touches variations that still inherit from the parent:
 

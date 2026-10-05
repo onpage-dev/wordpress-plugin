@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `POST /woocommerce/products` with a shorter `downloads` list, or `[]`, on a variable product now removes the dropped downloads from the variations that inherited them. They used to keep them.
+
 ## [1.0.1] - 2026-09-30
 
 ### Added

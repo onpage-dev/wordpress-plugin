@@ -2138,7 +2138,7 @@ The allowed values of `stock_status`, `backorders`, `catalog_visibility` and `ta
 - `GET /woocommerce/products` returns each download under `woocommerce.downloads` with the keys `id`, `name`, `file`, `enabled` and `public`.
 - An error while importing a download file (a non-public host, a file over the size limit, a failed download) is returned as `500 request_failed`, with the message `WooCommerce Product :: Element N :: Failed to import downloadable file for 'downloads.N.file' :: <original message>`. Downloads use a 12-second timeout.
 - If `downloads` contains at least one valid file, the product is automatically flagged as downloadable (`downloadable=true`).
-- For `variable` products, WooCommerce shows downloads in the admin on individual variations: the endpoint automatically copies the parent's downloads to the existing variations.
+- For `variable` products, WooCommerce shows downloads in the admin on individual variations: the endpoint automatically copies the parent's downloads to the existing variations. A shorter list, `[]` included, is copied too, so the variations lose what the parent lost.
   - Only variations that inherit the parent's downloads are updated. The last copied set is fingerprinted in the `_onpage_inherited_downloads` meta.
   - A variation whose own non-empty downloads differ from that fingerprint was edited on purpose and is skipped.
   - A variation without a fingerprint (saved by an earlier plugin version) is overwritten once, then tracked.

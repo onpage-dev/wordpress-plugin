@@ -278,9 +278,12 @@ class ProductDownloads
             return;
         }
 
+        // The list as saved, read back: after save() the object still returns the downloads the new
+        // list dropped, because WC_Data::apply_changes() merges with array_replace_recursive().
+        $saved = \wc_get_product((int) $product->get_id());
         $download_payloads = array_values(array_map(
             [self::class, 'buildCrudPayload'],
-            $product->get_downloads()
+            ($saved instanceof \WC_Product ? $saved : $product)->get_downloads()
         ));
 
         foreach ($product->get_children() as $variation_id) {
@@ -464,9 +467,11 @@ class ProductDownloads
             $variation_id = (int) $variation->get_id();
             if ($variation_id > 0) {
                 // Fingerprint what WooCommerce actually stored, which is what the next sync reads back.
+                // Read back, as in syncVariableProductToVariations(): the object still holds dropped ones.
+                $stored = \wc_get_product($variation_id);
                 \update_post_meta($variation_id, self::INHERITED_DOWNLOADS_META, self::fingerprintDownloads(array_values(array_map(
                     [self::class, 'buildCrudPayload'],
-                    $variation->get_downloads()
+                    ($stored instanceof \WC_Product ? $stored : $variation)->get_downloads()
                 ))));
             }
         } catch (\Throwable $e) {

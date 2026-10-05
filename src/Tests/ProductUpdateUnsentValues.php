@@ -19,8 +19,8 @@ require_once __DIR__ . '/Support/Keep.php';
 
 
 /**
- * End-to-end check of what a product update does with values the payload leaves out or
- * sends as null.
+ * End-to-end check of what a product update does with values the payload leaves out, sends
+ * as null or shortens.
  *
  *   status      an update without `status` keeps the product's status. It used to fall
  *               back to `publish` on every save, so a draft was published again.
@@ -32,6 +32,10 @@ require_once __DIR__ . '/Support/Keep.php';
  *               It used to remove only the custom ones. Product attributes are not in the
  *               GET response, so the test reads the effect the plugin documents instead: a
  *               variation built on the removed global attribute is made private.
+ *   downloads   a parent's shorter `downloads` list, down to `[]`, reaches the variations
+ *               that inherited the old one. They used to keep the dropped downloads. The
+ *               variation response has no downloads, so the test reads `downloadable`, which
+ *               the copy sets from the list.
  *
  * Create-and-delete flow: the attribute, its term, the products and the variation are
  * created here and removed again at the end, including when an assertion fails. Every
@@ -56,6 +60,8 @@ class ProductUpdateUnsentValues
     private const PROPS_PRODUCT_KEY = 'onpage-test-unsent-props';
     private const VARIABLE_PRODUCT_KEY = 'onpage-test-unsent-variable';
     private const VARIATION_KEY = 'onpage-test-unsent-variation';
+    private const DOWNLOADS_PRODUCT_KEY = 'onpage-test-unsent-downloads';
+    private const DOWNLOADS_VARIATION_KEY = 'onpage-test-unsent-downloads-variation';
 
     /** Values sent on create for every prop where null now keeps the stored value. */
     private const KEPT_PROPS = [
@@ -310,6 +316,42 @@ class ProductUpdateUnsentValues
         $this->check('attributes.null.global.terms', 0, count($global_terms));
     }
 
+    /**
+     * A shorter parent `downloads` list reaches the variation. Both steps matter: [a, b] then
+     * [a] used to leave a fingerprint of [a, b] on the variation, so the final [] took it for
+     * one a site admin had edited and skipped it.
+     */
+    private function assertShorterDownloadsReachVariations(): void
+    {
+        // Under the site's uploads URL, so the plugin links the file instead of importing it.
+        $download = fn(string $id): array => [
+            'id' => $id,
+            'file' => $this->base_url . "/wp-content/uploads/onpage-test-$id.pdf",
+            'name' => "Datasheet $id",
+        ];
+        $save = fn(array $downloads) => $this->saveProduct([
+            'local_key' => self::DOWNLOADS_PRODUCT_KEY,
+            'name' => 'On Page Test Unsent Downloads',
+            'props' => ['product_type' => 'variable'],
+            'attributes' => ['Size' => ['S']],
+            'downloads' => $downloads,
+        ]);
+        $downloadable = fn(): mixed => $this->requireOne('/woocommerce/variant-products', self::DOWNLOADS_VARIATION_KEY)['woocommerce']['downloadable'] ?? null;
+
+        $save([$download('a'), $download('b')]);
+        $this->requireOk('POST', '/woocommerce/variant-products', [[
+            'local_key' => self::DOWNLOADS_VARIATION_KEY,
+            'parent' => self::DOWNLOADS_PRODUCT_KEY,
+            'attributes' => ['Size' => 'S'],
+            'props' => ['regular_price' => '10'],
+        ]]);
+        $this->check('downloads.variation.inherits', true, $downloadable());
+
+        $save([$download('a')]);
+        $save([]);
+        $this->check('downloads.emptied.variation.cleared', false, $downloadable());
+    }
+
 
 
     // --------------------------------------------------------------------- support
@@ -375,8 +417,8 @@ class ProductUpdateUnsentValues
     private function teardown(): void
     {
         $calls = [
-            ['/woocommerce/variant-products', [self::VARIATION_KEY]],
-            ['/woocommerce/products', [self::DRAFT_PRODUCT_KEY, self::PROPS_PRODUCT_KEY, self::VARIABLE_PRODUCT_KEY]],
+            ['/woocommerce/variant-products', [self::VARIATION_KEY, self::DOWNLOADS_VARIATION_KEY]],
+            ['/woocommerce/products', [self::DRAFT_PRODUCT_KEY, self::PROPS_PRODUCT_KEY, self::VARIABLE_PRODUCT_KEY, self::DOWNLOADS_PRODUCT_KEY]],
             ['/woocommerce/attributes/' . self::ATTRIBUTE_SLUG . '/terms', [self::ATTRIBUTE_TERM_KEY]],
             ['/woocommerce/attributes', [self::ATTRIBUTE_KEY]],
         ];
@@ -419,7 +461,7 @@ class ProductUpdateUnsentValues
     /** Runs the whole flow and returns the process exit code. */
     public function run(): int
     {
-        echo "test     product update: omitted status, null props and null attributes\n";
+        echo "test     product update: omitted status, null props, null attributes and shorter downloads\n";
         echo "site     $this->base_url\n";
 
         try {
@@ -430,7 +472,7 @@ class ProductUpdateUnsentValues
 
             try {
                 // Independent scenarios: one failing must not hide the others.
-                foreach (['assertStatusIsKept', 'assertNullPropsAreKept', 'assertNullAttributesClearGlobals'] as $scenario) {
+                foreach (['assertStatusIsKept', 'assertNullPropsAreKept', 'assertNullAttributesClearGlobals', 'assertShorterDownloadsReachVariations'] as $scenario) {
                     try {
                         $this->$scenario();
                     } catch (\RuntimeException $exception) {
@@ -442,7 +484,7 @@ class ProductUpdateUnsentValues
                     echo "  cleanup  skipped, ONPAGE_TEST_KEEP is on: the data stays on the site\n";
                 } else {
                     $this->teardown();
-                    echo "  cleanup  variation, products and attribute removed\n";
+                    echo "  cleanup  variations, products and attribute removed\n";
                 }
             }
         } catch (\RuntimeException $exception) {
@@ -458,7 +500,7 @@ class ProductUpdateUnsentValues
             return 1;
         }
 
-        echo "\nPASSED: omitted status and null enum/boolean props are kept, null attributes clear every attribute\n";
+        echo "\nPASSED: omitted status and null enum/boolean props are kept, null attributes clear every attribute, a shorter downloads list reaches the variations\n";
 
         return 0;
     }
