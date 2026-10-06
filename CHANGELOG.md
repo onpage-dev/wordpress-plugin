@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - `POST /woocommerce/products` with a shorter `downloads` list, or `[]`, on a variable product now removes the dropped downloads from the variations that inherited them. They used to keep them.
+- A variation that 1.0.1 left skipped as if a site admin had edited its downloads inherits the parent's downloads again at the next sync, without any manual step. 1.0.1 could record downloads in its fingerprint that the variation no longer had. A variation an admin edits from now on is still left alone.
 
 ## [1.0.1] - 2026-09-30
 

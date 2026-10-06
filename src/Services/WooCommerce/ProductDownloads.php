@@ -17,6 +17,13 @@ class ProductDownloads
     private const DOWNLOAD_IMPORT_TIMEOUT_SECONDS = 12;
     /** Fingerprint of the downloads the plugin last copied from the parent onto a variation. */
     private const INHERITED_DOWNLOADS_META = '_onpage_inherited_downloads';
+    /**
+     * Marks the fingerprints written since 1.0.2. 1.0.1 fingerprinted the variation in memory, which
+     * still held the downloads a shorter list dropped, so a variation it copied could look edited
+     * by an admin forever. A fingerprint without this prefix counts as none: the next sync copies
+     * the parent's list again, as it does for a variation copied before fingerprints existed.
+     */
+    private const FINGERPRINT_PREFIX = 'v2:';
 
     /** Whether the uploads base URL was already approved during this request. */
     private static bool $uploads_directory_approved = false;
@@ -443,6 +450,9 @@ class ProductDownloads
         $inherited_fingerprint = $variation_id > 0
             ? \get_post_meta($variation_id, self::INHERITED_DOWNLOADS_META, true)
             : '';
+        if (!is_string($inherited_fingerprint) || !str_starts_with($inherited_fingerprint, self::FINGERPRINT_PREFIX)) {
+            $inherited_fingerprint = '';
+        }
 
         $has_own_downloads = $current_fingerprint !== self::fingerprintDownloads([])
             && is_string($inherited_fingerprint)
@@ -497,7 +507,7 @@ class ProductDownloads
         );
         sort($entries, \SORT_STRING);
 
-        return md5(implode("\n", $entries));
+        return self::FINGERPRINT_PREFIX . md5(implode("\n", $entries));
     }
 
     /** Resolves a downloadable file payload value for one product language. */

@@ -2141,7 +2141,7 @@ The allowed values of `stock_status`, `backorders`, `catalog_visibility` and `ta
 - For `variable` products, WooCommerce shows downloads in the admin on individual variations: the endpoint automatically copies the parent's downloads to the existing variations. A shorter list, `[]` included, is copied too, so the variations lose what the parent lost.
   - Only variations that inherit the parent's downloads are updated. The last copied set is fingerprinted in the `_onpage_inherited_downloads` meta.
   - A variation whose own non-empty downloads differ from that fingerprint was edited on purpose and is skipped.
-  - A variation without a fingerprint (saved by an earlier plugin version) is overwritten once, then tracked.
+  - A variation without a fingerprint (saved by an earlier plugin version) is overwritten once, then tracked. So is one with a fingerprint written by 1.0.1, which could record downloads the variation no longer had.
   - A variation already in sync is not saved again.
 - `downloads: []` or `downloads: null` removes all WooCommerce downloadable files from the product.
 - `name`, `url` and `file` inside `downloads` can be WPML language maps. Each translation receives its own resolved value; `null` or empty values are ignored.
