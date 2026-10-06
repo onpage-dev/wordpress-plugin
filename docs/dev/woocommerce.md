@@ -287,7 +287,10 @@ The copy only touches variations that still inherit from the parent:
   in the variation meta `_onpage_inherited_downloads`.
 - A variation whose current downloads are not empty and differ from that fingerprint has its own
   downloads, set by a site admin in WooCommerce. It is skipped.
-- A variation with downloads but no fingerprint yet is overwritten once, then tracked.
+- A variation with downloads but no fingerprint yet is overwritten once, then tracked. Fingerprints carry a
+  `v2:` prefix since 1.0.2; one without it, written by 1.0.1, counts as none. 1.0.1 fingerprinted
+  the variation object, which after a save still held the downloads a shorter list dropped, so
+  a variation it re-saved looked edited by an admin and was skipped for good.
 - A variation that already has the parent's downloads is not saved again. Repeated syncs, one per
   language, are idempotent.
 
