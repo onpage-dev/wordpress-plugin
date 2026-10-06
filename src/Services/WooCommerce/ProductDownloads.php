@@ -283,7 +283,8 @@ class ProductDownloads
         $saved = \wc_get_product((int) $product->get_id());
         $download_payloads = array_values(array_map(
             [self::class, 'buildCrudPayload'],
-            ($saved instanceof \WC_Product ? $saved : $product)->get_downloads()
+            // Only the very post just saved: never another one's list.
+            ($saved instanceof \WC_Product && $saved->get_id() === $product->get_id() ? $saved : $product)->get_downloads()
         ));
 
         foreach ($product->get_children() as $variation_id) {
@@ -471,7 +472,7 @@ class ProductDownloads
                 $stored = \wc_get_product($variation_id);
                 \update_post_meta($variation_id, self::INHERITED_DOWNLOADS_META, self::fingerprintDownloads(array_values(array_map(
                     [self::class, 'buildCrudPayload'],
-                    ($stored instanceof \WC_Product ? $stored : $variation)->get_downloads()
+                    ($stored instanceof \WC_Product && $stored->get_id() === $variation->get_id() ? $stored : $variation)->get_downloads()
                 ))));
             }
         } catch (\Throwable $e) {
