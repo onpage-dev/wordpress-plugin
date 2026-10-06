@@ -16,7 +16,7 @@ On Page®, and the next sync can overwrite them.
 
 ## Version
 
-Current version: **1.0.1**. The project follows [Semantic Versioning](https://semver.org/).
+Current version: **1.0.2**. The project follows [Semantic Versioning](https://semver.org/).
 
 - Changes in each version: [CHANGELOG.md](CHANGELOG.md)
 - How to cut a release: [RELEASE.md](RELEASE.md)
