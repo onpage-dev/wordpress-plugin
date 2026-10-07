@@ -26,12 +26,17 @@ class Language
      * `wpml_active` tells apart the two reasons `languages` can hold a single entry:
      * a single-language WPML install, and a site with no WPML at all (where language
      * maps are rejected with `wpml_required` rather than ignored).
+     *
+     * `plugin_version` (since 1.0.3) rides along because this is the call every client
+     * makes first: it lets the client refuse a plugin older than the one it needs. A
+     * response without it comes from 1.0.2 or earlier.
      */
     public static function listItems(): array
     {
         $default = onpage_get_wpml_default_language();
 
         return [
+            'plugin_version' => onpage_plugin_version(),
             'wpml_active' => onpage_is_wpml_active(),
             'default' => $default,
             'languages' => self::defaultFirst(onpage_get_wpml_languages(), $default),

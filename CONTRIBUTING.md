@@ -70,6 +70,7 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `MultiLangResolveFields.php` | offline | nothing: no site, no `.env` |
 | `MultiLangUnsentLanguages.php` | offline | nothing: no site, no `.env` |
 | `FieldGroupMalformedFields.php` | offline | nothing: no site, no `.env` |
+| `UpdaterLatestRelease.php` | offline | nothing: no site, no `.env` |
 | `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
 | `ProductLanguageMaps.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` (default) and `it` active |
