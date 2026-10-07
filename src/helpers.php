@@ -41,6 +41,15 @@ function onpage_set_pagination_headers(\WP_REST_Response $response, int $total, 
 
 
 /**
+ * The `Version:` header of `plugin.php`, so a client can tell which plugin it talks to.
+ * Read from the header rather than a constant: one place to bump on release.
+ */
+function onpage_plugin_version(): string
+{
+    return (string) (\get_file_data(ONPAGE_PLUGIN_DIR . '/plugin.php', ['version' => 'Version'])['version'] ?? '');
+}
+
+/**
  * Whether WPML (or ACFML-related) multilingual filters are active.
  *
  * Memoized per request: the active multilingual plugin set cannot change while a

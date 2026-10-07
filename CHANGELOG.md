@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- WordPress offers new releases as a regular plugin update, under **Plugins** and **Dashboard → Updates**, with one-click and automatic updates. The plugin reads the latest GitHub release (at most once an hour) and offers its `onpage-X.Y.Z.zip`; "View version details" links to the release notes. Updates from 1.0.2 or earlier to 1.0.3 are still done by hand.
+- `GET /languages` returns `plugin_version`, so a client can refuse a plugin older than the one it needs.
+
 ## [1.0.2] - 2026-10-06
 
 ### Fixed

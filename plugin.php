@@ -12,7 +12,7 @@
  * Author URI:        https://www.onpage.it
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
- * Update URI:        false
+ * Update URI:        https://github.com/onpage-dev/wordpress-plugin
  */
 
 
@@ -56,6 +56,7 @@ require_once __DIR__ . '/src/Services/RemoteMedia.php';
 require_once __DIR__ . '/src/Services/Migration.php';
 require_once __DIR__ . '/src/Services/Index.php';
 require_once __DIR__ . '/src/Services/Language.php';
+require_once __DIR__ . '/src/Services/Updater.php';
 require_once __DIR__ . '/src/Services/WooCommerce/Attribute.php';
 require_once __DIR__ . '/src/Services/WooCommerce/Brand.php';
 require_once __DIR__ . '/src/Services/WooCommerce/Term.php';
@@ -92,6 +93,8 @@ require_once __DIR__ . '/src/Controllers/WooCommerce/Tag.php';
 \OnPage\Services\Taxonomy::boot();
 \OnPage\Services\WooCommerce\Product::boot();
 \OnPage\Views\UI::boot();
+// Outside the ACF check below: a site missing ACF can still update the plugin.
+\OnPage\Services\Updater::boot();
 
 
 

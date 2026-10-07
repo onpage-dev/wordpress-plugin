@@ -3313,7 +3313,7 @@ Errors:
 
 ### GET `/languages`
 
-Returns the WPML languages active on the site and which one is the default.
+Returns the WPML languages active on the site, which one is the default, and the plugin's version.
 
 Use it to **check your language codes before you send them**. No write endpoint takes a list of languages. The plugin works out which translations to create from the codes it finds in the payload's language maps. A code the site does not have is dropped silently, on purpose: a payload may legitimately carry a language that is not active here. Without this endpoint, a misconfigured language code looked exactly like a missing translation. The elements in that language never appeared, and no error was returned.
 
@@ -3333,6 +3333,8 @@ The step-by-step rules and what happens without the filter are in the
 - WPML is installed with a single language;
 - the site has **no** WPML. There, a language map is not ignored: it is rejected with `500 wpml_required`.
 
+`plugin_version` (since 1.0.3) is the `Version` of the installed plugin. Use it to refuse a plugin older than the one your client needs: a response without it comes from 1.0.2 or earlier.
+
 No payload. **Pagination:** no.
 
 ```bash
@@ -3344,6 +3346,7 @@ Response `200`:
 
 ```json
 {
+  "plugin_version": "1.0.3",
   "wpml_active": true,
   "default": "en",
   "languages": ["en", "it", "es"]
@@ -3354,6 +3357,7 @@ On a site without WPML:
 
 ```json
 {
+  "plugin_version": "1.0.3",
   "wpml_active": false,
   "default": null,
   "languages": []

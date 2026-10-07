@@ -156,6 +156,10 @@ Good to know:
 
 ## Updating the plugin
 
+From 1.0.3 on, WordPress shows new versions like any other plugin update: a notice under **Plugins** and in **Dashboard → Updates**. Update from there with one click, or turn on automatic updates for **On Page®**. WordPress reads the latest release on GitHub, at most once an hour.
+
+Up to 1.0.2, or to install a specific version, update by hand:
+
 1. Upload the .zip of the new version under **Plugins** with **Upload Plugin**, and choose to
    replace the current version when WordPress asks.
 2. Open **Plugins** and check that **On Page®** is still active. Your data and your token are
