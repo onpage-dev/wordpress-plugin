@@ -1028,6 +1028,7 @@ class VariantProduct
             }
 
             $attributes[$attribute_key] = self::resolveVariationAttributeValue(
+                $parent,
                 $parent_attributes[$attribute_key],
                 $attribute_value,
                 (string) $attribute_name,
@@ -1141,7 +1142,7 @@ class VariantProduct
                 return true;
             }
 
-            $offered = self::getOfferedAttributeValues($attribute);
+            $offered = self::getOfferedAttributeValues($parent, $attribute);
             // Older WooCommerce versions stored custom values as slugs: accept either form.
             if (
                 $offered !== []
@@ -1200,11 +1201,11 @@ class VariantProduct
      *
      * @return string[]
      */
-    private static function getOfferedAttributeValues(\WC_Product_Attribute $attribute): array
+    private static function getOfferedAttributeValues(\WC_Product_Variable $parent, \WC_Product_Attribute $attribute): array
     {
         if ($attribute->is_taxonomy()) {
             $values = [];
-            foreach ($attribute->get_options() as $term_id) {
+            foreach (self::getOfferedTermIds($parent, $attribute) as $term_id) {
                 $term = \get_term((int) $term_id, $attribute->get_name());
                 if ($term instanceof \WP_Term) {
                     $values[] = strtolower((string) $term->slug);
@@ -1398,8 +1399,52 @@ class VariantProduct
         return \sanitize_title(preg_replace('/^attribute_/', '', trim($attribute_name)));
     }
 
+    /**
+     * The term IDs a global attribute offers, in the parent product's own language.
+     *
+     * With WPML, WooCommerce reads a product's attribute terms through filters that map them to the
+     * language that is current when the product is read, not to the product's language: the same `es`
+     * parent answers the `en` term IDs while the request runs in `en`. A translated parent is read
+     * before the request switches to its language, so its options could be in another language than
+     * the variation's term, and a valid value was rejected. Mapping every ID to the parent's language
+     * gives the same list whenever the parent was read. Without WPML the IDs are returned unchanged.
+     *
+     * @return int[]
+     */
+    private static function getOfferedTermIds(\WC_Product_Variable $parent, \WC_Product_Attribute $attribute): array
+    {
+        $term_ids = array_map('intval', $attribute->get_options());
+        $language_code = self::getPostLanguage((int) $parent->get_id());
+        if ($language_code === null) {
+            return $term_ids;
+        }
+
+        return array_map(
+            fn (int $term_id): int => self::termIdInLanguage($term_id, $attribute->get_name(), $language_code),
+            $term_ids
+        );
+    }
+
+    /** The WPML language of a product, or null without WPML. */
+    private static function getPostLanguage(int $post_id): ?string
+    {
+        $language_code = \apply_filters('wpml_element_language_code', null, [
+            'element_id' => $post_id,
+            'element_type' => 'post_' . \get_post_type($post_id),
+        ]);
+
+        return is_string($language_code) && $language_code !== '' ? $language_code : null;
+    }
+
+    /** A term's translation in `$language_code`, or the term itself when it has none. */
+    private static function termIdInLanguage(int $term_id, string $taxonomy, string $language_code): int
+    {
+        return (int) \apply_filters('wpml_object_id', $term_id, $taxonomy, true, $language_code);
+    }
+
     /** Resolves and validates one variation attribute value against parent options. */
     private static function resolveVariationAttributeValue(
+        \WC_Product_Variable $parent,
         \WC_Product_Attribute $attribute,
         string $value,
         string $payload_attribute_name,
@@ -1423,8 +1468,12 @@ class VariantProduct
                 throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' was not found", 404, 'not_found');
             }
 
-            $allowed_term_ids = array_map('intval', $attribute->get_options());
-            if ($allowed_term_ids !== [] && !in_array((int) $term->term_id, $allowed_term_ids, true)) {
+            $allowed_term_ids = self::getOfferedTermIds($parent, $attribute);
+            $language_code = self::getPostLanguage((int) $parent->get_id());
+            $term_id = $language_code !== null
+                ? self::termIdInLanguage((int) $term->term_id, $taxonomy, $language_code)
+                : (int) $term->term_id;
+            if ($allowed_term_ids !== [] && !in_array($term_id, $allowed_term_ids, true)) {
                 throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Attribute '$payload_attribute_name' option '$value' is not enabled on the parent product", 400, 'invalid_param');
             }
 

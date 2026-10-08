@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `POST /woocommerce/products` now saves `gallery` on every WPML translation. With WooCommerce Multilingual active, a translation whose gallery was the same as the default language's was left with no gallery of its own, and `GET /woocommerce/products` answered `gallery_image_ids: []` for it.
+- `POST /woocommerce/variant-products` no longer rejects a translated variation with `400 invalid_param` ("option '…' is not enabled on the parent product") when its value is offered by its parent. With WPML, the parent's options could be read in another language than the variation's, for example when the update put a variation out of stock.
+
 ## [1.0.3] - 2026-10-07
 
 ### Added
