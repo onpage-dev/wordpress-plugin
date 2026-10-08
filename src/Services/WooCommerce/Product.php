@@ -1952,6 +1952,7 @@ class Product
         if ($gallery === null || $gallery === '' || $gallery === []) {
             $product->set_gallery_image_ids([]);
             self::saveProductImage($product, $element_index);
+            self::writeGalleryMeta($product_id, []);
             return;
         }
 
@@ -1999,6 +2000,25 @@ class Product
 
         $product->set_gallery_image_ids($attachment_ids);
         self::saveProductImage($product, $element_index);
+        self::writeGalleryMeta($product_id, $attachment_ids);
+    }
+
+    /**
+     * Writes the gallery meta of a product directly, after WooCommerce saved it.
+     *
+     * WooCommerce Multilingual filters single reads of `_product_image_gallery` on a translation and
+     * answers with the source product's gallery. `update_post_meta()` compares against that filtered
+     * value, so a translation whose gallery equals its source's was never written: its own meta stayed
+     * empty, and every read that does not go through the filter (the product object, this plugin's
+     * GET responses) saw no gallery. Deleting and adding the meta skips that comparison.
+     */
+    private static function writeGalleryMeta(int $product_id, array $attachment_ids): void
+    {
+        \delete_post_meta($product_id, '_product_image_gallery');
+        if ($attachment_ids !== []) {
+            \add_post_meta($product_id, '_product_image_gallery', implode(',', $attachment_ids), true);
+        }
+        \clean_post_cache($product_id);
     }
 
     /** Persists the product after changing its image assignment. */

@@ -41,7 +41,11 @@ When saving, the service (`Product::persistProductFromParams()`), once per langu
    exists in `VariantProduct`.
 4. Applies attributes (see [Attributes](#attributes)) and downloads.
 5. Saves the product with `$product->save()`.
-6. Updates `local_key`, the public download IDs, image and gallery.
+6. Updates `local_key`, the public download IDs, image and gallery. The gallery meta
+   (`_product_image_gallery`) is then written again directly (`Product::writeGalleryMeta()`).
+   WooCommerce Multilingual answers single reads of that meta on a translation with the source
+   product's gallery, so `update_post_meta()` saw a translation's identical gallery as unchanged and
+   never wrote it. The translation then read back an empty gallery.
 7. If the product is `variable`:
    - syncs the parent's downloads to the existing variations (see
      [Variable products and variations](#variable-products-and-variations));
@@ -322,6 +326,13 @@ own parent, or created there. `id` always names the source-language variation.
 
 A language that no map in the payload contains is never created. Its existing translation is still
 saved, so it takes the shared values.
+
+A global attribute value is checked against the options of the parent in the parent's own language
+(`VariantProduct::getOfferedTermIds()`). WPML maps a product's attribute terms to the language that
+is current when the product is read, and a translated parent is read before the request switches to
+its language. Without the mapping, a valid value could be rejected with `400 invalid_param` (`option
+'…' is not enabled on the parent product`). The same mapping applies when a variation is checked for
+values its parent no longer offers.
 
 On update, an existing variation keeps every field whose language map leaves its language out,
 as products do. `VariantProduct::withoutMapsMissingLanguage()` removes those fields from the
