@@ -123,6 +123,11 @@ fails if anything else is left. It deletes in small batches, so that no call run
 timeout of the test site. **If the gate fails, no test runs.** You can also run it on its own
 with `php src/Tests/Gate.php`.
 
+The gate refuses any `WP_TEST_URL` that is not on `localhost`, `127.0.0.1` or `[::1]`, unless its
+host is listed in `WP_TEST_DISPOSABLE_HOSTS` in `.env` (comma separated). A shared sandbox is
+wiped only when someone names it on purpose. `src/Tests/GateDisposableHosts.php` checks the rule
+offline.
+
 Good to know:
 
 - The end-to-end tests create and delete their own data, and the gate empties the whole WooCommerce

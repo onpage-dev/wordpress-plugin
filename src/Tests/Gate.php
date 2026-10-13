@@ -52,8 +52,11 @@ require_once __DIR__ . '/Support/Audit.php';
  *
  *   WP_TEST_URL     base URL of the test WordPress site, e.g. http://localhost:8040
  *   WP_TEST_TOKEN   Bearer token, the same value stored in the `onpage_auth_token` option
+ *   WP_TEST_DISPOSABLE_HOSTS   other hosts it may wipe, comma separated (optional)
  *
- * Destructive by design: point it at a test site, never at production.
+ * Destructive by design: it refuses any site that is not on localhost, 127.0.0.1 or [::1]
+ * unless its host is listed in `WP_TEST_DISPOSABLE_HOSTS`, so a shared sandbox is wiped
+ * only when someone names it on purpose.
  *
  * Run with: php src/Tests/Gate.php
  */
@@ -459,7 +462,21 @@ class Gate
             self::fatal('WP_TEST_URL and WP_TEST_TOKEN must be set in the .env file (see .env.example)');
         }
 
+        if (!self::isDisposable($base_url, (string) Env::get('WP_TEST_DISPOSABLE_HOSTS', ''))) {
+            self::fatal("$base_url is not a disposable site: the gate wipes its whole WooCommerce catalogue."
+                . ' It runs only on localhost, 127.0.0.1, [::1] or a host listed in WP_TEST_DISPOSABLE_HOSTS in .env');
+        }
+
         return new self($base_url, $token);
+    }
+
+    /** Whether the gate may wipe the site at `$base_url`: a local one, or a host in `$disposable_hosts` (comma separated). */
+    public static function isDisposable(string $base_url, string $disposable_hosts): bool
+    {
+        $host = strtolower((string) parse_url($base_url, PHP_URL_HOST));
+        $listed = array_map('trim', explode(',', strtolower($disposable_hosts)));
+
+        return $host !== '' && in_array($host, ['localhost', '127.0.0.1', '[::1]', ...$listed], true);
     }
 
     /** Runs the whole wipe and returns the process exit code. */
