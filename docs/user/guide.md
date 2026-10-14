@@ -35,7 +35,7 @@ A practical example:
 
 | Requirement | Status | Why |
 |---|---|---|
-| **WordPress 7.1+** | Required | |
+| **WordPress 7.0+** | Required | |
 | **PHP 8.2+** | Required | |
 | **Advanced Custom Fields (ACF) 6.1+** | **Required** | Creates and manages the structured custom fields attached to the imported content, so the data can be shown and organized in the WordPress admin and in your site templates. Version 6.1 is the first one that can create post types and taxonomies, which the plugin relies on. With an older version, a red notice in the admin asks you to update ACF, and the plugin's API answers every call with an error. |
 | **WooCommerce** | Optional | Only needed if the client syncs products, categories, brands or other e-commerce data. |
