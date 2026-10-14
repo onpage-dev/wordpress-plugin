@@ -27,7 +27,7 @@ Current version: **1.0.4**. The project follows [Semantic Versioning](https://se
 
 ## Requirements
 
-- WordPress 7.1 or later
+- WordPress 7.0 or later
 - PHP 8.2 or later
 - [Advanced Custom Fields](https://wordpress.org/plugins/advanced-custom-fields/) 6.1 or later,
   active. Without ACF the REST API stays disabled.

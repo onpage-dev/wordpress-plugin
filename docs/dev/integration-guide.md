@@ -130,7 +130,7 @@ None of these is required by the plugin, but clients that follow them are easier
 | Component | When | Consequence if missing |
 | --- | --- | --- |
 | PHP 8.2+ | always | the plugin code does not run (`Requires PHP` in `plugin.php`) |
-| WordPress 7.1+ | always | declared minimum (`Requires at least`) |
+| WordPress 7.0+ | always | declared minimum (`Requires at least`) |
 | **ACF 6.1+** | **always** | ACF missing: **no route is registered at all** — see below. ACF older than 6.1: every authenticated call answers `500 acf_version_unsupported`, and the dashboard shows a notice. The plugin needs 6.1 because it calls `acf_update_post_type()` and `acf_update_taxonomy()`, added in that version |
 | ACF PRO | only for its own field types (`repeater`, `flexible_content`, …) | the plugin does **not** check the ACF edition. `POST /field-groups` passes `fields[].type` straight to `acf_update_field()` and still answers `200`. A PRO-only field is stored but does not work |
 | WooCommerce | only for `/woocommerce/*` | `500 woocommerce_required` on each request |
