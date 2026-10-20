@@ -83,12 +83,14 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 
 - **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
 - **End-to-end tests** call the REST API of a real WordPress site with the plugin active. Only
-  `WooCommerceCatalog.php`, `TermDeleteByLocalKey.php`, `ProductLanguageMaps.php` and
-  `TermVariationUnsentLanguages.php` need WPML.
+  `WooCommerceCatalog.php`, `TermDeleteByLocalKey.php`, `ProductLanguageMaps.php`,
+  `ProductTrashRestoreMultiLang.php` and `TermVariationUnsentLanguages.php` need WPML.
 
 ### Running them
 
-For the end-to-end tests, set these in `.env` (see `.env.example`):
+For the end-to-end tests, set these in `.env` (see `.env.example`), or in the environment of the
+run. A variable set in the environment wins over `.env`, so one run can target another site
+without editing the file:
 
 - `WP_TEST_URL`: base URL of the test site, without a trailing slash, for example
   `http://localhost:8040`
@@ -96,7 +98,13 @@ For the end-to-end tests, set these in `.env` (see `.env.example`):
   of the `onpage_auth_token` option)
 - `ONPAGE_TEST_KEEP` (optional): set it to `1` to keep the data the tests create on the site, so
   you can inspect it in wp-admin after the run. You can also set it for one run only:
-  `ONPAGE_TEST_KEEP=1 ./bin/test-launcher`. The process environment wins over `.env`.
+  `ONPAGE_TEST_KEEP=1 ./bin/test-launcher`.
+
+```sh
+WP_TEST_URL=http://localhost:8040 WP_TEST_TOKEN=connector-test-token ./bin/test-launcher
+```
+
+An empty variable counts as unset, so `.env` applies. `src/Env.php` is the reader.
 
 Then run:
 
@@ -126,9 +134,39 @@ timeout of the test site. **If the gate fails, no test runs.** You can also run 
 with `php src/Tests/Gate.php`.
 
 The gate refuses any `WP_TEST_URL` that is not on `localhost`, `127.0.0.1` or `[::1]`, unless its
-host is listed in `WP_TEST_DISPOSABLE_HOSTS` in `.env` (comma separated). A shared sandbox is
+host is listed in `WP_TEST_DISPOSABLE_HOSTS`, in the environment or in `.env` (comma separated). A shared sandbox is
 wiped only when someone names it on purpose. `src/Tests/GateDisposableHosts.php` checks the rule
 offline.
+
+### Using the connector's Docker WordPress
+
+The local stack of this repository has no WooCommerce, ACF or WPML. The `connector` repository has
+a Docker WordPress that does: WooCommerce, ACF, WPML with `en` (default), `it`, `ru` and `es`, and
+this plugin mounted read-only from the path in `WP_PLUGIN_DIR`. It can run every test.
+
+1. In the `connector` repository, set `WP_PLUGIN_DIR` in `test-env/.env` to the absolute path of
+   this repository, so the site runs your working copy. Edits are live on the next request.
+2. The paid WPML plugins come from the sandbox: run `test-env/wordpress/fetch-plugins.sh` once
+   (it needs SSH access to the sandbox). Skip it if `test-env/wordpress/wp-plugins` already holds
+   them.
+3. Start it from the `connector` repository. The one-shot `wordpress-setup` service installs and
+   configures everything, and can be run again safely:
+
+   ```sh
+   docker compose -f test-env/compose.yaml up -d wordpress-setup
+   ```
+
+   It answers on `http://localhost:8040` with the token `connector-test-token`. The local stack of
+   this repository uses the same port: stop it first with `./stop`.
+4. Run the tests from this repository, pointing them at that site:
+
+   ```sh
+   WP_TEST_URL=http://localhost:8040 WP_TEST_TOKEN=connector-test-token ./bin/test-launcher
+   ```
+
+The gate wipes the WooCommerce catalogue of that site, which also removes what the connector's own
+tests left there. Stop it with `docker compose -f test-env/compose.yaml down` (add `-v` to drop the
+database too).
 
 Good to know:
 

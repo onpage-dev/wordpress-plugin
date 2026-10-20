@@ -15,8 +15,10 @@
 # and one [res] line per call, grouped by test. The file starts from scratch on every
 # run, so what you read is always the last run and nothing else.
 #
-# The tests read WP_TEST_URL and WP_TEST_TOKEN from the .env file (see .env.example)
-# and create and delete their own data: point them at a test site, never at production.
+# The tests read WP_TEST_URL and WP_TEST_TOKEN from the environment, else from the .env
+# file (see .env.example), and create and delete their own data: point them at a test
+# site, never at production. One run can target another site without editing .env:
+#   WP_TEST_URL=http://localhost:8040 WP_TEST_TOKEN=connector-test-token ./bin/test-launcher
 # With ONPAGE_TEST_KEEP=1, in .env or in the environment, the tests skip their final
 # cleanup and leave their data on the site; the gate and the initial cleanup still run.
 set -eu
@@ -74,8 +76,8 @@ if [ -f .env ]; then
         echo "Remove them from the comments and try again. See .env.example." >&2
         exit 1
     }
-else
-    echo "warning: the .env file is missing, the tests will not know which site to target. See .env.example"
+elif [ -z "${WP_TEST_URL:-}" ]; then
+    echo "warning: the .env file is missing and WP_TEST_URL is not set, the tests will not know which site to target. See .env.example"
 fi
 
 # The audit log is written by the tests, which get its path from here. The launcher

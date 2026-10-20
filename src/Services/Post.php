@@ -1533,8 +1533,12 @@ class Post
     {
         if (!onpage_is_wpml_active()) return null;
 
-        $trid = \wpml_get_content_trid($wp_post_type, $post_id);
-        if ($trid) return (int) $trid;
+        // wpml_get_content_trid() lives in WPML's inc/wpml-api.php, which a REST request does
+        // not always load: the language details below give the trid too.
+        if (\function_exists('wpml_get_content_trid')) {
+            $trid = \wpml_get_content_trid($wp_post_type, $post_id);
+            if ($trid) return (int) $trid;
+        }
 
         $language_details = self::getPostLanguageDetails($post_id, $wp_post_type);
 
