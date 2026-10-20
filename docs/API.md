@@ -914,7 +914,7 @@ How the target post is resolved:
 | `title` | on insert | A non-empty string or a WPML language map. Missing or empty on insert → `400 invalid_param`, and so is a map with no non-empty title in an active language. On update an empty string is accepted. |
 | `content` | no | |
 | `description` | no | Saved as the post excerpt (`post_excerpt`). GET responses do not return it. |
-| `status` | no | Default `draft` on insert. Must be a registered post status (`publish`, `draft`, `pending`, `private`, `future`, or a custom one); `trash`, `auto-draft`, `inherit` or any other value returns `400 invalid_param`. |
+| `status` | no | Default `draft` on insert. Must be a registered post status (`publish`, `draft`, `pending`, `private`, `future`, or a custom one), or `trash` to move an existing post to the trash (see [Trashed posts](#trashed-posts)). `auto-draft`, `inherit` or any other value returns `400 invalid_param`. |
 | `local_key` | yes | Always required, also when updating by `id`. |
 | `files` | no | Map `acf_field_name => URL or attachment_id`. `null` or `""` as a value does not clear the field: it returns `400 input_invalid`. |
 | `acf_fields` | no | See [Handling `acf_fields`](#handling-acf_fields). |
@@ -972,14 +972,31 @@ Supported `term`/`terms` formats:
 
 #### Trashed posts
 
-A trashed post still owns its `local_key`. Every `local_key` lookup of this endpoint includes the trash. (Reads do not: `GET /posts/{id}?keyfield=local_key` and `GET /posts?local_key=` leave trashed posts out.)
+**Moving a post to the trash.** Send `"status": "trash"`:
+
+```json
+[
+  { "type": "product", "local_key": 1001, "status": "trash" }
+]
+```
+
+- The post is found by `id` when sent, otherwise by `local_key` (scoped to `type` when sent). It must already exist: a key held by no post returns `404 not_found`, an `id` that does not exist returns `404 no_post`.
+- Every other field is ignored, so `title` is not needed. Nothing else is written.
+- The whole element goes to the trash: every post holding the `local_key`, every WPML translation included. With `id`, the post and its WPML translations.
+- WordPress trashes it with `wp_trash_post()`, so it keeps the status the post had. A post already in the trash is left as it is, so sending the same request twice is safe.
+- The response is the post ID, as for any other save.
+- Without `type`, a key held by posts of several post types returns `409 ambiguous_local_key`.
+- If the site has the trash turned off (`EMPTY_TRASH_DAYS` set to `0`), WordPress would delete the post for good. The request returns `409 trash_disabled` instead, and nothing changes.
+
+**Restoring a post.** Send the element again with a `status` other than `trash`, for example `publish`. A trashed post still owns its `local_key`. Every `local_key` lookup of this endpoint includes the trash. (Reads do not: `GET /posts/{id}?keyfield=local_key` and `GET /posts?local_key=` leave trashed posts out.)
 
 - Re-importing a trashed element updates it instead of creating a second post with the same key.
+- **Without `status` the post stays in the trash**, as any omitted `status` keeps the current one. The other fields are still updated.
 - A live post wins: when both a live post and a trashed post hold the key, the live post is updated and the trashed one stays in the trash.
-- The post is restored (`wp_untrash_post()`) together with its trashed translations that hold the same key, then the payload is applied.
+- With a `status`, the post is restored (`wp_untrash_post()`) together with its trashed translations that hold the same key, then the payload is applied. This applies to an update by `id` too.
 - The restore happens after a first set of checks: the post type exists, WPML is available for language maps, the title is not a duplicate and `type` matches the post. A request rejected by these checks (for example `409 duplicate_title`) leaves the post in the trash.
 - `acf_fields`, `files` and `terms` are validated only after the restore. A request that fails there (for example `400 input_invalid` on a file) leaves the post restored, because the update path has no rollback.
-- The payload `status` then applies. Without `status`, the post keeps the status WordPress restores it to, which is `draft`.
+- The payload `status` then applies to the restored posts.
 - A trashed post of another translation group that holds the same key stays in the trash.
 - A failed restore returns `500 request_failed`.
 
@@ -1063,10 +1080,11 @@ Main errors:
   - a repeater, group or flexible content value is malformed.
 - `400 input_invalid` if a value in `files` or an `image`/`file` value in `acf_fields` is neither an existing `attachment_id` nor a valid URL
 - `404 no_post` if the `id` sent does not exist
-- `404 not_found` if `type` is not a registered post type
+- `404 not_found` if `type` is not a registered post type, or with `status: "trash"` if no post holds the `local_key`
 - `404 input_invalid` if a referenced term does not exist
 - `409 ambiguous_local_key` if no `type` is sent and the `local_key` exists on several post types
 - `409 duplicate_local_key` with an explicit `id`, if the `local_key` belongs to another post of the same type
+- `409 trash_disabled` with `status: "trash"`, if the site has the trash turned off (`EMPTY_TRASH_DAYS` is `0`)
 - `409 duplicate_title` if the title already exists on an object **without a `local_key`**, outside this element's translation group. An object carrying a different `local_key` is another On Page® element and does not conflict, so two elements with the same title are both imported.
 - `500 acf_error` if ACF refuses to save a field
 - `413 file_too_large` if a remote file is over the [size limit](#remote-file-imports)
@@ -2030,6 +2048,34 @@ Body:
 - To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`. Maps in `categories`, `tags` and `terms` only choose the term for each translation.
 - `status` is optional. On create it defaults to `publish`. On update, a save without `status` keeps the current status of every language, so a draft stays a draft. A translation created by an update without `status` takes the status of the existing product.
 - `status` must be a non-empty string, otherwise `400 invalid_param` (`Parameter 'status' must be a string`).
+- `status: "trash"` moves the product to the trash. See [Trashed products](#trashed-products).
+
+#### Trashed products
+
+**Moving a product to the trash.** Send `"status": "trash"`:
+
+```json
+[
+  { "local_key": 1001, "status": "trash" }
+]
+```
+
+- The product is found by `id` when sent, otherwise by `local_key`. It must already exist: otherwise the request returns `404 not_found`.
+- Every other field is ignored, so `name` is not needed. Nothing else is written.
+- The whole element goes to the trash: every product holding the `local_key`, every WPML translation included. With `id`, the product and its WPML translations.
+- WooCommerce trashes the variations with their product. While the product is in the trash, `GET /woocommerce/products?local_key=` returns `404 not_found` and `GET /woocommerce/variant-products?local_key=` returns `[]` for its variations. `GET /woocommerce/products?id=` still returns it, with `status: "trash"`.
+- A product already in the trash is left as it is, so sending the same request twice is safe. The response is the product ID, as for any other save.
+- If the site has the trash turned off (`EMPTY_TRASH_DAYS` set to `0`), WordPress would delete the product for good. The request returns `409 trash_disabled` instead, and nothing changes.
+
+**Restoring a product.** Send the element again with a `status` other than `trash`, for example `publish`. A trashed product still owns its `local_key`:
+
+- The next `POST` with the same `local_key` and a `status` restores the product and updates it. It keeps its ID, so no second product is created.
+- **Without `status` the product stays in the trash**, as any omitted `status` keeps the current one. The other fields are still updated.
+- A live product wins: when both a live and a trashed product hold the key, the live one is updated and the trashed one stays in the trash.
+- The product is restored together with its trashed WPML translations and its variations. This happens after the name checks, so a request rejected with `409 duplicate_title` leaves it in the trash. A later failure (for example a file that cannot be downloaded) leaves it restored, because the update has no rollback.
+- The payload `status` applies to the product and its translations. The variations get back the status they had when they were trashed.
+- An update by `id` of a trashed product follows the same rule: restored with a `status`, left in the trash without.
+- A variation is restored with its product. `POST /woocommerce/variant-products` on a variation whose product is in the trash returns `404 not_found`: restore the product first.
 
 #### Missing, present and null keys
 
@@ -2240,10 +2286,11 @@ Main errors:
   - the host of `image` or `gallery` does not resolve to a public address (see [Remote file imports](#remote-file-imports));
   - WooCommerce rejects a `props` value, for example a `sku` already used by another product or an unknown `tax_status` or `catalog_visibility`.
 - `400 input_invalid` if an `image`/`file` value in `acf_fields` is neither an existing `attachment_id` nor a valid URL.
-- `404 not_found` if the `id` sent, a taxonomy in `terms` or a global attribute term in `attributes` does not exist.
+- `404 not_found` if the `id` sent, a taxonomy in `terms` or a global attribute term in `attributes` does not exist, or with `status: "trash"` if no product holds the `local_key`.
 - `404 input_invalid` if a referenced term (`brand`, `categories`, `tags`, `terms`) does not exist.
 - `409 duplicate_local_key` only with an explicit `id` in the payload, when that `local_key` belongs to a different product. Without `id`, the key identifies the product to update and any leftovers are reconciled.
 - `409 duplicate_title` if the title already exists on an object **without a `local_key`**, outside this element's translation group. An object carrying a different `local_key` is another On Page® element and does not conflict, so two elements with the same title are both imported.
+- `409 trash_disabled` with `status: "trash"`, if the site has the trash turned off (`EMPTY_TRASH_DAYS` is `0`).
 - `500 woocommerce_required` if WooCommerce is not active.
 - `413 file_too_large` if `image` or `gallery` points to a file over the [size limit](#remote-file-imports).
 - `500 acf_error` if ACF refuses to save a field.
@@ -2253,7 +2300,7 @@ Main errors:
 
 ### DELETE `/woocommerce/products`
 
-Deletes WooCommerce products by `local_key`. If several products share the same `local_key` (WPML translations), **all** of them are deleted: the whole translation group, as for brands.
+Deletes WooCommerce products by `local_key`, for good. If several products share the same `local_key` (WPML translations), **all** of them are deleted: the whole translation group, as for brands. Products in the trash that hold the key are deleted too. To move a product to the trash instead, use `POST /woocommerce/products` with `status: "trash"` (see [Trashed products](#trashed-products)).
 
 Body:
 

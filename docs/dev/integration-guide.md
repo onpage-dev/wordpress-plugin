@@ -382,12 +382,21 @@ other keys:
   `onpage_wc_attribute_local_key_{attribute_id}`.
 - **WPML**: every translation in a group shares the same `local_key`. The key identifies the
   object, not the language.
-- **Trash**: a trashed post still owns its `local_key`. `POST /posts` finds it, restores it and
-  updates it, instead of creating a second post with the same key. If a live post also holds the
-  key, the live post is updated and the trashed one stays in the trash. Without a `status` in the
-  payload the restored post is a `draft`. Reads leave the trash out: `GET /posts?local_key=` and
-  `GET /posts/{id}?keyfield=local_key` do not return a trashed post (the latter answers
-  `404 no_post`).
+- **Trash**: a trashed post or product still owns its `local_key`. `POST /posts` and
+  `POST /woocommerce/products` find it and update it, instead of creating a second one with the
+  same key. The trash is a status like any other: with a `status` in the payload the element is
+  restored and gets that status, without one it is updated and stays in the trash. If a live
+  element also holds the key, the live one is updated and the trashed one stays in the trash.
+  Reads leave the trash out: `GET /posts?local_key=`,
+  `GET /posts/{id}?keyfield=local_key` and `GET /woocommerce/products?local_key=` do not return a
+  trashed element.
+- **Retiring an element**: to take an element off the site but keep it restorable, send
+  `{"local_key": …, "status": "trash"}` to `POST /posts` (add `type`) or
+  `POST /woocommerce/products`. No title or name is needed, and the whole WPML group goes to the
+  trash, with the variations of a product. When the element comes back, send it again **with a
+  `status`** (for example `publish`): it is restored with the same ID. Without `status` it stays
+  in the trash. A key that does not exist answers `404 not_found`.
+  `DELETE` removes for good.
 
 ### Which value to use
 
@@ -461,7 +470,9 @@ What happens when you break the order:
 | term reference that resolves to nothing | `404` with code `input_invalid` — *Term reference '…' not found in taxonomy '…'* in `Post` payloads, *Term with local_key '…' not found in taxonomy '…'* in WooCommerce payloads |
 | child term before its parent | `404 not_found`. On `product_cat` and `product_brand`: *Parent local_key '…' not found for taxonomy '…'*. On `POST /terms`, a `parent` term ID that does not exist: *Parent term '…' not found for taxonomy '…'* |
 | `parent` on `POST /terms` that is not a term ID, `0` or `null` (a slug or a non-numeric `local_key`, for example) | `400 invalid_param`. Send the parent's WordPress term ID, as returned by the earlier `POST /terms` |
-| `POST /posts` with a `status` that is not a registered post status, or is `trash`, `auto-draft` or `inherit` | `400 invalid_param`. The message lists the allowed statuses |
+| `POST /posts` with a `status` that is not a registered post status, or is `auto-draft` or `inherit` | `400 invalid_param`. The message lists the allowed statuses |
+| `status: "trash"` on `POST /posts` or `POST /woocommerce/products` for a `local_key` that does not exist | `404 not_found`. Send the trash only for elements already imported |
+| `status: "trash"` on a site with the trash turned off (`EMPTY_TRASH_DAYS` is `0`) | `409 trash_disabled`. Nothing is changed. Use `DELETE` to remove for good |
 | variation before its parent, or parent not `variable` | `400 invalid_param` / `404 not_found` on the parent lookup |
 | variation option that is not an existing attribute term | `404 not_found` — *Attribute '…' option '…' was not found* |
 | two variations of one parent with the same attributes | `409 duplicate_variation` — *Parent product … already has variation … with attributes […]* |
@@ -654,9 +665,9 @@ Notes on the post payload:
   plugin never retypes a post (`400 invalid_param`).
 - If you send an explicit `id`, its `local_key` must not belong to another post of the same type
   (`409 duplicate_local_key`). Without `id` the key simply selects the post.
-- `status` is optional. When sent, it must be a registered post status other than `trash`,
-  `auto-draft` and `inherit`, otherwise `400 invalid_param`. A typo such as `publsh` is rejected,
-  not stored.
+- `status` is optional. When sent, it must be a registered post status other than `auto-draft`
+  and `inherit`, otherwise `400 invalid_param`. A typo such as `publsh` is rejected, not stored.
+  `trash` moves the post to the trash (see [§5](#5-local_key-the-idempotency-key)).
 - `description` is stored in `post_excerpt`, not in a meta field. GET responses do not return it.
 - `term` is the canonical key. `terms` is a legacy alias, used only when `term` is absent.
 
@@ -1243,10 +1254,11 @@ Two sources can answer with a code outside this table:
   site is ignored, and the call answers `200`. Filter your maps with `GET /languages` first (see
   [§10](#filter-language-maps-before-you-send-them)).
 - **Deletions do not propagate.** An item removed from On Page® stays published until the
-  client calls the matching `DELETE`.
-- **The trash does not free a `local_key`.** A post trashed in the admin still holds its key.
-  The next import restores it rather than creating a new one. To drop it for good, call
-  `DELETE /posts`, which deletes permanently.
+  client sends `status: "trash"` for it, or calls the matching `DELETE`.
+- **The trash does not free a `local_key`.** A post or product in the trash, whether trashed by
+  the API or in the admin, still holds its key. The next import updates it rather than creating a
+  new one, and restores it only if the payload sends a `status`. To drop it for good, call `DELETE /posts` or `DELETE /woocommerce/products`, which
+  delete permanently, trash included.
 - **A term slug owned by another element is not taken.** If the `slug` you send already belongs
   to a different element's term, your term is updated but keeps its current slug, with no error.
   Check the slug in the `GET` response if it matters.

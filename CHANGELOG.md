@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `POST /posts` and `POST /woocommerce/products` accept `status: "trash"` to move an existing element to the trash, with every WPML translation and, for products, its variations. Only `local_key` (or `id`, and `type` for posts) is needed; a key that does not exist answers `404 not_found`, and a site with the trash turned off answers `409 trash_disabled`.
+- `POST /woocommerce/products` finds a trashed product when its `local_key` is imported again, instead of creating a second product with the same key. With a `status` the product is restored with its ID and variations; without one it is updated and stays in the trash.
+
+### Changed
+- **Breaking:** `POST /posts` restores a trashed post only when the payload sends a `status`. Without one the post is updated and stays in the trash. It used to be restored as `draft`.
+- `DELETE /woocommerce/products` also deletes the trashed products that hold the `local_key`. A key held only by trashed products used to answer `404 not_found`.
+- `POST /woocommerce/products` with an `id` of a trashed product and a `status` restores it properly, variations included. It used to write the status on the product only, leaving its variations in the trash.
+- `POST /woocommerce/products` with `status: "trash"` now trashes an existing product and ignores the other fields. It used to save the product with the raw status `trash`, without trashing its variations, and could create a new product already in the trash.
+
 ## [1.0.4] - 2026-10-08
 
 ### Fixed

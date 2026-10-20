@@ -19,9 +19,12 @@ or updated. The payload fields are documented in
 
 The target product is resolved as follows:
 
-1. If the payload contains `id`, that product is updated.
-2. Otherwise, if a product with the same `local_key` already exists, that product is updated.
-3. Otherwise, a new WooCommerce product is created.
+1. If the payload sends `status: "trash"`, the product is moved to the trash and nothing else is
+   written (see [Trash and restore](#trash-and-restore)).
+2. If the payload contains `id`, that product is updated.
+3. Otherwise, if a product with the same `local_key` already exists, that product is updated. The
+   trash counts, but a live holder wins over a trashed one.
+4. Otherwise, a new WooCommerce product is created.
 
 For products, `local_key` is stored in the `onpage_local_key` post meta. It must be unique across
 products, except for products in the same WPML translation group.
@@ -376,11 +379,54 @@ parent. The controller flushes the queue once at the end of the request, with on
 `WC_Product_Variable::sync()` per parent. It also flushes it when the request fails part way, for
 the parents touched before the error.
 
+## Trash and restore
+
+`status: "trash"` is handled by `Product::trashFromParams()`, before
+`Product::normalizeProductPayload()`. So a trash request needs no `name`, and every other field is
+ignored.
+
+- **Target.** With `id`, the product and its WPML translations (`buildTranslationsMap()`).
+  Otherwise every product holding the `local_key`, trash included. A key held by no product is
+  `404 not_found`.
+- **How.** `Product::trashProduct()` calls `WC_Product::delete(false)`, which goes through
+  `wp_trash_post()`. WordPress then stores the status to restore (`_wp_trash_meta_status`), and
+  WooCommerce's `wp_trash_post` hook trashes the variations. Setting `post_status` to `trash`
+  directly would skip both. A product already in the trash is skipped, so the request is
+  idempotent. As for deletes, `WC_Data::delete()` reports success whatever happened, so the plugin
+  reads the post status back and answers `500 request_failed` if it is not `trash`.
+- **Trash turned off.** With `EMPTY_TRASH_DAYS` set to `0`, `wp_trash_post()` deletes for good.
+  `onpage_require_trash_enabled()` refuses the request first with `409 trash_disabled`.
+
+Restoring needs no special call. `findProductIdsByLocalKey()` takes `$include_trashed`:
+
+- the upsert (`save()`), `trashFromParams()` and `deleteByLocalKey()` pass `true`;
+- reads (`requireProductByLocalKey()`, so `GET ?local_key=` and the variation parent lookup) and
+  the foreign-holder check of `updateFromParams()` keep the default `false`.
+
+`findCanonicalProductIdByLocalKey()` drops trashed holders whenever a live one exists. When the
+upsert resolves to a trashed product, the trash is treated like any other status:
+
+- **Without `status`** the product stays in the trash, and the other fields are still written. A
+  missing `status` keeps the current one, as on any update.
+- **With `status`**, `Product::restoreTrashedProducts()` calls `wp_untrash_post()` on the product
+  and on every trashed member of its translation group. This runs after the title checks, so
+  `409 duplicate_title` leaves the product in the trash. The product object is then reloaded:
+  saving the stale copy would write `trash` back. The same applies to an update by `id`.
+
+WooCommerce's hooks do the rest of the restore. Its `untrashed_post` hook restores the variations,
+and its `wp_untrash_post_status` filter gives them the status they had when they were trashed
+(WordPress alone would restore `draft`). `wc_product_force_unique_sku()` changes the SKU if another
+product took it in the meantime. The payload `status` is then applied to the product by the
+update.
+
 ## Deleting products and variations
 
 `WC_Data::delete()` answers `true` whenever a data store exists, whatever `wp_delete_post()` did.
 So after a product or variation delete, the plugin calls `clean_post_cache()` and `get_post()` to
 check that the post is really gone. If it still exists, the request answers `500 delete_failed`.
+
+`DELETE /woocommerce/products` deletes for good, and it also deletes the trashed products that
+hold the key.
 
 ## Global attributes and their terms
 

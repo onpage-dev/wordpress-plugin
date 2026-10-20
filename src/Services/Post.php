@@ -391,6 +391,10 @@ class Post
     /** Creates or updates one post from the raw controller payload. */
     public static function save(array $params, int $element_index = 0): int
     {
+        if (onpage_is_trash_request($params)) {
+            return self::trashFromParams($params, $element_index);
+        }
+
         self::requireWpmlForPayloadLanguageMaps($params, $element_index);
 
         self::requireValidStatus($params['status'] ?? null, $element_index);
@@ -417,11 +421,70 @@ class Post
     }
 
     /**
+     * Moves an existing element to the trash (`status: "trash"`) and returns its post ID.
+     *
+     * Only the identity of the payload is read: `id` when sent, else `local_key` (scoped to
+     * `type` when sent). Every other field is ignored, so a trash request needs no title. The
+     * whole element goes, every WPML translation included, through wp_trash_post(). The next
+     * upsert of the same local_key that sends a `status` takes it out of the trash
+     * (see restoreTrashedPosts()). An element already in the trash is left as it is.
+     */
+    private static function trashFromParams(array $params, int $element_index): int
+    {
+        onpage_require_trash_enabled(self::ERROR_PREFIX, $element_index);
+
+        $requested_id = Input::optionalPositiveIntParam($params, 'id', self::ERROR_PREFIX, $element_index);
+        if ($requested_id !== null) {
+            $post = self::requirePostById($requested_id);
+            $post_ids = array_values(self::buildTranslationsMap($requested_id, $post->post_type));
+            $post_ids[] = $requested_id;
+
+            foreach (array_unique($post_ids) as $post_id) {
+                self::trashPost((int) $post_id);
+            }
+
+            return $requested_id;
+        }
+
+        $local_key = Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index);
+        $post_type = Input::stringOrNull($params['type'] ?? null);
+
+        $posts = PostRepository::findPostsByLocalKey($local_key, $post_type ?? 'any');
+        if ($posts === []) {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' not found", 404, 'not_found');
+        }
+
+        if ($post_type === null && count(array_unique(array_map(fn(\WP_Post $post): string => $post->post_type, $posts))) > 1) {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: local_key '$local_key' matches multiple post types; pass a type to trash safely", 409, 'ambiguous_local_key');
+        }
+
+        foreach ($posts as $post) {
+            self::trashPost((int) $post->ID);
+        }
+
+        return (int) self::pickCanonicalPost($posts)->ID;
+    }
+
+    /** Moves one post to the trash through wp_trash_post(); a post already there is skipped. */
+    private static function trashPost(int $id): void
+    {
+        // Read live: with WPML, trashing one member of a group may already have trashed it.
+        $status = \get_post_status($id);
+        if ($status === false || $status === 'trash') return;
+
+        \wp_trash_post($id);
+        \clean_post_cache($id);
+        if (\get_post_status($id) !== 'trash') {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to trash post $id", 500, 'request_failed');
+        }
+    }
+
+    /**
      * Rejects a `status` that is not a registered post status a client may set.
      *
      * WordPress stores any string it is given, so a typo (`publsh`) left the post in a status
-     * nothing displays, and `trash` put it in the bin without its trash metadata. `trash`,
-     * `auto-draft` and `inherit` are managed by WordPress itself and are refused too.
+     * nothing displays. `auto-draft` and `inherit` are managed by WordPress itself and are
+     * refused too. `trash` never gets here: save() sends it to trashFromParams().
      */
     private static function requireValidStatus(mixed $status, int $element_index): void
     {
@@ -464,9 +527,10 @@ class Post
      * Restores the trashed posts of the group being updated.
      *
      * Local_key lookups include the bin, so re-importing a trashed element updates it instead
-     * of creating a second post with the same key. The post (and its translations holding the
-     * key) is taken out of the trash first, so the payload `status` applies to a live post;
-     * without a `status` it keeps the status WordPress restores it to (`draft`).
+     * of creating a second post with the same key. Called only when the payload sends a
+     * `status`: an omitted status leaves the post where it is, trash included, like any other
+     * status. The post (and its translations holding the key) is taken out of the trash first,
+     * so the payload `status` then applies to a live post.
      *
      * @return bool Whether any post was restored (the caller must then reload its copy).
      */
@@ -1838,8 +1902,9 @@ class Post
             $element_index
         );
 
-        // Only after validation: a rejected update must leave trashed posts in the bin.
-        if (self::restoreTrashedPosts($post, $local_key)) {
+        // Only after validation: a rejected update must leave trashed posts in the bin. Without
+        // a `status` the post stays where it is, trash included.
+        if ($status !== null && self::restoreTrashedPosts($post, $local_key)) {
             $post = \get_post($id);
         }
 
