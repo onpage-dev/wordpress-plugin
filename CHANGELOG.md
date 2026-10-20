@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `POST /posts` and `POST /woocommerce/products` accept `status: "trash"` to move an existing element to the trash, with every WPML translation and, for products, its variations. Only `local_key` (or `id`, and `type` for posts) is needed; a key that does not exist answers `404 not_found`, and a site with the trash turned off answers `409 trash_disabled`.
+- `GET /woocommerce/products` accepts `?status=`, as `GET /posts` does: `trashed` lists the products in the trash, any other value filters by that status. With `local_key`, `?local_key=…&status=trashed` reads a trashed product, which `?local_key=` alone does not return.
 - `POST /woocommerce/products` finds a trashed product when its `local_key` is imported again, instead of creating a second product with the same key. With a `status` the product is restored with its ID and variations; without one it is updated and stays in the trash.
 
 ### Changed

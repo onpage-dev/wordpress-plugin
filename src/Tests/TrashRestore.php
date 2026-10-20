@@ -268,6 +268,8 @@ class TrashRestore
         $this->check('product.trash.id', $id, $this->saveOne('/woocommerce/products', $trash, 'product.trash'));
         $this->check('product.trash.status', 'trash', $this->productStatus($id));
         $this->check('product.trash.read_by_local_key', 404, $this->readStatus('/woocommerce/products', 'local_key=' . self::PRODUCT_KEY));
+        $trashed = $this->requireOk('GET', '/woocommerce/products', null, 'local_key=' . self::PRODUCT_KEY . '&status=trashed');
+        $this->check('product.trash.read_trashed.id', $id, is_array($trashed) && is_array($trashed[0] ?? null) ? ($trashed[0]['id'] ?? null) : null);
         $this->check('product.trash.variation', [], $this->requireOk('GET', '/woocommerce/variant-products', null, 'local_key=' . self::VARIATION_KEY));
 
         $this->check('product.trash.again.id', $id, $this->saveOne('/woocommerce/products', $trash, 'product.trash.again'));
@@ -279,6 +281,7 @@ class TrashRestore
         $this->check('product.restore.id', $id, $this->saveOne('/woocommerce/products', $live + ['status' => 'publish'], 'product.restore'));
         $this->check('product.restore.status', 'publish', $this->productStatus($id));
         $this->check('product.restore.read_by_local_key', 200, $this->readStatus('/woocommerce/products', 'local_key=' . self::PRODUCT_KEY));
+        $this->check('product.restore.read_trashed', 404, $this->readStatus('/woocommerce/products', 'local_key=' . self::PRODUCT_KEY . '&status=trashed'));
 
         $variations = $this->requireOk('GET', '/woocommerce/variant-products', null, 'local_key=' . self::VARIATION_KEY);
         $variation = is_array($variations) && is_array($variations[0] ?? null) ? $variations[0] : [];

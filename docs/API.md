@@ -1853,10 +1853,18 @@ Optional query:
 ?local_key=1001
 ?name=Red Chair
 ?name[it]=Sedia Rossa&name[en]=Red Chair
+?status=publish
+?status=trashed
+?local_key=1001&status=trashed
 ```
 
-- Only one filter applies. Precedence: `id` > `local_key` > `name`. A malformed `id` or `local_key` is ignored.
+- Only one of `id`, `local_key` and `name` applies. Precedence: `id` > `local_key` > `name`. A malformed `id` or `local_key` is ignored.
 - `id` and `local_key` return the single matching product. A product that does not exist returns `404 not_found`.
+- `status` filters by product status, with the same rules as [`GET /posts`](#get-posts):
+  - Default `any`, which **excludes** products in the trash and auto-drafts.
+  - `trashed` (alias of the WordPress status `trash`) returns **only** products in the trash.
+  - Any other value (`publish`, `draft`, `pending`, `private`, …) is passed to WordPress unchanged.
+  - It applies to the full listing and to `local_key`. `?local_key=1001&status=trashed` returns the product only while it is in the trash, and `404 not_found` otherwise. It does not apply to `id`, which returns a trashed product too (check `status` in the response), nor to `name`, which never returns trashed products.
 - All WPML translations share the same `local_key`, so `?local_key=` returns the product in the group's **default language** (the same representative used by `?name=`). The other IDs are in the `translations` map.
 - `name` performs an **exact-title** search. It accepts two forms:
   - **string** (`?name=Red Chair`);
@@ -2063,7 +2071,7 @@ Body:
 - The product is found by `id` when sent, otherwise by `local_key`. It must already exist: otherwise the request returns `404 not_found`.
 - Every other field is ignored, so `name` is not needed. Nothing else is written.
 - The whole element goes to the trash: every product holding the `local_key`, every WPML translation included. With `id`, the product and its WPML translations.
-- WooCommerce trashes the variations with their product. While the product is in the trash, `GET /woocommerce/products?local_key=` returns `404 not_found` and `GET /woocommerce/variant-products?local_key=` returns `[]` for its variations. `GET /woocommerce/products?id=` still returns it, with `status: "trash"`.
+- WooCommerce trashes the variations with their product. While the product is in the trash, `GET /woocommerce/products?local_key=` returns `404 not_found` and `GET /woocommerce/variant-products?local_key=` returns `[]` for its variations. To read it, use `GET /woocommerce/products?local_key=<key>&status=trashed`, or `?id=`. Both return it with `status: "trash"`.
 - A product already in the trash is left as it is, so sending the same request twice is safe. The response is the product ID, as for any other save.
 - If the site has the trash turned off (`EMPTY_TRASH_DAYS` set to `0`), WordPress would delete the product for good. The request returns `409 trash_disabled` instead, and nothing changes.
 

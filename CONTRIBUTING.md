@@ -205,7 +205,8 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   its parent. A trash request for a key that does not exist answers `404 not_found`.
 - **`ProductTrashRestoreMultiLang.php`** checks the same cycle on a product translated in `en`
   and `it`. The trash by `local_key`, and by the Italian product's `id`, reaches both
-  translations. A re-import without `status` leaves both in the trash. A restore whose `name` map
+  translations, and `?local_key=…&status=trashed` reads the group while it is there. A re-import
+  without `status` leaves both in the trash. A restore whose `name` map
   holds `en` only brings the Italian product back too, with the same IDs and no new product, and
   keeps its Italian name.
 - **`TermDeleteByLocalKey.php`** checks that `DELETE /terms` with an ID deletes that term only,
