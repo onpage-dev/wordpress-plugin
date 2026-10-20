@@ -25,6 +25,25 @@ function onpage_should_ignore_missing(\WP_REST_Request $request): bool
     return array_key_exists('ignore', $request->get_query_params());
 }
 
+/** True when a `POST` element asks to move the element to the trash (`status: "trash"`). */
+function onpage_is_trash_request(array $params): bool
+{
+    return is_string($params['status'] ?? null) && trim($params['status']) === 'trash';
+}
+
+/**
+ * Rejects a trash request when the site has the trash turned off (`EMPTY_TRASH_DAYS` set to 0).
+ *
+ * wp_trash_post() then deletes the post for good, the opposite of what the caller asked:
+ * the element could no longer be restored by a later import.
+ */
+function onpage_require_trash_enabled(string $error_prefix, int $element_index): void
+{
+    if (!\EMPTY_TRASH_DAYS) {
+        throw onpage_http_exception("$error_prefix :: Element $element_index :: The trash is disabled on this site (EMPTY_TRASH_DAYS is 0), so 'status' cannot be 'trash'", 409, 'trash_disabled');
+    }
+}
+
 /**
  * Sets `X-WP-Total`/`X-WP-TotalPages` headers on a paginated list response, mirroring
  * the WordPress core REST API convention so clients can detect the last page without

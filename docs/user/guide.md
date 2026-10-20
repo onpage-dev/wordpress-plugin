@@ -218,7 +218,9 @@ The plugin is not meant to:
 - send changes back to On Page®. Sync goes one way only. If you edit synced content in WordPress,
   the next sync can overwrite your changes. Make the change in On Page® instead.
 - delete content by itself. An item removed from On Page® stays on the site until the client
-  deletes it.
+  moves it to the WordPress trash or deletes it. An item in the trash, whether the client or you
+  put it there, comes back with the same ID and address when the client sends it again with a
+  status such as published.
 
 Its main job is to:
 

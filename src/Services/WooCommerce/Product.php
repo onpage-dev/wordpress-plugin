@@ -575,12 +575,19 @@ class Product
         return '';
     }
 
-    /** Finds all WooCommerce product IDs by local_key meta. */
-    private static function findProductIdsByLocalKey(string $local_key): array
+    /**
+     * Finds all WooCommerce product IDs by local_key meta.
+     *
+     * Trashed products are left out unless `$include_trashed` is set: a trashed product still
+     * owns its local_key, so the upsert and the deletes look in the bin too, while reads and
+     * the variation parent lookup treat it as gone.
+     */
+    private static function findProductIdsByLocalKey(string $local_key, bool $include_trashed = false): array
     {
         $results = \get_posts([
             'post_type' => self::PRODUCT_POST_TYPE,
-            'post_status' => 'any',
+            // 'trash' next to 'any' keeps the bin in: 'any' alone excludes it.
+            'post_status' => $include_trashed ? ['any', 'trash'] : 'any',
             'fields' => 'ids',
             'numberposts' => -1,
             'orderby' => 'ID',
@@ -595,11 +602,28 @@ class Product
         return is_array($results) ? array_map('intval', $results) : [];
     }
 
-    /** Picks the best product ID to update when resolving by local_key. */
-    private static function findCanonicalProductIdByLocalKey(string $local_key): int|null
+    /**
+     * Picks the best product ID to update when resolving by local_key.
+     *
+     * With `$include_trashed`, a live holder still wins over a trashed one: restoring a trashed
+     * duplicate would leave the live product stale and the key held by two live products.
+     */
+    private static function findCanonicalProductIdByLocalKey(string $local_key, bool $include_trashed = false): int|null
     {
-        $product_ids = self::findProductIdsByLocalKey($local_key);
+        $product_ids = self::findProductIdsByLocalKey($local_key, $include_trashed);
         if ($product_ids === []) return null;
+
+        // Only when the bin was searched: the plain lookup is used by every read, and the
+        // status check costs a query per holder.
+        if ($include_trashed) {
+            $live_product_ids = array_values(array_filter(
+                $product_ids,
+                fn(int $product_id): bool => \get_post_status($product_id) !== 'trash'
+            ));
+            if ($live_product_ids !== []) {
+                $product_ids = $live_product_ids;
+            }
+        }
 
         if (!onpage_is_wpml_active()) {
             return $product_ids[0];
@@ -843,6 +867,13 @@ class Product
     public static function save(array $params, int $element_index): int
     {
         self::requireWooCommerce();
+
+        // Before the normalization: a trash request needs no name. WooCommerce would write
+        // `trash` straight to the post row, without the trash metadata or the variations.
+        if (onpage_is_trash_request($params)) {
+            return self::trashFromParams($params, $element_index);
+        }
+
         $params = self::normalizeProductPayload($params, $element_index);
 
         $product_id = Input::positiveInt($params['id'] ?? null);
@@ -854,7 +885,9 @@ class Product
 
         $local_key = Input::localKey($params['local_key'] ?? null);
         if ($local_key !== null) {
-            $existing_product_id = self::findCanonicalProductIdByLocalKey($local_key);
+            // The bin counts: re-importing a trashed element updates it (and restores it when a
+            // `status` is sent) instead of creating a second product with the same key.
+            $existing_product_id = self::findCanonicalProductIdByLocalKey($local_key, true);
             if ($existing_product_id !== null) {
                 $params['id'] = $existing_product_id;
 
@@ -1062,6 +1095,13 @@ class Product
             }
         }
 
+        // Only after validation: a rejected update must leave trashed products in the bin.
+        // Without a `status` the product stays where it is, trash included, like any other
+        // status. Reload afterwards, or saving the stale object would write `trash` back.
+        if (array_key_exists('status', $params) && self::restoreTrashedProducts($product_id, $translation_ids)) {
+            $product = self::requireProductById($product_id);
+        }
+
         $updated_product_id = self::persistProductFromParams(
             $product,
             $params,
@@ -1084,6 +1124,39 @@ class Product
         );
 
         return $updated_product_id;
+    }
+
+    /**
+     * Takes the product and the translations of its WPML group out of the trash.
+     *
+     * Called only when the payload sends a `status`, which the update applies afterwards.
+     * wp_untrash_post() runs WooCommerce's own hooks: the variations come back with the
+     * product, each with the status it had when it was trashed.
+     *
+     * @return bool Whether any product was restored (the caller must then reload its copy).
+     */
+    private static function restoreTrashedProducts(int $product_id, array $translation_ids): bool
+    {
+        $restored = false;
+
+        $product_ids = array_unique(array_merge(
+            [$product_id],
+            array_map('intval', array_values($translation_ids))
+        ));
+
+        foreach ($product_ids as $group_product_id) {
+            // Read live: restoring one member may already have restored the others (WPML
+            // syncs trash state across a group), and wp_untrash_post() fails on a live post.
+            if (\get_post_status($group_product_id) !== 'trash') continue;
+
+            if (!\wp_untrash_post($group_product_id)) {
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to restore trashed product $group_product_id", 500, 'request_failed');
+            }
+
+            $restored = true;
+        }
+
+        return $restored;
     }
 
     /** Writes the local_key on the product and on every translation of its WPML group. */
@@ -2266,7 +2339,8 @@ class Product
     {
         self::requireWooCommerce();
 
-        $product_ids = self::findProductIdsByLocalKey($local_key);
+        // Trashed holders too: a permanent delete empties the bin of this element as well.
+        $product_ids = self::findProductIdsByLocalKey($local_key, true);
         if ($product_ids === []) {
             if ($ignore_missing) return;
 
@@ -2277,6 +2351,68 @@ class Product
         // holder, and the group was proven to exist by the check above.
         foreach ($product_ids as $product_id) {
             self::deleteById($product_id, true);
+        }
+    }
+
+    /**
+     * Moves an existing product to the trash (`status: "trash"`) and returns its ID.
+     *
+     * Only the identity of the payload is read: `id` when sent, else `local_key`. Every other
+     * field is ignored, so a trash request needs no name. The whole element goes, every WPML
+     * translation included. The next POST with this local_key that sends a `status` restores it
+     * (see restoreTrashedProducts()). An element already in the trash is left as it is.
+     */
+    private static function trashFromParams(array $params, int $element_index): int
+    {
+        onpage_require_trash_enabled(self::ERROR_PREFIX, $element_index);
+
+        $product_id = Input::positiveInt($params['id'] ?? null);
+        if ($product_id !== null) {
+            self::requireProductById($product_id);
+            $product_ids = array_values(self::buildTranslationsMap($product_id));
+            $product_ids[] = $product_id;
+
+            foreach (array_unique($product_ids) as $group_product_id) {
+                self::trashProduct((int) $group_product_id);
+            }
+
+            return $product_id;
+        }
+
+        $local_key = Input::requireLocalKeyParam($params, 'local_key', self::ERROR_PREFIX, $element_index);
+        $canonical_product_id = self::findCanonicalProductIdByLocalKey($local_key, true);
+        if ($canonical_product_id === null) {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Element $element_index :: Product with local_key '$local_key' not found", 404, 'not_found');
+        }
+
+        foreach (self::findProductIdsByLocalKey($local_key, true) as $holder_product_id) {
+            self::trashProduct($holder_product_id);
+        }
+
+        return $canonical_product_id;
+    }
+
+    /**
+     * Moves one product to the trash; a product already there is skipped.
+     *
+     * WC_Product::delete(false) goes through wp_trash_post(), so WordPress keeps the status to
+     * restore and WooCommerce trashes the variations too.
+     */
+    private static function trashProduct(int $product_id): void
+    {
+        // Read live: with WPML, trashing one member of a group may already have trashed it.
+        $status = \get_post_status($product_id);
+        if ($status === false || $status === 'trash') return;
+
+        $product = \wc_get_product($product_id);
+        if (!$product) return;
+
+        // WC_Data::delete() reports success whatever wp_trash_post() did, so the post status
+        // is the real outcome.
+        $product->delete(false);
+        \clean_post_cache($product_id);
+        if (\get_post_status($product_id) !== 'trash') {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to trash product $product_id", 500, 'request_failed');
         }
     }
 

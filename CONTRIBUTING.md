@@ -77,6 +77,8 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `ProductUpdateUnsentValues.php` | end-to-end | a site with ACF and WooCommerce |
 | `TermVariationUnsentLanguages.php` | end-to-end | a site with WooCommerce and WPML, with `en` (default) and `it` active |
 | `TermDeleteByLocalKey.php` | end-to-end | a site with ACF and WPML, with `en` and `it` active |
+| `TrashRestore.php` | end-to-end | a site with ACF and WooCommerce |
+| `ProductTrashRestoreMultiLang.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` (default) and `it` active |
 | `WooCommerceCatalog.php` | end-to-end | a site with ACF, WooCommerce and WPML, with `en` and `it` active |
 
 - **Offline tests** load one class and replace WordPress with small stubs. They run in a second.
@@ -196,6 +198,16 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   `POST /woocommerce/variant-products`, a `description` or `attributes` map without a language
   keeps that language's values, the parent's language included, while a shared price reaches both
   translations.
+- **`TrashRestore.php`** checks that `status: "trash"` on `POST /posts` and
+  `POST /woocommerce/products` moves the element to the trash with no title or name, that a second
+  trash request is harmless, that a re-import without `status` leaves it in the trash, and that a
+  re-import with a `status` restores it with the same ID and that status. On products it also checks that the variation goes to the trash and comes back with
+  its parent. A trash request for a key that does not exist answers `404 not_found`.
+- **`ProductTrashRestoreMultiLang.php`** checks the same cycle on a product translated in `en`
+  and `it`. The trash by `local_key`, and by the Italian product's `id`, reaches both
+  translations. A re-import without `status` leaves both in the trash. A restore whose `name` map
+  holds `en` only brings the Italian product back too, with the same IDs and no new product, and
+  keeps its Italian name.
 - **`TermDeleteByLocalKey.php`** checks that `DELETE /terms` with an ID deletes that term only,
   while a `local_key` deletes every WPML translation. It checks the translation group both on
   `category` and on a custom ACF taxonomy that it creates, where the taxonomy is resolved from the

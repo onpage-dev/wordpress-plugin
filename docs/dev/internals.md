@@ -454,12 +454,28 @@ The REST entry point is `Post::save()`. For each payload item, in this order:
 
 `local_key` is required on every write (`400 invalid_param`).
 
-Before any of this, `requireValidStatus()` checks a `status` that is sent. It must be a registered
-post status other than `trash`, `auto-draft` and `inherit`, which WordPress manages itself.
-Anything else is `400 invalid_param` (`Parameter 'status' must be one of: ...`). WordPress would
-otherwise store any string, and `trash` would put the post in the bin without its trash metadata.
+Before any of this, `status: "trash"` is sent to `trashFromParams()` (see
+[Trashed posts](#trashed-posts)). Then `requireValidStatus()` checks a `status` that is sent. It
+must be a registered post status other than `auto-draft` and `inherit`, which WordPress manages
+itself. Anything else is `400 invalid_param` (`Parameter 'status' must be one of: ...`). WordPress
+would otherwise store any string.
 
 ### Trashed posts
+
+`status: "trash"` moves an existing element to the trash. `Post::save()` hands it to
+`trashFromParams()` before any other check, so the payload needs no `title` and every other field
+is ignored:
+
+- With `id`, the post and its WPML translations (`buildTranslationsMap()`); a missing `id` is
+  `404 no_post`.
+- Otherwise every post holding the `local_key`, scoped to `type` when sent, trash included. A key
+  held by no post is `404 not_found`; one held on several post types without `type` is
+  `409 ambiguous_local_key`.
+- `trashPost()` calls `wp_trash_post()`, so WordPress stores the status to restore
+  (`_wp_trash_meta_status`). A post already in the trash is skipped, so the request is idempotent.
+  The status is read back, and a post that is not `trash` afterwards is `500 request_failed`.
+- With `EMPTY_TRASH_DAYS` set to `0`, `wp_trash_post()` deletes for good.
+  `onpage_require_trash_enabled()` refuses the request first with `409 trash_disabled`.
 
 Write lookups by `local_key` include the trash: a trashed element still owns its key. This applies
 to the upsert, to the delete by `local_key` and to the insert duplicate check. `DELETE /posts` by
@@ -474,11 +490,17 @@ The upsert resolves to a trashed post only when no live post holds the key.
 `findUpsertPostId()` drops the trashed holders whenever a live one exists, so re-importing never
 restores a trashed duplicate next to a live post.
 
-When an upsert does resolve to a trashed post, `restoreTrashedPosts()` takes it out of the trash
-with `wp_untrash_post()`, together with the trashed translations of its group that hold the same
-key. This runs after validation (step 4 below), so a rejected update leaves the posts in the trash.
-The payload `status` then applies. Without a `status` the post keeps the status WordPress restores
-it to (`draft`). Trashed posts of other groups that hold the same key stay in the trash.
+When an upsert resolves to a trashed post, the trash is treated like any other status:
+
+- **Without `status`** the post stays in the trash. `Post::update()` skips the restore, and
+  `wp_update_post()` keeps the current `post_status`. The other fields are still written.
+- **With `status`**, `restoreTrashedPosts()` takes it out of the trash with `wp_untrash_post()`,
+  together with the trashed translations of its group that hold the same key. The payload
+  `status` then applies, so the status WordPress restores to (`draft`) never shows.
+
+The restore runs after validation (step 4 below), so a rejected update leaves the posts in the
+trash. It applies to an update by `id` too. Trashed posts of other groups that hold the same key
+stay in the trash.
 
 ## `Post::update()` flow
 
@@ -522,7 +544,8 @@ different `local_key`, is not a conflict: see [the title rule](#the-title-is-a-n
 
 ### 5. Updating the main post
 
-The service first restores the trashed members of the group (see [Trashed posts](#trashed-posts)).
+When the payload sends a `status`, the service first restores the trashed members of the group
+(see [Trashed posts](#trashed-posts)).
 It prepares the `wp_update_post()` data with `ID`, `post_type` and `post_status` (the
 payload status or the current one). It adds `post_title`, `post_content` and `post_excerpt` only
 for the fields actually sent, and only when the value is shared or its map contains the post's
