@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-10-20
 
 ### Added
 - `POST /posts` and `POST /woocommerce/products` accept `status: "trash"` to move an existing element to the trash, with every WPML translation and, for products, its variations. Only `local_key` (or `id`, and `type` for posts) is needed; a key that does not exist answers `404 not_found`, and a site with the trash turned off answers `409 trash_disabled`.
@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POST /migration` to upgrade the data already on a site after a change of internal format.
 - Requirements: WordPress 7.1, PHP 8.2 and an active Advanced Custom Fields. Without ACF the plugin registers no routes and shows a notice in the admin.
 
+[1.1.0]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.1.0
 [1.0.4]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.4
 [1.0.3]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.3
 [1.0.2]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.2
