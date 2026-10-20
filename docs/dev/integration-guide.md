@@ -390,6 +390,8 @@ other keys:
   Reads leave the trash out: `GET /posts?local_key=`,
   `GET /posts/{id}?keyfield=local_key` and `GET /woocommerce/products?local_key=` do not return a
   trashed element.
+  To read one, add `status=trashed`: `GET /posts?local_key=…&status=trashed` and
+  `GET /woocommerce/products?local_key=…&status=trashed` return it only while it is in the trash.
 - **Retiring an element**: to take an element off the site but keep it restorable, send
   `{"local_key": …, "status": "trash"}` to `POST /posts` (add `type`) or
   `POST /woocommerce/products`. No title or name is needed, and the whole WPML group goes to the

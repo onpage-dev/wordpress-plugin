@@ -584,10 +584,16 @@ class Product
      */
     private static function findProductIdsByLocalKey(string $local_key, bool $include_trashed = false): array
     {
+        // 'trash' next to 'any' keeps the bin in: 'any' alone excludes it.
+        return self::findProductIdsByLocalKeyAndStatus($local_key, $include_trashed ? ['any', 'trash'] : 'any');
+    }
+
+    /** Finds the product IDs holding a local_key whose post status matches `$post_status`. */
+    private static function findProductIdsByLocalKeyAndStatus(string $local_key, string|array $post_status): array
+    {
         $results = \get_posts([
             'post_type' => self::PRODUCT_POST_TYPE,
-            // 'trash' next to 'any' keeps the bin in: 'any' alone excludes it.
-            'post_status' => $include_trashed ? ['any', 'trash'] : 'any',
+            'post_status' => $post_status,
             'fields' => 'ids',
             'numberposts' => -1,
             'orderby' => 'ID',
@@ -625,6 +631,15 @@ class Product
             }
         }
 
+        return self::pickCanonicalProductId($product_ids);
+    }
+
+    /**
+     * The default-language product among holders of the same local_key, else the source of
+     * the group, else the lowest ID. `$product_ids` must not be empty.
+     */
+    private static function pickCanonicalProductId(array $product_ids): int
+    {
         if (!onpage_is_wpml_active()) {
             return $product_ids[0];
         }
@@ -829,6 +844,24 @@ class Product
         return $product_id;
     }
 
+    /**
+     * Resolves the `?status=` filter to a WordPress `post_status` value, or null when absent.
+     *
+     * Same rule as GET /posts: absent means `any`, which leaves out the trash and
+     * auto-drafts; the alias `trashed` is the internal `trash`; any other value is passed to
+     * WordPress unchanged. Null keeps the local_key read on requireProductByLocalKey(), the
+     * lookup the variation parent shares.
+     */
+    private static function resolveProductStatusFilter(\WP_REST_Request $request): ?string
+    {
+        $status = Input::requestString($request, 'status');
+        if ($status === null) {
+            return null;
+        }
+
+        return $status === 'trashed' ? 'trash' : $status;
+    }
+
     /** Lists products, or returns one product when filtered by id/local_key. */
     public static function list(\WP_REST_Request $request): array
     {
@@ -839,9 +872,20 @@ class Product
             return [self::buildProductResponse(self::requireProductById($product_id))];
         }
 
+        $status = self::resolveProductStatusFilter($request);
+
         $local_key = Input::localKey($request->get_param('local_key'));
         if ($local_key !== null) {
-            return [self::buildProductResponse(self::requireProductByLocalKey($local_key))];
+            if ($status === null) {
+                return [self::buildProductResponse(self::requireProductByLocalKey($local_key))];
+            }
+
+            $product_ids = self::findProductIdsByLocalKeyAndStatus($local_key, $status);
+            if ($product_ids === []) {
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: Product with local_key '$local_key' and status '$status' not found", 404, 'not_found');
+            }
+
+            return [self::buildProductResponse(self::requireProductById(self::pickCanonicalProductId($product_ids)))];
         }
 
         $name_queries = Input::langValueQueries($request->get_param('name'));
@@ -851,7 +895,7 @@ class Product
 
         $product_ids = \get_posts([
             'post_type' => self::PRODUCT_POST_TYPE,
-            'post_status' => 'any',
+            'post_status' => $status ?? 'any',
             'fields' => 'ids',
             'numberposts' => -1,
             'suppress_filters' => false,

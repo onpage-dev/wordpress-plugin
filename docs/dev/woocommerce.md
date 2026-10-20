@@ -403,6 +403,12 @@ Restoring needs no special call. `findProductIdsByLocalKey()` takes `$include_tr
 - reads (`requireProductByLocalKey()`, so `GET ?local_key=` and the variation parent lookup) and
   the foreign-holder check of `updateFromParams()` keep the default `false`.
 
+`GET /woocommerce/products?status=` reads the trash on request. `resolveProductStatusFilter()`
+maps `trashed` to `trash` and passes any other value through, as `GET /posts` does. With
+`local_key`, `findProductIdsByLocalKeyAndStatus()` queries that status and
+`pickCanonicalProductId()` picks the default-language product among the matches. Without `status`
+the `local_key` read stays on `requireProductByLocalKey()`.
+
 `findCanonicalProductIdByLocalKey()` drops trashed holders whenever a live one exists. When the
 upsert resolves to a trashed product, the trash is treated like any other status:
 

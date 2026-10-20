@@ -236,6 +236,15 @@ class ProductTrashRestoreMultiLang
             $this->request('GET', '/woocommerce/products', null, 'local_key=' . self::PRODUCT_KEY)['status']
         );
 
+        // `status=trashed` reads the trashed group: the default-language product, with every
+        // translation in its map.
+        $trashed = $this->requireOk('GET', '/woocommerce/products', null, 'local_key=' . self::PRODUCT_KEY . '&status=trashed');
+        $trashed = is_array($trashed) && is_array($trashed[0] ?? null) ? $trashed[0] : [];
+        $this->check('trash.read_trashed.id', $id, $trashed['id'] ?? null);
+        $trashed_ids = is_array($trashed['translations'] ?? null) ? array_map('intval', $trashed['translations']) : [];
+        ksort($trashed_ids);
+        $this->check('trash.read_trashed.translations', $ids, $trashed_ids);
+
         $this->check('trash.again.id', $id, $this->saveOne($trash, 'trash.again'));
         $this->checkStatuses('trash.again.status', $ids, 'trash');
 
