@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POST /woocommerce/products` with an `id` of a trashed product and a `status` restores it properly, variations included. It used to write the status on the product only, leaving its variations in the trash.
 - `POST /woocommerce/products` with `status: "trash"` now trashes an existing product and ignores the other fields. It used to save the product with the raw status `trash`, without trashing its variations, and could create a new product already in the trash.
 
+### Fixed
+- `GET /posts`, `GET /posts/{id}` and the `POST /posts` and `DELETE /posts` calls that read a post's WPML translations no longer fail with `500 request_failed` ("Call to undefined function wpml_get_content_trid()") on a WPML site that does not load that function in REST requests.
+
 ## [1.0.4] - 2026-10-08
 
 ### Fixed
