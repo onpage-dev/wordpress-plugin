@@ -187,7 +187,7 @@ This applies to:
 - `image` and `gallery` of `POST /woocommerce/products` and `POST /woocommerce/variant-products`;
 - `thumbnail` of `POST /woocommerce/brands` and `POST /woocommerce/categories`;
 - `downloads[].file`/`downloads[].url` of `POST /woocommerce/products`;
-- `files` of `POST /posts` and `POST /media/link`;
+- `thumbnail` and `files` of `POST /posts`, and `files` of `POST /media/link`;
 - every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or a `group`);
 - every item of an ACF `gallery` field inside `acf_fields`, with the same scope.
 
@@ -804,6 +804,7 @@ Response `200`:
       "it": 321,
       "en": 322
     },
+    "thumbnail_id": 812,
     "acf_fields": {
       "sku": "ABC123"
     },
@@ -813,6 +814,7 @@ Response `200`:
 ```
 
 - `local_key` is always present: an integer, a string, or `null` when the post has no key (see [`local_key`](#local_key)).
+- `thumbnail_id` is the `attachment_id` of the featured image, or `null` when the post has none. It is present in every post response.
 - `terms` lists the post's terms as WordPress term objects (`term_id`, `name`, `slug`, `taxonomy`, `parent`, `count`, …).
 - `translations` maps each language code to the ID of the post in that language (WPML translation group). Without WPML it is an empty map. It is present in every post response (single, list and `title` search).
 
@@ -858,6 +860,7 @@ Response `200`:
     "it": 321,
     "en": 322
   },
+  "thumbnail_id": 812,
   "acf_fields": {
     "sku": "ABC123"
   },
@@ -901,6 +904,7 @@ How the target post is resolved:
     "content": "Description",
     "status": "publish",
     "local_key": 1001,
+    "thumbnail": "https://cdn.example.com/red-chair-cover.jpg",
     "files": {
       "image": "https://cdn.example.com/red-chair.jpg"
     },
@@ -924,6 +928,7 @@ How the target post is resolved:
 | `description` | no | Saved as the post excerpt (`post_excerpt`). GET responses do not return it. |
 | `status` | no | Default `draft` on insert. Must be a registered post status (`publish`, `draft`, `pending`, `private`, `future`, or a custom one), or `trash` to move an existing post to the trash (see [Trashed posts](#trashed-posts)). `auto-draft`, `inherit` or any other value returns `400 invalid_param`. |
 | `local_key` | yes | Always required, also when updating by `id`. |
+| `thumbnail` | no | The featured image: a URL or an `attachment_id`, or a WPML language map of them. `null`, `""`, `0` or `"0"` removes it. The post type must support featured images (`thumbnail` in its `supports`), otherwise `400 invalid_param`. See [Featured image](#featured-image). |
 | `files` | no | Map `acf_field_name => URL or attachment_id`. `null` or `""` as a value does not clear the field: it returns `400 input_invalid`. |
 | `acf_fields` | no | See [Handling `acf_fields`](#handling-acf_fields). |
 | `term` | no | Term assignments per taxonomy. |
@@ -964,7 +969,7 @@ Supported `term`/`terms` formats:
   - otherwise the post is resolved through `local_key`, and the WordPress ID is looked up internally. Without `type`, a key held by posts of several post types returns `409 ambiguous_local_key`.
 - **Explicit `id` and `local_key`.** With an `id`, the `local_key` must not be held by another post of the same type outside this post's WPML translation group. Otherwise the request returns `409 duplicate_local_key` with the message `Post :: Element N :: local_key '<key>' already exists for PostType '<type>'`. Without `id` there is no such check: the key is what identifies the post.
 - **`type` cannot change.** `type` identifies the post; it does not retype it. A `type` different from the post's current type returns `400 invalid_param` (`… the post type cannot be changed`).
-- Any of `type`, `title`, `content`, `description`, `acf_fields`, `files`, `terms` or `status` missing from the payload is left unchanged.
+- Any of `type`, `title`, `content`, `description`, `thumbnail`, `acf_fields`, `files`, `terms` or `status` missing from the payload is left unchanged.
 - There is no rollback on update. If a step fails (for example an ACF field or a file), the changes already written stay.
 - With WPML, a language of the payload that the post's translation group does not have yet is created as a new translation. Before that, group slots whose post no longer exists are removed. If the translation group cannot be resolved, the request returns `500 wpml_error`.
 - If `title` changes, it is checked for uniqueness against other posts of the same type.
@@ -977,6 +982,18 @@ Supported `term`/`terms` formats:
 - An `attachment_id` in `files` is verified and re-attached to the current post, without download.
 - `terms` overwrites the assignments for the taxonomies sent.
 - In the multilingual `terms` format, the terms of the current post/translation language are used.
+
+#### Featured image
+
+`thumbnail` sets the featured image of the post (`_thumbnail_id`), on insert and on update.
+
+- A URL is imported into the Media Library, or reused when the plugin already imported it, and attached to the post, as for `files`. An `attachment_id` (JSON integer) is checked and attached, without download.
+- `null`, `""`, `0` or `"0"` removes the featured image. The attachment stays in the Media Library.
+- Omitted, the featured image is left as it is.
+- It can be a WPML language map, for example `"thumbnail": {"it": "https://…/it.jpg", "en": "https://…/en.jpg"}`: each translation gets its own image. As for `files`, a language left out of the map keeps its image, and a shared value is written to every translation.
+- The post type must support featured images (`thumbnail` in its `supports`, see [POST `/post-types`](#post-post-types)). Otherwise the request returns `400 invalid_param` (`Post :: Element N :: Parameter 'thumbnail' is not supported: PostType '<type>' has no featured image …`) before anything is written.
+- A value that is neither an existing `attachment_id` nor a valid URL returns `400 input_invalid` (`Post :: Parameter 'thumbnail' must be an existing attachment ID or a valid URL`).
+- `GET /posts` and `GET /posts/{id}` return it as `thumbnail_id`.
 
 #### Trashed posts
 
@@ -1010,7 +1027,7 @@ Supported `term`/`terms` formats:
 
 #### Multilingual support with WPML
 
-`title`, `content`, `description`, `terms` and every value in `acf_fields` and `files` can be sent as a per-language map:
+`title`, `content`, `description`, `thumbnail`, `terms` and every value in `acf_fields` and `files` can be sent as a per-language map:
 
 ```json
 [
@@ -1057,7 +1074,7 @@ Supported `term`/`terms` formats:
 
 Rules:
 
-- If `title`, `content`, `description`, `acf_fields`, `files` or `terms` contain multilingual values and WPML is not installed or active, the request returns `500 wpml_required`.
+- If `title`, `content`, `description`, `thumbnail`, `acf_fields`, `files` or `terms` contain multilingual values and WPML is not installed or active, the request returns `500 wpml_required`.
 - On insert, the plugin creates the base post in the WPML default language, then the translations. When `title` is sent only per language and the default language is not among them, the base post is created in the first language that has a title instead, so no post is created in a language the payload did not send. Terms and WooCommerce products follow the same rule.
 - On update, the plugin updates the current post and its linked translations. A language map writes only the languages it contains: `{"title": {"en": "Red Chair"}}` renames the English translation and leaves the Italian title as it is. The same applies to `content`, `description` and every value in `acf_fields` and `files`. A shared (non-map) value is still written to every language. A map with no active language, for example `{"title": {"es": "Silla"}}` on an it/en site, writes no language: every title stays as it is.
 - Only language maps create translations. A payload with scalar values only creates or updates a single post. To create a translation with the same text, repeat the value in the map, for example `{"en": "Chair", "it": "Chair"}`.
@@ -1085,8 +1102,9 @@ Main errors:
   - `type` or `title` is missing on insert;
   - `type` differs from the type of the post being updated;
   - an `acf_fields` key is not an ACF field of the post type (`ACF field '<name>' not found for post '<type>'`);
-  - a repeater, group or flexible content value is malformed.
-- `400 input_invalid` if a value in `files` or an `image`/`file` value in `acf_fields` is neither an existing `attachment_id` nor a valid URL
+  - a repeater, group or flexible content value is malformed;
+  - `thumbnail` is sent for a post type without featured images.
+- `400 input_invalid` if `thumbnail`, a value in `files` or an `image`/`file` value in `acf_fields` is neither an existing `attachment_id` nor a valid URL
 - `404 no_post` if the `id` sent does not exist
 - `404 not_found` if `type` is not a registered post type, or with `status: "trash"` if no post holds the `local_key`
 - `404 input_invalid` if a referenced term does not exist

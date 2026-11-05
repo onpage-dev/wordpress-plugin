@@ -997,6 +997,15 @@ its items can mix URLs and attachment ids:
 
 The field stores the attachment ids in the order sent. `[]` clears it.
 
+The featured image of a post is not an ACF field: send it as `thumbnail` on `POST /posts`, a URL or
+an attachment id, or a language map of them. `null` removes it, and leaving the key out keeps it.
+The post type must support featured images (`thumbnail` in its `supports`). See
+[API.md: Featured image](../API.md#featured-image).
+
+```json
+{ "type": "products", "local_key": 1001, "title": "Red Chair", "thumbnail": "https://cdn.example.com/red-chair.jpg" }
+```
+
 The shape of every other ACF field type is in
 [API.md: Value shapes by field type](../API.md#value-shapes-by-field-type).
 

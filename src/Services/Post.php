@@ -10,6 +10,13 @@ class Post
 {
     private const ERROR_PREFIX = 'Post';
 
+    /**
+     * Key the `thumbnail` parameter travels under inside `files` (see mergeThumbnailIntoFiles()),
+     * so the featured image reuses the per-language resolution and the media import of `files`.
+     * It is the meta key WordPress stores the featured image in, never an ACF field name.
+     */
+    private const THUMBNAIL_FILE_KEY = '_thumbnail_id';
+
     /** Returns the terms payload from either `term` or legacy `terms`. */
     public static function extractTermsPayload(array $params): ?array
     {
@@ -100,6 +107,7 @@ class Post
             'status' => $post->post_status,
             'local_key' => Input::localKeyOut(\get_post_meta($post->ID, PostRepository::LOCAL_KEY_META, true)),
             'translations' => onpage_json_map($translations ?? self::buildTranslationsMap((int) $post->ID, $post->post_type)),
+            'thumbnail_id' => ((int) \get_post_thumbnail_id($post)) ?: null,
             'acf_fields' => onpage_json_map(\get_fields($post->ID)),
             'terms' => \wp_get_post_terms($post->ID, \get_object_taxonomies($post->post_type), ['fields' => 'all']),
         ];
@@ -407,17 +415,74 @@ class Post
             self::requireLocalKeyNotHeldElsewhere($requested_post, $params, $element_index);
             $params['id'] = $requested_id;
 
-            return self::updateFromParams($params, $element_index);
+            return self::updateFromParams(self::mergeThumbnailIntoFiles($params, $requested_post->post_type, $element_index), $element_index);
         }
 
         $existing_post_id = self::findUpsertPostId($params);
         if ($existing_post_id !== null) {
             $params['id'] = $existing_post_id;
 
-            return self::updateFromParams($params, $element_index);
+            return self::updateFromParams(self::mergeThumbnailIntoFiles($params, (string) \get_post_type($existing_post_id), $element_index), $element_index);
         }
 
-        return self::insertFromParams($params, $element_index);
+        $type = is_string($params['type'] ?? null) ? trim($params['type']) : '';
+
+        return self::insertFromParams(self::mergeThumbnailIntoFiles($params, $type, $element_index), $element_index);
+    }
+
+    /**
+     * Moves the `thumbnail` parameter (the featured image) into `files`, under THUMBNAIL_FILE_KEY.
+     *
+     * From there it follows every `files` rule: a URL or an attachment ID, a language map with one
+     * image per translation, a language left out of the map left as it is. A post type that does
+     * not support featured images answers `400 invalid_param` before anything is written, as the
+     * image would be stored but never shown. A type that does not exist is left to the usual
+     * `404 not_found` of the insert.
+     */
+    private static function mergeThumbnailIntoFiles(array $params, string $wp_post_type, int $element_index): array
+    {
+        if (!array_key_exists('thumbnail', $params)) {
+            return $params;
+        }
+
+        if ($wp_post_type !== '' && \post_type_exists($wp_post_type) && !\post_type_supports($wp_post_type, 'thumbnail')) {
+            throw onpage_http_exception(
+                self::ERROR_PREFIX . " :: Element $element_index :: Parameter 'thumbnail' is not supported: PostType '$wp_post_type' has no featured image (add 'thumbnail' to its supports)",
+                400,
+                'invalid_param'
+            );
+        }
+
+        $files = is_array($params['files'] ?? null) ? $params['files'] : [];
+        $files[self::THUMBNAIL_FILE_KEY] = $params['thumbnail'];
+        $params['files'] = $files;
+        unset($params['thumbnail']);
+
+        return $params;
+    }
+
+    /** Whether a resolved `thumbnail` value means "remove the featured image": `null`, `""`, `0` or `"0"`. */
+    private static function isThumbnailClearValue(mixed $value): bool
+    {
+        return $value === null || $value === 0 || (is_string($value) && in_array(trim($value), ['', '0'], true));
+    }
+
+    /**
+     * Sets the featured image of one post, or removes it with attachment ID 0.
+     *
+     * set_post_thumbnail() answers false when the image does not change, as update_post_meta()
+     * does, so only a featured image that ends up different from the requested one is an error.
+     */
+    private static function saveThumbnail(int $post_id, int $attachment_id): void
+    {
+        if ($attachment_id === 0) {
+            \delete_post_thumbnail($post_id);
+            return;
+        }
+
+        if (\set_post_thumbnail($post_id, $attachment_id) === false && (int) \get_post_thumbnail_id($post_id) !== $attachment_id) {
+            throw onpage_http_exception(self::ERROR_PREFIX . " :: Failed to set the featured image of post $post_id", 500, 'request_failed');
+        }
     }
 
     /**
@@ -574,6 +639,10 @@ class Post
 
         MultiLang::requireWpmlForFieldMap($params['acf_fields'] ?? null, self::ERROR_PREFIX, $element_index, 'acf_fields');
         MultiLang::requireWpmlForFieldMap($params['files'] ?? null, self::ERROR_PREFIX, $element_index, 'files');
+
+        if (array_key_exists('thumbnail', $params)) {
+            MultiLang::requireWpmlForLanguageMap($params['thumbnail'], self::ERROR_PREFIX, $element_index, 'thumbnail');
+        }
 
         if (array_key_exists('terms', $params)) {
             MultiLang::requireWpmlForNestedLanguageMaps($params['terms'], self::ERROR_PREFIX, $element_index, 'terms');
@@ -791,6 +860,11 @@ class Post
         string $wp_post_type
     ): void {
         foreach ($fields as $field_key => $value) {
+            if ($field_key === self::THUMBNAIL_FILE_KEY) {
+                self::saveThumbnail($post_id, (int) $value);
+                continue;
+            }
+
             Acf::updateFieldValue($post_id, $field_key, $value, 'post', $wp_post_type);
         }
 
@@ -809,6 +883,11 @@ class Post
         string $wp_post_type
     ): void {
         foreach ($fields as $field_key => $value) {
+            if ($field_key === self::THUMBNAIL_FILE_KEY) {
+                self::saveThumbnail($post_id, (int) $value);
+                continue;
+            }
+
             Acf::updateFieldValue($post_id, $field_key, $value, 'post', $wp_post_type);
         }
 
@@ -851,9 +930,18 @@ class Post
         $resolved = [];
 
         foreach ($files as $field_key => $value) {
+            $is_thumbnail = $field_key === self::THUMBNAIL_FILE_KEY;
+            $subject = $is_thumbnail ? "Parameter 'thumbnail'" : "Field '$field_key' in files";
+
+            // Only the featured image can be cleared: 0 tells saveThumbnail() to remove it
+            if ($is_thumbnail && self::isThumbnailClearValue($value)) {
+                $resolved[$field_key] = 0;
+                continue;
+            }
+
             if (is_int($value)) {
                 if (!RemoteMedia::isAttachmentId($value)) {
-                    throw onpage_http_exception(self::ERROR_PREFIX . " :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'input_invalid');
+                    throw onpage_http_exception(self::ERROR_PREFIX . " :: $subject must be an existing attachment ID or a valid URL", 400, 'input_invalid');
                 }
 
                 RemoteMedia::linkMediaToPost($value, $post_id);
@@ -863,10 +951,10 @@ class Post
 
             $url = RemoteMedia::sanitizeUrl($value);
             if ($url === null) {
-                throw onpage_http_exception(self::ERROR_PREFIX . " :: Field '$field_key' in files must be an existing attachment ID or a valid URL", 400, 'input_invalid');
+                throw onpage_http_exception(self::ERROR_PREFIX . " :: $subject must be an existing attachment ID or a valid URL", 400, 'input_invalid');
             }
 
-            $import_result = RemoteMedia::urlToPost($url, $post_id, $field_key);
+            $import_result = RemoteMedia::urlToPost($url, $post_id, $is_thumbnail ? 'thumbnail' : $field_key);
             $resolved[$field_key] = $import_result['attachment_id'];
         }
 

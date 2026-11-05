@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `POST /posts` accepts `thumbnail`, the featured image of the post: a URL (imported or reused from the Media Library) or an `attachment_id`, or a WPML language map of them. `null`, `""`, `0` or `"0"` removes it, and leaving it out keeps it. A post type without featured image support answers `400 invalid_param`.
+- `GET /posts` and `GET /posts/{id}` return `thumbnail_id`, the `attachment_id` of the featured image, or `null`.
 - ACF `gallery` fields in `acf_fields` accept a list of remote URLs and/or `attachment_id`s, on every endpoint and as a `repeater`, `group` or `flexible_content` sub-field. Each URL is imported (or reused from the Media Library) like an `image` value, attached to the parent post, and the field stores the attachment IDs in the order sent. A gallery used to be stored as sent, so it took `attachment_id`s only.
 
 ### Changed
