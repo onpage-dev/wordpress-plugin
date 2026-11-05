@@ -70,6 +70,7 @@ You need `php` (8.2 or later) on your host `PATH`. The tests run on the host, no
 | `MultiLangResolveFields.php` | offline | nothing: no site, no `.env` |
 | `MultiLangUnsentLanguages.php` | offline | nothing: no site, no `.env` |
 | `FieldGroupMalformedFields.php` | offline | nothing: no site, no `.env` |
+| `AcfGalleryValues.php` | offline | nothing: no site, no `.env` |
 | `UpdaterLatestRelease.php` | offline | nothing: no site, no `.env` |
 | `AcfSharedStructuredFields.php` | end-to-end | a site with ACF |
 | `DuplicateTitleDistinctLocalKeys.php` | end-to-end | a site with ACF and WooCommerce |
@@ -262,6 +263,10 @@ logging is silently disabled. `logs/` is in `.gitignore`.
   translation keeps its value.
 - **`FieldGroupMalformedFields.php`** checks offline that a malformed `fields` payload on
   `FieldGroup::persistFields()` stops the request before anything is written or deleted.
+- **`AcfGalleryValues.php`** checks offline, through `Acf::updateFieldValue()`, that a `gallery`
+  in `acf_fields` resolves its URLs and attachment IDs to attachment IDs in the order sent, also as
+  a repeater or group sub-field, and that an item it cannot resolve answers `400 input_invalid`
+  with its position without writing the field. ACF and `RemoteMedia` are replaced by doubles.
 
 ## Making a change
 

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- ACF `gallery` fields in `acf_fields` accept a list of remote URLs and/or `attachment_id`s, on every endpoint and as a `repeater`, `group` or `flexible_content` sub-field. Each URL is imported (or reused from the Media Library) like an `image` value, attached to the parent post, and the field stores the attachment IDs in the order sent. A gallery used to be stored as sent, so it took `attachment_id`s only.
+
+### Changed
+- An ACF `gallery` item that is neither an existing `attachment_id` nor a valid URL now answers `400 input_invalid`, naming its position (`Field 'photos[2]' in acf_fields must be an existing attachment ID or a valid URL`). It used to be stored as sent.
+
 ## [1.1.0] - 2026-10-20
 
 ### Added

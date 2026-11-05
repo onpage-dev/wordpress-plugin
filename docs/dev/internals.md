@@ -249,6 +249,11 @@ otherwise `Acf::getFieldType()` loads it on the first lookup.
   `400 input_invalid`: `Field '<name>' in acf_fields must be an existing
   attachment ID or a valid URL`. Inside a repeater or a group the name is the path, for example
   `rows[0][image]` or `datasheet[image]`.
+- **`gallery` fields** with a list value are resolved item by item by `Acf::resolveGalleryValue()`,
+  with the same rules as an `image` value, into the list of attachment IDs ACF stores, in the order
+  sent. An item that fails, `0` and `""` included, answers `400 input_invalid` with its position in
+  the name, for example `photos[2]`. A value that is not a list is passed to ACF unchanged. The
+  same applies to `gallery` sub-fields of repeaters, groups and flexible content.
 - **Repeaters** must be a list of row objects (`400 invalid_param` otherwise). **Groups** must be
   an object (`400 invalid_param`, `Group '<name>' must be an object`). Both share
   `Acf::resolveSubFieldValues()`: a repeater row and a group are resolved the same way, with

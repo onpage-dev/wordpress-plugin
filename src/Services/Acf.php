@@ -400,9 +400,12 @@ class Acf
      *    the URL case.
      *  - `image`/`file` with a value that is neither an existing attachment ID nor a valid
      *    URL: rejected with `400 input_invalid`, like the `files` payload.
+     *  - `gallery` with a list value: every item (URL or attachment ID) resolved like an
+     *    `image` value, so the field stores the list of attachment IDs in the same order.
+     *    An unresolvable item is rejected with `400 input_invalid`.
      *  - `repeater`: validated (must be a list of row objects), recursed into; sub-field
-     *    `image`/`file` URLs/attachment IDs resolved the same way, nested repeaters and
-     *    groups supported.
+     *    `image`/`file`/`gallery` URLs/attachment IDs resolved the same way, nested repeaters
+     *    and groups supported.
      *  - `group`: validated (must be an object), its sub-fields resolved like a repeater row.
      *  - `flexible_content`: validated (a list of rows naming a layout in `acf_fc_layout`),
      *    each row's sub-fields resolved against its layout like a repeater row.
@@ -424,6 +427,8 @@ class Acf
             // `0` / `"0"` clear the field, as ACF stores an empty media field.
             if (in_array($field_type, ['image', 'file'], true) && (is_string($value) || is_int($value)) && !self::isMediaClearValue($value)) {
                 $value = self::requireMediaAttachment($value, $object_id, $field_key, $context);
+            } elseif ($field_type === 'gallery' && is_array($value) && array_is_list($value)) {
+                $value = self::resolveGalleryValue($value, $object_id, $field_key, $context, $field_key);
             } elseif ($field_type === 'repeater' && is_array($field)) {
                 $value = self::resolveRepeaterValue($field, $value, $object_id, $field_key, $context);
             } elseif ($field_type === 'group' && is_array($field)) {
@@ -486,6 +491,40 @@ class Acf
         }
 
         return $attachment_id;
+    }
+
+    /**
+     * Resolves a `gallery` value, a list of remote URLs and/or attachment IDs, to the list
+     * of attachment IDs ACF stores, in the same order.
+     *
+     * Each item follows the `image` rules (`requireMediaAttachment()`): a URL is imported
+     * (or reused) and linked to the parent post, an ID is checked. Any other item, `0` and
+     * empty strings included, is rejected with `400 input_invalid`, the message naming its
+     * position, e.g. `photos[2]`. `[]` clears the gallery.
+     *
+     * @param list<mixed> $items
+     * @param string      $path       Field path used in the error messages.
+     * @param string      $import_key Key the imported files are named after.
+     * @return list<int>
+     */
+    private static function resolveGalleryValue(
+        array $items,
+        int|string $object_id,
+        string $path,
+        ?string $context,
+        string $import_key
+    ): array {
+        $attachment_ids = [];
+        foreach ($items as $index => $item) {
+            $item_path = "{$path}[$index]";
+            if ((!is_string($item) && !is_int($item)) || (is_string($item) && trim($item) === '')) {
+                throw onpage_http_exception("Field '$item_path' in acf_fields must be an existing attachment ID or a valid URL", 400, 'input_invalid');
+            }
+
+            $attachment_ids[] = self::requireMediaAttachment($item, $object_id, $item_path, $context, $import_key);
+        }
+
+        return $attachment_ids;
     }
 
     /**
@@ -636,6 +675,7 @@ class Acf
      * - Resolves `image`/`file` sub-field URLs/attachment IDs into Media Library attachment
      *   IDs with `requireMediaAttachment()` (post-context attachments stay linked to their
      *   parent post; unresolvable values are rejected with `400 input_invalid`).
+     * - Resolves `gallery` sub-field lists the same way, item by item (`resolveGalleryValue()`).
      * - Passes all other sub-field values through untouched.
      *
      * @param string $path Path of the row or group; sub-field paths are `{$path}[name]`.
@@ -691,6 +731,11 @@ class Acf
 
             if (in_array($sub_type, ['image', 'file'], true) && (is_string($sub_value) || is_int($sub_value)) && $sub_value !== '' && !self::isMediaClearValue($sub_value)) {
                 $resolved_row[$sub_name] = self::requireMediaAttachment($sub_value, $object_id, $sub_path, $context, $sub_name);
+                continue;
+            }
+
+            if ($sub_type === 'gallery' && is_array($sub_value) && array_is_list($sub_value)) {
+                $resolved_row[$sub_name] = self::resolveGalleryValue($sub_value, $object_id, $sub_path, $context, $sub_name);
                 continue;
             }
 
