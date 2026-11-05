@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-05
 
 ### Added
 - `POST /posts` accepts `thumbnail`, the featured image of the post: a URL (imported or reused from the Media Library) or an `attachment_id`, or a WPML language map of them. `null`, `""`, `0` or `"0"` removes it, and leaving it out keeps it. A post type without featured image support answers `400 invalid_param`.
@@ -82,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `POST /migration` to upgrade the data already on a site after a change of internal format.
 - Requirements: WordPress 7.1, PHP 8.2 and an active Advanced Custom Fields. Without ACF the plugin registers no routes and shows a notice in the admin.
 
+[1.2.0]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.2.0
 [1.1.0]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.1.0
 [1.0.4]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.4
 [1.0.3]: https://github.com/onpage-dev/wordpress-plugin/releases/tag/v1.0.3
