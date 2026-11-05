@@ -529,6 +529,10 @@ The payload is read conservatively. The following rule applies to `title`, `cont
 
 `term` takes precedence over the legacy `terms` key when both are sent.
 
+`thumbnail` is the exception: its key, not its value, decides. Present, even as `null`, it is an
+explicit change (`null` removes the featured image); missing, it is no change. See
+[Featured image](#featured-image-thumbnail).
+
 Only the text fields actually present are turned into `title_map`, `content_map` and
 `description_map`. The service then builds `translated_languages`, `fallback_language`, the post's
 `current_language`, and `translation_ids`: the map of the post's existing translations.
@@ -563,6 +567,23 @@ The main post is updated in its own current language, not automatically in the d
 If `acf_fields` or `files` is present, the service drops the language maps without
 `current_language`, resolves the rest for that language and saves them through `Acf::updateFieldValue()`. If `term` is present, it assigns the terms with
 `wp_set_object_terms()`.
+
+#### Featured image (`thumbnail`)
+
+`Post::save()` moves `thumbnail` into `files`, under the reserved key `_thumbnail_id`
+(`mergeThumbnailIntoFiles()`), on insert and on update. Before that it rejects a post type without
+featured image support with `400 invalid_param`, so nothing is written. From there the featured
+image follows every `files` rule with no code of its own: language maps, the unsent-language rule,
+translations created later, and the import through `RemoteMedia`.
+
+Two places tell it apart from a real `files` entry:
+
+- `resolveRemoteFiles()` turns `null`, `""`, `0` and `"0"` into `0` instead of rejecting them,
+  and names the parameter `thumbnail` in its errors and in the imported file name;
+- `savePostAssociations()` and `saveUpdatedPostAssociations()` call `saveThumbnail()` for that key
+  instead of `Acf::updateFieldValue()`. It runs `set_post_thumbnail()`, or `delete_post_thumbnail()`
+  for `0`. `set_post_thumbnail()` answers `false` when the image does not change, so only an image
+  that ends up different from the requested one fails, with `500 request_failed`.
 
 ### 7. Updating the translations
 
