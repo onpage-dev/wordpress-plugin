@@ -188,7 +188,8 @@ This applies to:
 - `thumbnail` of `POST /woocommerce/brands` and `POST /woocommerce/categories`;
 - `downloads[].file`/`downloads[].url` of `POST /woocommerce/products`;
 - `files` of `POST /posts` and `POST /media/link`;
-- every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or a `group`).
+- every ACF field of type `image`/`file` inside `acf_fields`, on any endpoint (top level, or inside a `repeater` or a `group`);
+- every item of an ACF `gallery` field inside `acf_fields`, with the same scope.
 
 A value that is neither an existing `attachment_id` nor a valid URL is rejected with `400`. The error code depends on the field: `input_invalid` for `files` of `POST /posts` and for `acf_fields`, `invalid_param` everywhere else. In `acf_fields` only string and integer values are checked (see [Handling `acf_fields`](#handling-acf_fields)).
 
@@ -331,6 +332,15 @@ They all share the same assignment logic, centralized in `Acf::updateFieldValue`
 - Any other string or integer returns `400 input_invalid` with the message `Field '<name>' in acf_fields must be an existing attachment ID or a valid URL`. This covers an `attachment_id` that matches no attachment and a malformed URL.
 - Only strings and integers are validated. A value of another type (a float, a boolean, an object) is passed to ACF unchanged. Inside a repeater or a group, `<name>` is the path of the sub-field, for example `certifications[0][attachment]` or `datasheet[attachment]`.
 
+**`gallery`**
+
+- The value is a list. Each item is a URL or an `attachment_id`, with the same rules as an `image` value: a URL is imported (or reused from the Media Library), an `attachment_id` is checked, and in the `post` context every attachment is attached to the parent post. URLs and IDs can be mixed. Example: `"photos": ["https://cdn.example.com/1.jpg", 813]`.
+- The field stores the list of `attachment_id`s, in the order sent.
+- To clear the field, pass `[]`, `null` or an empty string.
+- An item that is not an existing `attachment_id` nor a valid URL returns `400 input_invalid` with the message `Field '<name>[N]' in acf_fields must be an existing attachment ID or a valid URL`, where `N` is the position of the item. This covers `0`, an empty string, `null` and any non-scalar item. The gallery is not written when an item fails, but the files imported for the items before it stay in the Media Library.
+- A value that is not a list (for example a single string or an object) is passed to ACF unchanged.
+- Inside a repeater or a group, `<name>` is the path of the sub-field, for example `variants[0][photos][1]`.
+
 **`tab`**
 
 - ACF tabs are UI separators with no value. Keys sent for a `tab` field are silently ignored.
@@ -339,7 +349,7 @@ They all share the same assignment logic, centralized in `Acf::updateFieldValue`
 **`repeater`**
 
 - The value must be a list of objects, one per row. Each object contains the row's sub-fields. Example: `"certifications": [{"name": "CE marking", "year": 2024}, {"name": "VOC A+"}]`.
-- `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields, `400 input_invalid` included.
+- `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields, `400 input_invalid` included. `gallery` sub-fields are resolved item by item, like a top-level `gallery`.
 - Nested `repeater` and `group` sub-fields are supported recursively.
 - `tab` sub-fields are ignored.
 - A WPML language map must be applied to the whole repeater (`"certifications": {"it": [...rows...], "en": [...rows...]}`), not to individual sub-fields. Language maps inside a row are not supported.
@@ -348,7 +358,7 @@ They all share the same assignment logic, centralized in `Acf::updateFieldValue`
 **`group`**
 
 - The value is an object with the group's sub-fields, for example `"datasheet": {"title": "…", "attachment": 1234}`.
-- Sub-fields are handled like the sub-fields of a repeater row: `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields, `400 input_invalid` included (the message names the path, for example `datasheet[attachment]`).
+- Sub-fields are handled like the sub-fields of a repeater row: `image`/`file` sub-fields with a URL or `attachment_id` are resolved to an `attachment_id` with the same rules as top-level fields, `400 input_invalid` included (the message names the path, for example `datasheet[attachment]`). `gallery` sub-fields are resolved item by item.
 - Nested `repeater` and `group` sub-fields are supported recursively. `tab` sub-fields are ignored. Other sub-field values are passed to ACF unchanged.
 - To clear the group, pass `null` or an empty string.
 - If the value is not an object (a string, a number, a non-empty list), the endpoint returns `400 invalid_param` with the message `Group '<name>' must be an object`.
@@ -357,7 +367,7 @@ They all share the same assignment logic, centralized in `Acf::updateFieldValue`
 **`flexible_content`**
 
 - The value is a list of rows. Each row is an object whose `acf_fc_layout` is the name of one of the field's layouts, plus the sub-fields of that layout, for example `"blocks": [{"acf_fc_layout": "hero", "title": "…", "image": "https://…"}, {"acf_fc_layout": "quote", "text": "…"}]`.
-- Sub-fields are resolved against the row's layout like the sub-fields of a repeater row: `image`/`file` URLs or `attachment_id`s, nested `repeater`, `group` and `flexible_content`.
+- Sub-fields are resolved against the row's layout like the sub-fields of a repeater row: `image`/`file` URLs or `attachment_id`s, `gallery` lists, nested `repeater`, `group` and `flexible_content`.
 - The endpoint returns `400 invalid_param` if the value is not a list (`Flexible content '<name>' must be a list of rows`), a row has no `acf_fc_layout`, or the layout is unknown (`Flexible content '<name>' row N has unknown layout '<layout>'`).
 - To clear the field, pass `null` or an empty string. A WPML language map must be applied to the whole field.
 
@@ -384,7 +394,7 @@ Any value in `acf_fields` can be sent as a WPML language map `{ "<lang>": <value
 Consistency with the ACF type is still checked after the language is resolved:
 
 - For a `repeater` field, the resolved value of every language must still be a list of objects. A single object or a string for that language returns `400 invalid_param`.
-- For `image`/`file`, the URL → `attachment_id` conversion applies.
+- For `image`/`file`, and for each item of a `gallery`, the URL → `attachment_id` conversion applies. A `gallery` map gives each translation its own list, for example `"photos": {"it": ["https://…/it.jpg"], "en": ["https://…/en.jpg"]}`.
 - `tab` fields are still ignored.
 - On `POST /posts`, the `acf_fields`, `files` and `terms` of each translation are written in that translation's WPML language context, on insert as on update. Term slugs therefore resolve to the term of the translation's language.
 
@@ -394,7 +404,7 @@ On read (GET), repeaters are returned natively by `\get_fields()` as lists of ob
 
 ### Value shapes by field type
 
-Except for `image`, `file`, `repeater`, `group`, `flexible_content` and `tab` (described above), the plugin passes the value to ACF as it is. It does not convert or validate it. Send the shape ACF stores for that field type. The table lists the common types; the ACF documentation is the reference.
+Except for `image`, `file`, `gallery`, `repeater`, `group`, `flexible_content` and `tab` (described above), the plugin passes the value to ACF as it is. It does not convert or validate it. Send the shape ACF stores for that field type. The table lists the common types; the ACF documentation is the reference.
 
 | ACF type | Value to send | Example |
 | --- | --- | --- |
@@ -409,7 +419,7 @@ Except for `image`, `file`, `repeater`, `group`, `flexible_content` and `tab` (d
 | `time_picker` | a string in `H:i:s` format | `"14:30:00"` |
 | `color_picker` | a hex color string | `"#c0392b"` |
 | `link` | an object with `title`, `url` and `target` | `{"title": "Datasheet", "url": "https://…", "target": "_blank"}` |
-| `gallery` | a list of `attachment_id`s | `[812, 813]` |
+| `gallery` | a list of URLs and/or `attachment_id`s (see [`gallery`](#handling-acf_fields) above) | `["https://…/1.jpg", 813]` |
 | `post_object`, `page_link` | a WordPress post ID; a list of IDs when the field allows multiple values | `321` |
 | `relationship` | a list of WordPress post IDs | `[321, 322]` |
 | `taxonomy` | a WordPress term ID, or a list of term IDs | `[10, 11]` |
@@ -423,8 +433,6 @@ Choice values are the keys of the field's `choices`, not their labels.
 - terms: `GET /terms?taxonomy=<taxonomy>`, which returns each term with its `local_key`.
 
 So the related objects must be imported before the objects that point at them.
-
-**A `gallery` is not imported from URLs.** Upload or link each file first (`POST /media`, or a URL in a `files` slot), then send the list of `attachment_id`s.
 
 **Clearing a field.** Send `null` or `""` for a single value, and `[]` for a list (`checkbox`, `gallery`, `relationship`, a multiple `select`). `image` and `file` also accept `0` or `"0"`. A field left out of `acf_fields` is not changed.
 

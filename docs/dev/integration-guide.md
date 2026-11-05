@@ -987,14 +987,15 @@ Some calls act on one object, not on its translation group:
 Every file slot, except the multipart upload, accepts **either** an existing attachment id **or** a
 remote URL.
 
-Inside `acf_fields` this covers only the ACF types `image` and `file`, including as `repeater`,
-`group` and `flexible_content` sub-fields. Values of `gallery` fields are stored verbatim and never
-imported: send a list of `attachment_id`s. To fill a gallery from URLs, upload or link each file
-first (`POST /media`, or a URL in a `files` slot), then send the ids you got back:
+Inside `acf_fields` this covers the ACF types `image` and `file`, and every item of a `gallery`,
+including as `repeater`, `group` and `flexible_content` sub-fields. A `gallery` takes a list, and
+its items can mix URLs and attachment ids:
 
 ```json
-"acf_fields": { "photos": [812, 813, 814] }
+"acf_fields": { "photos": ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg", 814] }
 ```
+
+The field stores the attachment ids in the order sent. `[]` clears it.
 
 The shape of every other ACF field type is in
 [API.md: Value shapes by field type](../API.md#value-shapes-by-field-type).

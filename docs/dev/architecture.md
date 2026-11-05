@@ -282,8 +282,8 @@ All ACF field writes go through `Acf::updateFieldValue`, shared by posts, produc
 terms. In one place it handles:
 
 - skipping `tab` fields;
-- converting URLs to `attachment_id` for `image`/`file` fields, and rejecting values that are
-  neither an existing attachment nor a URL;
+- converting URLs to `attachment_id` for `image`/`file` fields and for each item of a `gallery`
+  field, and rejecting values that are neither an existing attachment nor a URL;
 - treating `0` / `"0"` on an `image`/`file` field as "clear the field", as ACF stores an empty
   media field;
 - recursive normalization of `repeater`, `group` and `flexible_content` fields (a flexible content
@@ -300,7 +300,7 @@ per field. Most Controllers preload it; otherwise `Acf::getFieldType()` loads it
 ### 4.9 Remote media isolated in `RemoteMedia`
 
 All remote media import goes through `RemoteMedia`: product/variation images, ACF `image`/`file`
-fields, downloads, category/brand thumbnails, `POST /media/link`. The service deduplicates
+and `gallery` fields, downloads, category/brand thumbnails, `POST /media/link`. The service deduplicates
 (`findAttachmentBySourceUrl`: the On Page® storage token first, then the exact source URL),
 downloads the file and creates the attachment. It is also the only place that widens the upload
 allowlist (a fixed list of media and document extensions). SVG files are sanitized (`Svg`) both
